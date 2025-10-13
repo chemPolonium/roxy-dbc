@@ -7,11 +7,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use winit::{
-    dpi::LogicalSize,
-    event_loop::ActiveEventLoop,
-    window::Window,
-};
+use winit::{dpi::LogicalSize, event_loop::ActiveEventLoop, window::Window};
 
 pub struct ImguiState {
     pub context: imgui::Context,
@@ -104,14 +100,39 @@ impl AppWindow {
         let font_size = (13.0 * self.hidpi_factor) as f32;
         context.io_mut().font_global_scale = (1.0 / self.hidpi_factor) as f32;
 
-        context.fonts().add_font(&[FontSource::DefaultFontData {
-            config: Some(imgui::FontConfig {
-                oversample_h: 1,
-                pixel_snap_h: true,
+        // 加载嵌入的Inconsolata字体
+        let font_config = imgui::FontConfig {
+            oversample_h: 1,
+            pixel_snap_h: true,
+            size_pixels: font_size,
+            ..Default::default()
+        };
+
+        let mut font_loaded = false;
+
+        // 尝试使用嵌入的字体数据
+        const INCONSOLATA_FONT: &[u8] = include_bytes!("../fonts/Inconsolata-Regular.ttf");
+
+        if !INCONSOLATA_FONT.is_empty() {
+            context.fonts().add_font(&[FontSource::TtfData {
+                data: INCONSOLATA_FONT,
                 size_pixels: font_size,
-                ..Default::default()
-            }),
-        }]);
+                config: Some(font_config.clone()),
+            }]);
+            font_loaded = true;
+            log::info!(
+                "Successfully loaded embedded Inconsolata font ({} bytes)",
+                INCONSOLATA_FONT.len()
+            );
+        }
+
+        // 如果嵌入字体加载失败，使用默认字体
+        if !font_loaded {
+            context.fonts().add_font(&[FontSource::DefaultFontData {
+                config: Some(font_config),
+            }]);
+            log::info!("Using default font (embedded Inconsolata font not available)");
+        }
 
         //
         // Set up dear imgui wgpu renderer
