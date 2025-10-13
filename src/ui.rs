@@ -357,10 +357,10 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
 
                                     sorted_messages.sort_by(|a, b| {
                                         let ordering = match spec.column_idx() {
-                                            0 => a.id.cmp(&b.id),                       // ID列
-                                            1 => a.name.cmp(&b.name),                   // Name列
-                                            2 => a.length.cmp(&b.length),               // Length列
-                                            3 => a.signals.len().cmp(&b.signals.len()), // Signals列
+                                            0 => a.message_id().raw().cmp(&b.message_id().raw()),                       // ID列
+                                            1 => a.message_name().cmp(b.message_name()),                   // Name列
+                                            2 => a.message_size().cmp(b.message_size()),               // Length列
+                                            3 => a.signals().len().cmp(&b.signals().len()), // Signals列
                                             _ => std::cmp::Ordering::Equal,
                                         };
                                         if ascending {
@@ -377,7 +377,7 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
                         for message in sorted_messages {
                             ui.table_next_row();
 
-                            let selected = window_state.selected_message_id == Some(message.id);
+                            let selected = window_state.selected_message_id == Some(message.message_id().raw());
 
                             // 如果选中，设置行背景色
                             if selected {
@@ -389,22 +389,22 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
 
                             ui.table_set_column_index(0);
                             if ui
-                                .selectable_config(format!("0x{:03X}", message.id))
+                                .selectable_config(format!("0x{:03X}", message.message_id().raw()))
                                 .selected(selected)
                                 .span_all_columns(true)
                                 .build()
                             {
-                                window_state.selected_message_id = Some(message.id);
+                                window_state.selected_message_id = Some(message.message_id().raw());
                             }
 
                             ui.table_set_column_index(1);
-                            ui.text(&message.name);
+                            ui.text(message.message_name());
 
                             ui.table_set_column_index(2);
-                            ui.text(format!("{}", message.length));
+                            ui.text(format!("{}", message.message_size()));
 
                             ui.table_set_column_index(3);
-                            ui.text(format!("{}", message.signals.len()));
+                            ui.text(format!("{}", message.signals().len()));
                         }
                     }
                 });
@@ -416,7 +416,7 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
                 if let Some(message) = window_state.dbc_data.get_message_by_id(selected_id) {
                     ui.text(format!(
                         "Message Details: {} (0x{:03X})",
-                        message.name, message.id
+                        message.message_name(), message.message_id().raw()
                     ));
                     ui.separator();
 
@@ -496,7 +496,7 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
                                 ui.table_headers_row();
 
                                 // 获取并排序信号
-                                let mut sorted_signals: Vec<_> = message.signals.iter().collect();
+                                let mut sorted_signals: Vec<_> = message.signals().iter().collect();
                                 if let Some(sort_specs) = ui.table_sort_specs_mut() {
                                     let specs = sort_specs.specs();
                                     for (i, spec) in specs.iter().enumerate() {
@@ -507,28 +507,28 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
 
                                             sorted_signals.sort_by(|a, b| {
                                                 let ordering = match spec.column_idx() {
-                                                    0 => a.name.cmp(&b.name),           // Signal名称
-                                                    1 => a.start_bit.cmp(&b.start_bit), // Start Bit
-                                                    2 => a.length.cmp(&b.length),       // Length
+                                                    0 => a.name().cmp(b.name()),           // Signal名称
+                                                    1 => a.start_bit().cmp(b.start_bit()), // Start Bit
+                                                    2 => a.signal_size().cmp(b.signal_size()),       // Length
                                                     3 => a
-                                                        .factor
-                                                        .partial_cmp(&b.factor)
+                                                        .factor()
+                                                        .partial_cmp(b.factor())
                                                         .unwrap_or(std::cmp::Ordering::Equal), // Factor
                                                     4 => a
-                                                        .offset
-                                                        .partial_cmp(&b.offset)
+                                                        .offset()
+                                                        .partial_cmp(b.offset())
                                                         .unwrap_or(std::cmp::Ordering::Equal), // Offset
                                                     5 => a
-                                                        .min
-                                                        .partial_cmp(&b.min)
+                                                        .min()
+                                                        .partial_cmp(b.min())
                                                         .unwrap_or(std::cmp::Ordering::Equal), // Min
                                                     6 => a
-                                                        .max
-                                                        .partial_cmp(&b.max)
+                                                        .max()
+                                                        .partial_cmp(b.max())
                                                         .unwrap_or(std::cmp::Ordering::Equal), // Max
-                                                    7 => a.unit.cmp(&b.unit), // Unit
-                                                    8 => a.data_type.cmp(&b.data_type), // Data Type
-                                                    9 => a.byte_order.cmp(&b.byte_order), // Byte Order
+                                                    7 => a.unit().cmp(b.unit()), // Unit
+                                                    8 => format!("{:?}", a.value_type()).cmp(&format!("{:?}", b.value_type())), // Data Type
+                                                    9 => format!("{:?}", a.byte_order()).cmp(&format!("{:?}", b.byte_order())), // Byte Order
                                                     _ => std::cmp::Ordering::Equal,
                                                 };
                                                 if ascending {
@@ -546,34 +546,42 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
                                     ui.table_next_row();
 
                                     ui.table_set_column_index(0);
-                                    ui.text(&signal.name);
+                                    ui.text(signal.name());
 
                                     ui.table_set_column_index(1);
-                                    ui.text(format!("{}", signal.start_bit));
+                                    ui.text(format!("{}", signal.start_bit()));
 
                                     ui.table_set_column_index(2);
-                                    ui.text(format!("{}", signal.length));
+                                    ui.text(format!("{}", signal.signal_size()));
 
                                     ui.table_set_column_index(3);
-                                    ui.text(format!("{:.3}", signal.factor));
+                                    ui.text(format!("{:.3}", signal.factor()));
 
                                     ui.table_set_column_index(4);
-                                    ui.text(format!("{:.3}", signal.offset));
+                                    ui.text(format!("{:.3}", signal.offset()));
 
                                     ui.table_set_column_index(5);
-                                    ui.text(format!("{:.1}", signal.min));
+                                    ui.text(format!("{:.1}", signal.min()));
 
                                     ui.table_set_column_index(6);
-                                    ui.text(format!("{:.1}", signal.max));
+                                    ui.text(format!("{:.1}", signal.max()));
 
                                     ui.table_set_column_index(7);
-                                    ui.text(&signal.unit);
+                                    ui.text(signal.unit());
 
                                     ui.table_set_column_index(8);
-                                    ui.text(&signal.data_type);
+                                    let data_type = match signal.value_type() {
+                                        can_dbc::ValueType::Signed => "signed",
+                                        can_dbc::ValueType::Unsigned => "unsigned",
+                                    };
+                                    ui.text(data_type);
 
                                     ui.table_set_column_index(9);
-                                    ui.text(&signal.byte_order);
+                                    let byte_order = match signal.byte_order() {
+                                        can_dbc::ByteOrder::LittleEndian => "Intel",
+                                        can_dbc::ByteOrder::BigEndian => "Motorola",
+                                    };
+                                    ui.text(byte_order);
                                 }
                             }
                         });

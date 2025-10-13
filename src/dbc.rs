@@ -1,41 +1,20 @@
 //! DBC 文件读取和解析模块
 use std::fs;
 use std::path::Path;
+pub use can_dbc::{DBC, Message}; // 直接导出dbc库的类型
 
 #[derive(Debug, Clone)]
 pub struct DbcData {
     pub file_path: String,
-    pub messages: Vec<MessageInfo>,
+    pub dbc: Option<DBC>, // 直接存储DBC对象
     pub error_message: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct MessageInfo {
-    pub id: u32,
-    pub name: String,
-    pub length: u8,
-    pub signals: Vec<SignalInfo>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SignalInfo {
-    pub name: String,
-    pub start_bit: u8,
-    pub length: u8,
-    pub factor: f64,
-    pub offset: f64,
-    pub min: f64,
-    pub max: f64,
-    pub unit: String,
-    pub data_type: String, // 数据类型：如 "unsigned", "signed", "float", "double"
-    pub byte_order: String, // 字节序：如 "Intel(Little Endian)", "Motorola(Big Endian)"
 }
 
 impl Default for DbcData {
     fn default() -> Self {
         Self {
             file_path: String::new(),
-            messages: Vec::new(),
+            dbc: None,
             error_message: String::new(),
         }
     }
@@ -63,87 +42,51 @@ impl DbcData {
         // 尝试解析 DBC 内容
         match can_dbc::DBC::from_slice(content.as_bytes()) {
             Ok(dbc) => {
-                self.messages = self.extract_messages_safe(&dbc);
+                self.dbc = Some(dbc);
                 self.error_message.clear();
                 Ok(())
             }
             Err(e) => {
                 // 清空之前的数据
-                self.messages.clear();
+                self.dbc = None;
                 Err(format!("Failed to parse DBC file: {:?}", e))
             }
         }
     }
     
-    /// 安全地从 DBC 中提取消息信息
-    fn extract_messages_safe(&self, dbc: &can_dbc::DBC) -> Vec<MessageInfo> {
-        let mut messages = Vec::new();
-        
-        for message in dbc.messages() {
-            let mut signals = Vec::new();
-            
-            // 提取信号信息
-            for signal in message.signals() {
-                // 直接使用Signal的byte_order方法
-                let byte_order = match signal.byte_order() {
-                    can_dbc::ByteOrder::LittleEndian => "Intel",
-                    can_dbc::ByteOrder::BigEndian => "Motorola",
-                };
-
-                // 直接使用Signal的value_type方法
-                let data_type = match signal.value_type() {
-                    can_dbc::ValueType::Signed => "signed",
-                    can_dbc::ValueType::Unsigned => "unsigned",
-                };
-
-                signals.push(SignalInfo {
-                    name: signal.name().clone(),
-                    start_bit: *signal.start_bit() as u8,
-                    length: *signal.signal_size() as u8,
-                    factor: *signal.factor(),
-                    offset: *signal.offset(),
-                    min: *signal.min(),
-                    max: *signal.max(),
-                    unit: signal.unit().clone(),
-                    data_type: data_type.to_string(),
-                    byte_order: byte_order.to_string(),
-                });
-            }
-            
-            // 提取消息信息
-            messages.push(MessageInfo {
-                id: message.message_id().raw(),
-                name: message.message_name().clone(),
-                length: *message.message_size() as u8,
-                signals,
-            });
-        }
-        
-        messages
+    /// 获取DBC对象的引用
+    #[allow(dead_code)]
+    pub fn dbc(&self) -> Option<&DBC> {
+        self.dbc.as_ref()
     }
     
     /// 获取消息数量
     pub fn message_count(&self) -> usize {
-        self.messages.len()
+        self.dbc.as_ref().map_or(0, |dbc| dbc.messages().len())
     }
     
     /// 获取指定 ID 的消息
-    pub fn get_message_by_id(&self, id: u32) -> Option<&MessageInfo> {
-        self.messages.iter().find(|msg| msg.id == id)
+    pub fn get_message_by_id(&self, id: u32) -> Option<&Message> {
+        self.dbc.as_ref()?.messages().iter()
+            .find(|msg| msg.message_id().raw() == id)
     }
     
     /// 搜索消息（按名称）
-    pub fn search_messages(&self, query: &str) -> Vec<&MessageInfo> {
+    pub fn search_messages(&self, query: &str) -> Vec<&Message> {
+        let Some(dbc) = self.dbc.as_ref() else {
+            return Vec::new();
+        };
+        
         if query.is_empty() {
-            return self.messages.iter().collect();
+            return dbc.messages().iter().collect();
         }
         
-        self.messages
+        dbc.messages()
             .iter()
             .filter(|msg| {
-                msg.name.to_lowercase().contains(&query.to_lowercase())
-                    || msg.signals.iter().any(|sig| {
-                        sig.name.to_lowercase().contains(&query.to_lowercase())
+                msg.message_name().to_lowercase().contains(&query.to_lowercase())
+                    || msg.signals().iter().any(|sig| {
+                        sig.name().to_lowercase().contains(&query.to_lowercase())
                     })
             })
             .collect()
