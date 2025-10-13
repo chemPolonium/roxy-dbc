@@ -27,6 +27,8 @@ pub struct SignalInfo {
     pub min: f64,
     pub max: f64,
     pub unit: String,
+    pub data_type: String, // 数据类型：如 "unsigned", "signed", "float", "double"
+    pub byte_order: String, // 字节序：如 "Intel(Little Endian)", "Motorola(Big Endian)"
 }
 
 impl Default for DbcData {
@@ -82,6 +84,18 @@ impl DbcData {
             
             // 提取信号信息
             for signal in message.signals() {
+                // 直接使用Signal的byte_order方法
+                let byte_order = match signal.byte_order() {
+                    can_dbc::ByteOrder::LittleEndian => "Intel",
+                    can_dbc::ByteOrder::BigEndian => "Motorola",
+                };
+
+                // 直接使用Signal的value_type方法
+                let data_type = match signal.value_type() {
+                    can_dbc::ValueType::Signed => "signed",
+                    can_dbc::ValueType::Unsigned => "unsigned",
+                };
+
                 signals.push(SignalInfo {
                     name: signal.name().clone(),
                     start_bit: *signal.start_bit() as u8,
@@ -91,6 +105,8 @@ impl DbcData {
                     min: *signal.min(),
                     max: *signal.max(),
                     unit: signal.unit().clone(),
+                    data_type: data_type.to_string(),
+                    byte_order: byte_order.to_string(),
                 });
             }
             

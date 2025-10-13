@@ -1,6 +1,6 @@
 //! UI 渲染和界面逻辑
 use crate::dbc::DbcData;
-use imgui::{Condition, Ui, TableFlags, TableColumnFlags, TableColumnSetup, TableSortDirection};
+use imgui::{Condition, TableColumnFlags, TableColumnSetup, TableFlags, TableSortDirection, Ui};
 use std::time::Duration;
 
 /// DBC 窗口状态
@@ -350,18 +350,24 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
                             // 简单检查是否有排序请求
                             let specs = sort_specs.specs();
                             for (i, spec) in specs.iter().enumerate() {
-                                if i == 0 { // 只处理第一个排序规格
-                                    let ascending = spec.sort_direction() == Some(TableSortDirection::Ascending);
-                                    
+                                if i == 0 {
+                                    // 只处理第一个排序规格
+                                    let ascending = spec.sort_direction()
+                                        == Some(TableSortDirection::Ascending);
+
                                     sorted_messages.sort_by(|a, b| {
                                         let ordering = match spec.column_idx() {
-                                            0 => a.id.cmp(&b.id), // ID列
-                                            1 => a.name.cmp(&b.name), // Name列
-                                            2 => a.length.cmp(&b.length), // Length列
+                                            0 => a.id.cmp(&b.id),                       // ID列
+                                            1 => a.name.cmp(&b.name),                   // Name列
+                                            2 => a.length.cmp(&b.length),               // Length列
                                             3 => a.signals.len().cmp(&b.signals.len()), // Signals列
                                             _ => std::cmp::Ordering::Equal,
                                         };
-                                        if ascending { ordering } else { ordering.reverse() }
+                                        if ascending {
+                                            ordering
+                                        } else {
+                                            ordering.reverse()
+                                        }
                                     });
                                     break;
                                 }
@@ -370,19 +376,24 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
 
                         for message in sorted_messages {
                             ui.table_next_row();
-                            
+
                             let selected = window_state.selected_message_id == Some(message.id);
-                            
+
                             // 如果选中，设置行背景色
                             if selected {
-                                ui.table_set_bg_color(imgui::TableBgTarget::ROW_BG0, [0.3, 0.3, 0.7, 0.65]);
+                                ui.table_set_bg_color(
+                                    imgui::TableBgTarget::ROW_BG0,
+                                    [0.3, 0.3, 0.7, 0.65],
+                                );
                             }
 
                             ui.table_set_column_index(0);
-                            if ui.selectable_config(format!("0x{:03X}", message.id))
+                            if ui
+                                .selectable_config(format!("0x{:03X}", message.id))
                                 .selected(selected)
                                 .span_all_columns(true)
-                                .build() {
+                                .build()
+                            {
                                 window_state.selected_message_id = Some(message.id);
                             }
 
@@ -414,38 +425,42 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
                         .build(|| {
                             if let Some(_table) = ui.begin_table_with_flags(
                                 "signals_table",
-                                8,
-                                TableFlags::RESIZABLE | TableFlags::BORDERS_V | TableFlags::SCROLL_Y | TableFlags::SORTABLE,
+                                10, // 增加到10列
+                                TableFlags::RESIZABLE
+                                    | TableFlags::BORDERS_V
+                                    | TableFlags::SCROLL_Y
+                                    | TableFlags::SORTABLE,
                             ) {
                                 // 设置列的配置
                                 ui.table_setup_column_with(TableColumnSetup {
                                     name: "Signal",
-                                    flags: TableColumnFlags::DEFAULT_SORT | TableColumnFlags::WIDTH_STRETCH,
+                                    flags: TableColumnFlags::DEFAULT_SORT
+                                        | TableColumnFlags::WIDTH_STRETCH,
                                     init_width_or_weight: 0.0,
                                     user_id: ui.new_id_str("signal_name_col"),
                                 });
                                 ui.table_setup_column_with(TableColumnSetup {
                                     name: "Start",
                                     flags: TableColumnFlags::WIDTH_FIXED,
-                                    init_width_or_weight: 70.0,
+                                    init_width_or_weight: 50.0,
                                     user_id: ui.new_id_str("start_bit_col"),
                                 });
                                 ui.table_setup_column_with(TableColumnSetup {
                                     name: "Length",
                                     flags: TableColumnFlags::WIDTH_FIXED,
-                                    init_width_or_weight: 60.0,
+                                    init_width_or_weight: 50.0,
                                     user_id: ui.new_id_str("signal_len_col"),
                                 });
                                 ui.table_setup_column_with(TableColumnSetup {
                                     name: "Factor",
                                     flags: TableColumnFlags::WIDTH_FIXED,
-                                    init_width_or_weight: 70.0,
+                                    init_width_or_weight: 50.0,
                                     user_id: ui.new_id_str("factor_col"),
                                 });
                                 ui.table_setup_column_with(TableColumnSetup {
                                     name: "Offset",
                                     flags: TableColumnFlags::WIDTH_FIXED,
-                                    init_width_or_weight: 70.0,
+                                    init_width_or_weight: 50.0,
                                     user_id: ui.new_id_str("offset_col"),
                                 });
                                 ui.table_setup_column_with(TableColumnSetup {
@@ -466,6 +481,18 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
                                     init_width_or_weight: 60.0,
                                     user_id: ui.new_id_str("unit_col"),
                                 });
+                                ui.table_setup_column_with(TableColumnSetup {
+                                    name: "Type",
+                                    flags: TableColumnFlags::WIDTH_FIXED,
+                                    init_width_or_weight: 60.0,
+                                    user_id: ui.new_id_str("data_type_col"),
+                                });
+                                ui.table_setup_column_with(TableColumnSetup {
+                                    name: "Order",
+                                    flags: TableColumnFlags::WIDTH_FIXED,
+                                    init_width_or_weight: 60.0,
+                                    user_id: ui.new_id_str("byte_order_col"),
+                                });
                                 ui.table_headers_row();
 
                                 // 获取并排序信号
@@ -473,22 +500,42 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
                                 if let Some(sort_specs) = ui.table_sort_specs_mut() {
                                     let specs = sort_specs.specs();
                                     for (i, spec) in specs.iter().enumerate() {
-                                        if i == 0 { // 只处理第一个排序规格
-                                            let ascending = spec.sort_direction() == Some(TableSortDirection::Ascending);
-                                            
+                                        if i == 0 {
+                                            // 只处理第一个排序规格
+                                            let ascending = spec.sort_direction()
+                                                == Some(TableSortDirection::Ascending);
+
                                             sorted_signals.sort_by(|a, b| {
                                                 let ordering = match spec.column_idx() {
-                                                    0 => a.name.cmp(&b.name), // Signal名称
+                                                    0 => a.name.cmp(&b.name),           // Signal名称
                                                     1 => a.start_bit.cmp(&b.start_bit), // Start Bit
-                                                    2 => a.length.cmp(&b.length), // Length
-                                                    3 => a.factor.partial_cmp(&b.factor).unwrap_or(std::cmp::Ordering::Equal), // Factor
-                                                    4 => a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal), // Offset
-                                                    5 => a.min.partial_cmp(&b.min).unwrap_or(std::cmp::Ordering::Equal), // Min
-                                                    6 => a.max.partial_cmp(&b.max).unwrap_or(std::cmp::Ordering::Equal), // Max
+                                                    2 => a.length.cmp(&b.length),       // Length
+                                                    3 => a
+                                                        .factor
+                                                        .partial_cmp(&b.factor)
+                                                        .unwrap_or(std::cmp::Ordering::Equal), // Factor
+                                                    4 => a
+                                                        .offset
+                                                        .partial_cmp(&b.offset)
+                                                        .unwrap_or(std::cmp::Ordering::Equal), // Offset
+                                                    5 => a
+                                                        .min
+                                                        .partial_cmp(&b.min)
+                                                        .unwrap_or(std::cmp::Ordering::Equal), // Min
+                                                    6 => a
+                                                        .max
+                                                        .partial_cmp(&b.max)
+                                                        .unwrap_or(std::cmp::Ordering::Equal), // Max
                                                     7 => a.unit.cmp(&b.unit), // Unit
+                                                    8 => a.data_type.cmp(&b.data_type), // Data Type
+                                                    9 => a.byte_order.cmp(&b.byte_order), // Byte Order
                                                     _ => std::cmp::Ordering::Equal,
                                                 };
-                                                if ascending { ordering } else { ordering.reverse() }
+                                                if ascending {
+                                                    ordering
+                                                } else {
+                                                    ordering.reverse()
+                                                }
                                             });
                                             break;
                                         }
@@ -497,7 +544,7 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
 
                                 for signal in sorted_signals {
                                     ui.table_next_row();
-                                    
+
                                     ui.table_set_column_index(0);
                                     ui.text(&signal.name);
 
@@ -521,6 +568,12 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
 
                                     ui.table_set_column_index(7);
                                     ui.text(&signal.unit);
+
+                                    ui.table_set_column_index(8);
+                                    ui.text(&signal.data_type);
+
+                                    ui.table_set_column_index(9);
+                                    ui.text(&signal.byte_order);
                                 }
                             }
                         });
@@ -548,13 +601,13 @@ fn render_error_dialog(ui: &Ui, error_dialog: &mut ErrorDialog) {
         .build(|| {
             ui.text("Error");
             ui.separator();
-            
+
             // 添加一些空间使对话框更大
             ui.dummy([400.0, 0.0]); // 设置最小宽度
-            
+
             // 使用文本包装来处理长错误消息
             ui.text_wrapped(&error_dialog.message);
-            
+
             // 添加一些垂直空间
             ui.dummy([0.0, 20.0]);
             ui.separator();
