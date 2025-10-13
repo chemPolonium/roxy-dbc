@@ -576,10 +576,82 @@ fn sort_signals<'a>(ui: &Ui, message: &'a crate::dbc::Message) -> Vec<&'a can_db
     sorted_signals
 }
 
+/// 计算浮点数的小数位数
+fn get_decimal_places(value: f64) -> usize {
+    if value == 0.0 || value.fract() == 0.0 {
+        return 0;
+    }
+
+    // 处理非常小的数字（如1e-7）
+    let abs_value = value.abs();
+    if abs_value < 1e-10 {
+        return 10; // 对于极小的数字，返回最大精度
+    }
+
+    // 使用更高精度的格式化来处理小数
+    let value_str = format!("{:.15}", abs_value); // 最多显示15位小数
+
+    if let Some(decimal_part) = value_str.split('.').nth(1) {
+        // 从右边开始删除尾随的0
+        let trimmed = decimal_part.trim_end_matches('0');
+        trimmed.len().min(10) // 最多10位小数，足以处理1e-7
+    } else {
+        0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decimal_places() {
+        assert_eq!(get_decimal_places(1.0), 0);
+        assert_eq!(get_decimal_places(1.5), 1);
+        assert_eq!(get_decimal_places(0.01), 2);
+        assert_eq!(get_decimal_places(0.001), 3);
+        assert_eq!(get_decimal_places(0.125), 3);
+        assert_eq!(get_decimal_places(1.23456), 5);
+        assert_eq!(get_decimal_places(1e-7), 7); // 处理科学计数法
+        assert_eq!(get_decimal_places(0.0000001), 7); // 1e-7的十进制表示
+        assert_eq!(get_decimal_places(1e-6), 6); // 1e-6
+        assert_eq!(get_decimal_places(1e-5), 5); // 1e-5
+        assert_eq!(get_decimal_places(1.234567890123456), 10); // 限制为最多10位
+        assert_eq!(get_decimal_places(0.0), 0); // 零值
+    }
+
+    #[test]
+    fn test_format_with_precision() {
+        // 测试实际的格式化效果
+        let factor = 1e-7;
+        let precision = get_decimal_places(factor);
+        let formatted = format!("{:.prec$}", factor, prec = precision);
+        println!("1e-7 with {} decimal places: {}", precision, formatted);
+
+        let factor2 = 0.0000001;
+        let precision2 = get_decimal_places(factor2);
+        let formatted2 = format!("{:.prec$}", factor2, prec = precision2);
+        println!(
+            "0.0000001 with {} decimal places: {}",
+            precision2, formatted2
+        );
+
+        assert_eq!(precision, 7);
+        assert_eq!(precision2, 7);
+    }
+}
+
 /// 渲染信号表格的行
 fn render_signals_rows(ui: &Ui, signals: Vec<&can_dbc::Signal>) {
     for signal in signals {
         ui.table_next_row();
+
+        // 根据factor的小数位数确定显示精度
+        let factor_precision = get_decimal_places(*signal.factor());
+        let offset_precision = get_decimal_places(*signal.offset());
+
+        // 对于min/max，使用factor精度，因为它们通常需要和factor保持一致的精度
+        let value_precision = factor_precision.max(1); // 至少显示1位小数
 
         ui.table_set_column_index(0);
         ui.text(signal.name());
@@ -591,16 +663,30 @@ fn render_signals_rows(ui: &Ui, signals: Vec<&can_dbc::Signal>) {
         ui.text(format!("{}", signal.signal_size()));
 
         ui.table_set_column_index(3);
-        ui.text(format!("{:.3}", signal.factor()));
+        // Factor: 使用其自身的精度，最少显示1位
+        let factor_display_precision = factor_precision.max(1);
+        ui.text(format!(
+            "{:.prec$}",
+            signal.factor(),
+            prec = factor_display_precision
+        ));
 
         ui.table_set_column_index(4);
-        ui.text(format!("{:.3}", signal.offset()));
+        // Offset: 使用其自身的精度，最少显示1位
+        let offset_display_precision = offset_precision.max(1);
+        ui.text(format!(
+            "{:.prec$}",
+            signal.offset(),
+            prec = offset_display_precision
+        ));
 
         ui.table_set_column_index(5);
-        ui.text(format!("{:.1}", signal.min()));
+        // Min: 使用与factor相同的精度
+        ui.text(format!("{:.prec$}", signal.min(), prec = value_precision));
 
         ui.table_set_column_index(6);
-        ui.text(format!("{:.1}", signal.max()));
+        // Max: 使用与factor相同的精度
+        ui.text(format!("{:.prec$}", signal.max(), prec = value_precision));
 
         ui.table_set_column_index(7);
         ui.text(signal.unit());
