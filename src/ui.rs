@@ -542,17 +542,37 @@ fn render_error_dialog(ui: &Ui, error_dialog: &mut ErrorDialog) {
         ui.open_popup("Error");
     }
 
-    ui.modal_popup_config("Error").resizable(false).build(|| {
-        ui.text("Error");
-        ui.separator();
-        ui.text(&error_dialog.message);
-        ui.separator();
+    ui.modal_popup_config("Error")
+        .resizable(true)
+        .always_auto_resize(false)
+        .build(|| {
+            ui.text("Error");
+            ui.separator();
+            
+            // 添加一些空间使对话框更大
+            ui.dummy([400.0, 0.0]); // 设置最小宽度
+            
+            // 使用文本包装来处理长错误消息
+            ui.text_wrapped(&error_dialog.message);
+            
+            // 添加一些垂直空间
+            ui.dummy([0.0, 20.0]);
+            ui.separator();
 
-        if ui.button("OK") {
-            ui.close_current_popup();
-            error_dialog.show = false;
-        }
-    });
+            // 居中显示OK按钮
+            let button_width = 80.0;
+            let avail_width = ui.content_region_avail()[0];
+            let offset = (avail_width - button_width) * 0.5;
+            if offset > 0.0 {
+                ui.dummy([offset, 0.0]);
+                ui.same_line();
+            }
+
+            if ui.button_with_size("OK", [button_width, 0.0]) {
+                ui.close_current_popup();
+                error_dialog.show = false;
+            }
+        });
 }
 
 /// 渲染关于对话框
