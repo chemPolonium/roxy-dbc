@@ -1,0 +1,578 @@
+//! UI 渲染和界面逻辑
+use crate::dbc::DbcData;
+use imgui::{Condition, Ui, TableFlags, TableColumnFlags, TableColumnSetup, TableSortDirection};
+use std::time::Duration;
+
+/// DBC 窗口状态
+#[derive(Clone)]
+pub struct DbcWindowState {
+    pub id: usize,
+    pub dbc_data: DbcData,
+    pub search_query: String,
+    pub selected_message_id: Option<u32>,
+    pub is_open: bool,
+}
+
+/// 错误对话框状态
+pub struct ErrorDialog {
+    pub show: bool,
+    pub message: String,
+}
+
+/// UI 状态管理
+pub struct UiState {
+    pub show_performance_window: bool,
+    pub show_hello_window: bool,
+    pub show_about_dialog: bool,
+    pub show_can_window: bool,
+    pub show_chart_window: bool,
+    pub dbc_windows: Vec<DbcWindowState>,
+    pub next_dbc_id: usize,
+    pub error_dialog: ErrorDialog,
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self {
+            show_performance_window: true,
+            show_hello_window: true,
+            show_about_dialog: false,
+            show_can_window: false,
+            show_chart_window: false,
+            dbc_windows: Vec::new(),
+            next_dbc_id: 1,
+            error_dialog: ErrorDialog {
+                show: false,
+                message: String::new(),
+            },
+        }
+    }
+}
+
+/// 渲染主界面
+pub fn render_ui(ui: &Ui, delta_s: Duration, target_frame_time: Duration, ui_state: &mut UiState) {
+    // 主菜单栏
+    render_main_menu_bar(ui, ui_state);
+
+    // 根据菜单状态显示窗口
+    if ui_state.show_hello_window {
+        render_hello_window(ui);
+    }
+
+    if ui_state.show_performance_window {
+        render_performance_window(ui, delta_s, target_frame_time);
+    }
+
+    if ui_state.show_can_window {
+        render_can_window(ui);
+    }
+
+    if ui_state.show_chart_window {
+        render_chart_window(ui);
+    }
+
+    // Render all DBC windows
+    let mut windows_to_remove = Vec::new();
+    for (index, window) in ui_state.dbc_windows.iter_mut().enumerate() {
+        if window.is_open {
+            if !render_dbc_window(ui, window) {
+                windows_to_remove.push(index);
+            }
+        }
+    }
+    // Remove closed windows in reverse order to maintain indices
+    for &index in windows_to_remove.iter().rev() {
+        ui_state.dbc_windows.remove(index);
+    }
+
+    // Render error dialog
+    if ui_state.error_dialog.show {
+        render_error_dialog(ui, &mut ui_state.error_dialog);
+    }
+
+    if ui_state.show_about_dialog {
+        render_about_dialog(ui, &mut ui_state.show_about_dialog);
+    }
+}
+
+/// 渲染主菜单栏
+fn render_main_menu_bar(ui: &Ui, ui_state: &mut UiState) {
+    ui.main_menu_bar(|| {
+        ui.menu("File", || {
+            if ui.menu_item("Load DBC File") {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("DBC files", &["dbc"])
+                    .pick_file()
+                {
+                    let mut dbc_data = DbcData::new();
+                    match dbc_data.load_dbc_file(&path) {
+                        Ok(_) => {
+                            ui_state.dbc_windows.push(DbcWindowState {
+                                id: ui_state.next_dbc_id,
+                                is_open: true,
+                                dbc_data,
+                                search_query: String::new(),
+                                selected_message_id: None,
+                            });
+                            ui_state.next_dbc_id += 1;
+                        }
+                        Err(e) => {
+                            ui_state.error_dialog.message =
+                                format!("Failed to load DBC file: {}", e);
+                            ui_state.error_dialog.show = true;
+                        }
+                    }
+                }
+            }
+            ui.separator();
+            if ui.menu_item("Exit") {
+                // 退出程序逻辑
+                std::process::exit(0);
+            }
+        });
+
+        ui.menu("View", || {
+            ui.checkbox("Hello Window", &mut ui_state.show_hello_window);
+            ui.checkbox("Performance Window", &mut ui_state.show_performance_window);
+        });
+
+        ui.menu("Help", || {
+            if ui.menu_item("About") {
+                ui_state.show_about_dialog = true;
+            }
+        });
+    });
+}
+
+/// 渲染 Hello 窗口
+fn render_hello_window(ui: &Ui) {
+    let window = ui.window("Hello World");
+    window
+        .size([300.0, 150.0], Condition::FirstUseEver)
+        .position([50.0, 50.0], Condition::FirstUseEver)
+        .build(|| {
+            ui.text("All Hail Roxy Migurdia!");
+            ui.text("Yet another dbc viewer");
+        });
+}
+
+/// 渲染性能信息窗口
+fn render_performance_window(ui: &Ui, delta_s: Duration, target_frame_time: Duration) {
+    let window = ui.window("Performance Information");
+    window
+        .size([400.0, 150.0], Condition::FirstUseEver)
+        .position([400.0, 50.0], Condition::FirstUseEver)
+        .build(|| {
+            ui.text(format!("Frame Time: {delta_s:?}"));
+            let fps = 1.0 / delta_s.as_secs_f32();
+            ui.text(format!("FPS: {fps:.1}"));
+            ui.text(format!(
+                "Target FPS: {:.1}",
+                1.0 / target_frame_time.as_secs_f32()
+            ));
+        });
+}
+
+/// 渲染 CAN 数据窗口
+fn render_can_window(ui: &Ui) {
+    let window = ui.window("CAN Data Display");
+    window
+        .size([500.0, 300.0], Condition::FirstUseEver)
+        .position([100.0, 100.0], Condition::FirstUseEver)
+        .build(|| {
+            ui.text("CAN Bus Monitoring");
+            ui.separator();
+
+            ui.text("Status: Disconnected");
+            ui.same_line();
+            if ui.button("Connect") {
+                println!("CAN connect clicked");
+            }
+
+            ui.separator();
+            ui.text("Message Log:");
+            ui.child_window("can_log").size([0.0, 150.0]).build(|| {
+                ui.text("0x123: 01 02 03 04 05 06 07 08");
+                ui.text("0x456: AA BB CC DD EE FF 00 11");
+                ui.text("0x789: DE AD BE EF CA FE BA BE");
+            });
+        });
+}
+
+/// 渲染图表窗口
+fn render_chart_window(ui: &Ui) {
+    let window = ui.window("Charts and Plotting");
+    window
+        .size([600.0, 400.0], Condition::FirstUseEver)
+        .position([200.0, 150.0], Condition::FirstUseEver)
+        .build(|| {
+            ui.text("Data Visualization");
+            ui.separator();
+
+            ui.text("Chart Type:");
+            ui.radio_button("Line Chart", &mut 0, 0);
+            ui.same_line();
+            ui.radio_button("Bar Chart", &mut 0, 1);
+            ui.same_line();
+            ui.radio_button("Scatter Plot", &mut 0, 2);
+
+            ui.separator();
+            ui.text("Placeholder for chart rendering");
+            ui.text("Chart area would be implemented here with plotting library");
+
+            if ui.button("Generate Sample Data") {
+                println!("Generate sample data clicked");
+            }
+        });
+}
+
+/// 渲染单个 DBC 浏览器窗口
+fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
+    let window_title = format!(
+        "DBC Browser {} - {}",
+        window_state.id,
+        if window_state.dbc_data.file_path.is_empty() {
+            "No file"
+        } else {
+            &window_state.dbc_data.file_path
+        }
+    );
+
+    let mut is_open = window_state.is_open;
+
+    if is_open {
+        let window = ui
+            .window(&window_title)
+            .opened(&mut is_open)
+            .size([800.0, 600.0], Condition::FirstUseEver)
+            .position(
+                [
+                    50.0 + (window_state.id as f32 * 30.0),
+                    50.0 + (window_state.id as f32 * 30.0),
+                ],
+                Condition::FirstUseEver,
+            );
+
+        window.build(|| {
+            // 文件信息区域
+
+            if ui.button("Reload") {
+                if !window_state.dbc_data.file_path.is_empty() {
+                    let path = std::path::PathBuf::from(&window_state.dbc_data.file_path);
+                    match window_state.dbc_data.load_dbc_file(&path) {
+                        Ok(_) => {
+                            println!("DBC file reloaded successfully");
+                        }
+                        Err(e) => {
+                            window_state.dbc_data.error_message = e;
+                        }
+                    }
+                }
+            }
+
+            // 显示当前加载的文件
+            if !window_state.dbc_data.file_path.is_empty() {
+                ui.text(format!("Loaded: {}", window_state.dbc_data.file_path));
+                ui.text(format!(
+                    "Messages: {}",
+                    window_state.dbc_data.message_count()
+                ));
+            } else {
+                ui.text("No DBC file loaded");
+            }
+
+            // 显示错误信息
+            if !window_state.dbc_data.error_message.is_empty() {
+                ui.text_colored([1.0, 0.0, 0.0, 1.0], &window_state.dbc_data.error_message);
+            }
+
+            ui.separator();
+
+            // 搜索框
+            ui.text("Search Messages:");
+            ui.input_text("##search", &mut window_state.search_query)
+                .build();
+
+            ui.separator();
+
+            // 消息列表
+            let filtered_messages = window_state
+                .dbc_data
+                .search_messages(&window_state.search_query);
+
+            // 计算可用高度，平分给两个table
+            let available_height = ui.content_region_avail()[1];
+            let table_height = (available_height - 40.0) * 0.5; // 减去一些空间给separator和文字
+
+            ui.child_window("messages_list")
+                .size([0.0, table_height])
+                .build(|| {
+                    if let Some(_table) = ui.begin_table_with_flags(
+                        "messages_table",
+                        4,
+                        TableFlags::RESIZABLE
+                            | TableFlags::BORDERS_V
+                            | TableFlags::SCROLL_Y
+                            | TableFlags::SORTABLE,
+                    ) {
+                        // 设置列的初始宽度 - 按比例分配
+                        ui.table_setup_column_with(TableColumnSetup {
+                            name: "ID",
+                            flags: TableColumnFlags::DEFAULT_SORT | TableColumnFlags::WIDTH_FIXED,
+                            init_width_or_weight: 80.0,
+                            user_id: ui.new_id_str("id_col"),
+                        });
+                        ui.table_setup_column_with(TableColumnSetup {
+                            name: "Name",
+                            flags: TableColumnFlags::WIDTH_STRETCH,
+                            init_width_or_weight: 0.0,
+                            user_id: ui.new_id_str("name_col"),
+                        });
+                        ui.table_setup_column_with(TableColumnSetup {
+                            name: "Length",
+                            flags: TableColumnFlags::WIDTH_FIXED,
+                            init_width_or_weight: 60.0,
+                            user_id: ui.new_id_str("len_col"),
+                        });
+                        ui.table_setup_column_with(TableColumnSetup {
+                            name: "Signals",
+                            flags: TableColumnFlags::WIDTH_FIXED,
+                            init_width_or_weight: 60.0,
+                            user_id: ui.new_id_str("sig_col"),
+                        });
+
+                        // 使用ImGui原生的表头和排序
+                        ui.table_headers_row();
+
+                        // 检查排序规格并应用排序
+                        let mut sorted_messages = filtered_messages;
+                        if let Some(sort_specs) = ui.table_sort_specs_mut() {
+                            // 简单检查是否有排序请求
+                            let specs = sort_specs.specs();
+                            for (i, spec) in specs.iter().enumerate() {
+                                if i == 0 { // 只处理第一个排序规格
+                                    let ascending = spec.sort_direction() == Some(TableSortDirection::Ascending);
+                                    
+                                    sorted_messages.sort_by(|a, b| {
+                                        let ordering = match spec.column_idx() {
+                                            0 => a.id.cmp(&b.id), // ID列
+                                            1 => a.name.cmp(&b.name), // Name列
+                                            2 => a.length.cmp(&b.length), // Length列
+                                            3 => a.signals.len().cmp(&b.signals.len()), // Signals列
+                                            _ => std::cmp::Ordering::Equal,
+                                        };
+                                        if ascending { ordering } else { ordering.reverse() }
+                                    });
+                                    break;
+                                }
+                            }
+                        }
+
+                        for message in sorted_messages {
+                            ui.table_next_row();
+                            
+                            let selected = window_state.selected_message_id == Some(message.id);
+                            
+                            // 如果选中，设置行背景色
+                            if selected {
+                                ui.table_set_bg_color(imgui::TableBgTarget::ROW_BG0, [0.3, 0.3, 0.7, 0.65]);
+                            }
+
+                            ui.table_set_column_index(0);
+                            if ui.selectable_config(format!("0x{:03X}", message.id))
+                                .selected(selected)
+                                .span_all_columns(true)
+                                .build() {
+                                window_state.selected_message_id = Some(message.id);
+                            }
+
+                            ui.table_set_column_index(1);
+                            ui.text(&message.name);
+
+                            ui.table_set_column_index(2);
+                            ui.text(format!("{}", message.length));
+
+                            ui.table_set_column_index(3);
+                            ui.text(format!("{}", message.signals.len()));
+                        }
+                    }
+                });
+
+            ui.separator();
+
+            // 信号详细信息
+            if let Some(selected_id) = window_state.selected_message_id {
+                if let Some(message) = window_state.dbc_data.get_message_by_id(selected_id) {
+                    ui.text(format!(
+                        "Message Details: {} (0x{:03X})",
+                        message.name, message.id
+                    ));
+                    ui.separator();
+
+                    ui.child_window("signals_list")
+                        .size([0.0, table_height])
+                        .build(|| {
+                            if let Some(_table) = ui.begin_table_with_flags(
+                                "signals_table",
+                                8,
+                                TableFlags::RESIZABLE | TableFlags::BORDERS_V | TableFlags::SCROLL_Y | TableFlags::SORTABLE,
+                            ) {
+                                // 设置列的配置
+                                ui.table_setup_column_with(TableColumnSetup {
+                                    name: "Signal",
+                                    flags: TableColumnFlags::DEFAULT_SORT | TableColumnFlags::WIDTH_STRETCH,
+                                    init_width_or_weight: 0.0,
+                                    user_id: ui.new_id_str("signal_name_col"),
+                                });
+                                ui.table_setup_column_with(TableColumnSetup {
+                                    name: "Start",
+                                    flags: TableColumnFlags::WIDTH_FIXED,
+                                    init_width_or_weight: 70.0,
+                                    user_id: ui.new_id_str("start_bit_col"),
+                                });
+                                ui.table_setup_column_with(TableColumnSetup {
+                                    name: "Length",
+                                    flags: TableColumnFlags::WIDTH_FIXED,
+                                    init_width_or_weight: 60.0,
+                                    user_id: ui.new_id_str("signal_len_col"),
+                                });
+                                ui.table_setup_column_with(TableColumnSetup {
+                                    name: "Factor",
+                                    flags: TableColumnFlags::WIDTH_FIXED,
+                                    init_width_or_weight: 70.0,
+                                    user_id: ui.new_id_str("factor_col"),
+                                });
+                                ui.table_setup_column_with(TableColumnSetup {
+                                    name: "Offset",
+                                    flags: TableColumnFlags::WIDTH_FIXED,
+                                    init_width_or_weight: 70.0,
+                                    user_id: ui.new_id_str("offset_col"),
+                                });
+                                ui.table_setup_column_with(TableColumnSetup {
+                                    name: "Min",
+                                    flags: TableColumnFlags::WIDTH_FIXED,
+                                    init_width_or_weight: 70.0,
+                                    user_id: ui.new_id_str("min_col"),
+                                });
+                                ui.table_setup_column_with(TableColumnSetup {
+                                    name: "Max",
+                                    flags: TableColumnFlags::WIDTH_FIXED,
+                                    init_width_or_weight: 70.0,
+                                    user_id: ui.new_id_str("max_col"),
+                                });
+                                ui.table_setup_column_with(TableColumnSetup {
+                                    name: "Unit",
+                                    flags: TableColumnFlags::WIDTH_FIXED,
+                                    init_width_or_weight: 60.0,
+                                    user_id: ui.new_id_str("unit_col"),
+                                });
+                                ui.table_headers_row();
+
+                                // 获取并排序信号
+                                let mut sorted_signals: Vec<_> = message.signals.iter().collect();
+                                if let Some(sort_specs) = ui.table_sort_specs_mut() {
+                                    let specs = sort_specs.specs();
+                                    for (i, spec) in specs.iter().enumerate() {
+                                        if i == 0 { // 只处理第一个排序规格
+                                            let ascending = spec.sort_direction() == Some(TableSortDirection::Ascending);
+                                            
+                                            sorted_signals.sort_by(|a, b| {
+                                                let ordering = match spec.column_idx() {
+                                                    0 => a.name.cmp(&b.name), // Signal名称
+                                                    1 => a.start_bit.cmp(&b.start_bit), // Start Bit
+                                                    2 => a.length.cmp(&b.length), // Length
+                                                    3 => a.factor.partial_cmp(&b.factor).unwrap_or(std::cmp::Ordering::Equal), // Factor
+                                                    4 => a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal), // Offset
+                                                    5 => a.min.partial_cmp(&b.min).unwrap_or(std::cmp::Ordering::Equal), // Min
+                                                    6 => a.max.partial_cmp(&b.max).unwrap_or(std::cmp::Ordering::Equal), // Max
+                                                    7 => a.unit.cmp(&b.unit), // Unit
+                                                    _ => std::cmp::Ordering::Equal,
+                                                };
+                                                if ascending { ordering } else { ordering.reverse() }
+                                            });
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                for signal in sorted_signals {
+                                    ui.table_next_row();
+                                    
+                                    ui.table_set_column_index(0);
+                                    ui.text(&signal.name);
+
+                                    ui.table_set_column_index(1);
+                                    ui.text(format!("{}", signal.start_bit));
+
+                                    ui.table_set_column_index(2);
+                                    ui.text(format!("{}", signal.length));
+
+                                    ui.table_set_column_index(3);
+                                    ui.text(format!("{:.3}", signal.factor));
+
+                                    ui.table_set_column_index(4);
+                                    ui.text(format!("{:.3}", signal.offset));
+
+                                    ui.table_set_column_index(5);
+                                    ui.text(format!("{:.1}", signal.min));
+
+                                    ui.table_set_column_index(6);
+                                    ui.text(format!("{:.1}", signal.max));
+
+                                    ui.table_set_column_index(7);
+                                    ui.text(&signal.unit);
+                                }
+                            }
+                        });
+                }
+            }
+        });
+    }
+
+    if !is_open {
+        window_state.is_open = false;
+    }
+
+    window_state.is_open
+}
+
+/// 渲染错误对话框
+fn render_error_dialog(ui: &Ui, error_dialog: &mut ErrorDialog) {
+    if error_dialog.show {
+        ui.open_popup("Error");
+    }
+
+    ui.modal_popup_config("Error").resizable(false).build(|| {
+        ui.text("Error");
+        ui.separator();
+        ui.text(&error_dialog.message);
+        ui.separator();
+
+        if ui.button("OK") {
+            ui.close_current_popup();
+            error_dialog.show = false;
+        }
+    });
+}
+
+/// 渲染关于对话框
+fn render_about_dialog(ui: &Ui, show_about: &mut bool) {
+    if *show_about {
+        ui.open_popup("About");
+    }
+
+    ui.modal_popup_config("About").resizable(false).build(|| {
+        ui.text("Roxy dbc viewer");
+        ui.separator();
+        ui.text("Version: 0.1.0");
+        ui.text("Built with Rust and ImGui");
+        ui.separator();
+        ui.text("An application for viewing CAN DBC files.");
+
+        ui.separator();
+        if ui.button("Close") {
+            ui.close_current_popup();
+            *show_about = false;
+        }
+    });
+}

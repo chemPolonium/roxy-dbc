@@ -1,0 +1,264 @@
+VERSION "HIPBNYYYYYYYYYYYYYYYYYYYYYYYYYYYNNNNNNNNNN/4/%%%/4/'%**4NNN///"
+
+
+NS_ : 
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+
+BS_:
+
+BU_: Vector__XXX
+
+
+BO_ 1953 EIU_BITStatusFaultDetect: 1 Vector__XXX
+ SG_ New : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 1952 EIU_Bit_Command: 1 Vector__XXX
+ SG_ TBD : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 1703 EIU_Discrete_Status: 2 Vector__XXX
+ SG_ Engine_Fire_Detector : 15|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Alternate_Air_Inlet : 14|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Fuel_Filter_Warning : 13|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Tail_Rotor_Chip_Warning : 12|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Main_Rotor_Chip_Warning : 11|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Main_Rotor_Pressure_Warning : 10|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Main_Rotor_Temp_Warning : 9|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Engine_Chip_Warning : 8|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Generator1_Line_Contactor_stat : 4|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Rotor_Feedback : 3|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ External_Power_Present : 2|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Low_Fuel_Warning : 1|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Engine_Fire_Warning : 0|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+
+BO_ 1702 EIU_Analag_Status_5: 8 Vector__XXX
+ SG_ Battery1_Current : 55|16@0+ (1,0) [0|0] "Counts TBD" Vector__XXX
+ SG_ Generator1_Current : 39|16@0+ (0.0061036,-200) [-200|200] "Amps" Vector__XXX
+ SG_ Flight_Bus1_Current : 23|16@0+ (0.0061036,-200) [-200|200] "Amps" Vector__XXX
+ SG_ Flight_Bus1_Voltage : 1|10@0+ (0.0391006,0) [0|40] "Volts DC" Vector__XXX
+
+BO_ 1701 EIU_Analog_Status_4: 4 Vector__XXX
+ SG_ Fuel_Remaining : 17|10@0+ (1,0) [0|0] "Counts TBD" Vector__XXX
+ SG_ Fuel_Flow_Rate : 1|10@0+ (0.0391007,0) [0|40] "GPM" Vector__XXX
+
+BO_ 1700 EIU_Analog_Status_3: 6 Vector__XXX
+ SG_ Rotor_RPM : 39|16@0+ (0.010071,0) [0|660] "RPM" Vector__XXX
+ SG_ Engine_N2_Speed : 23|16@0+ (0.0839246,0) [0|5500] "RPM" Vector__XXX
+ SG_ Engine_N1_Speed : 7|16@0+ (0.0839246,0) [0|5500] "RPM" Vector__XXX
+
+BO_ 1699 EIU_Analog_Status_2: 2 Vector__XXX
+ SG_ Turbine_Outlet_Temperature : 7|16@0+ (0.0189212,-40) [0|1200] "C" Vector__XXX
+
+BO_ 1698 EIU_Analog_Status_1: 8 Vector__XXX
+ SG_ Start_Bus_1_Voltage : 49|10@0+ (0.0391007,0) [0|40] "Volts DC" Vector__XXX
+ SG_ Torque : 39|16@0+ (0.0015259,0) [0|100] "PSIA" Vector__XXX
+ SG_ Engine_Oil_Temperature : 17|10@0+ (0.12219,0) [0|125] "C" Vector__XXX
+ SG_ Engine_Oil_Pressure : 1|10@0+ (0.146627,0) [0|150] "PSIA" Vector__XXX
+
+BO_ 1687 FPCU_Radar_Altimete_Status: 4 Vector__XXX
+ SG_ Auxiliary_Altitude : 23|16@0+ (1,0) [0|0] "Counts" Vector__XXX
+ SG_ Remote_Altitude : 7|16@0+ (1,0) [0|0] "Counts" Vector__XXX
+
+BO_ 1686 FPCU_Discrete_Status: 3 Vector__XXX
+ SG_ Pulse_Length : 20|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Pulse_Error_1 : 19|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Pulse_Error_2 : 18|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Data_Recording_1 : 17|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Data_Recording_2 : 16|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Flight_Termination_cmd_1_2 : 15|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ IFF_M4_Caution : 14|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Radar_Alt_Self_Test : 13|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Radar_Alt_Track_Rel : 12|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Avionics_RT_Fan_Stat : 11|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Avionics_LT_Fan_Stat : 10|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Payload_RT_Fan_Stat : 9|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Payload_LT_Fan_Stat : 8|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ UCARS_Status : 0|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+
+BO_ 1685 FPCU_Radio_ADT_AMA_Temp: 8 Vector__XXX
+ SG_ ADT_AMA_Chassis_Temp : 49|10@0+ (1,0) [0|0] "Counts" Vector__XXX
+ SG_ ARC210_3_Temp : 33|10@0+ (1,0) [0|0] "Counts" Vector__XXX
+ SG_ ARC210_2_Temp : 17|10@0+ (1,0) [0|0] "Counts" Vector__XXX
+ SG_ ARC210_1_Temp : 1|10@0+ (1,0) [0|0] "Counts" Vector__XXX
+
+BO_ 1684 FPCU_Avionics_Payload_Temp: 8 Vector__XXX
+ SG_ Avionics_Zone_2R_Temp : 49|10@0+ (1,0) [0|0] "Counts" Vector__XXX
+ SG_ Avionics_Zone_2L_Temp : 33|10@0+ (1,0) [0|1] "Counts" Vector__XXX
+ SG_ Payload_Zone_1_Temp : 17|10@0+ (1,0) [0|0] "Counts" Vector__XXX
+ SG_ Payload_Chassis_Temp : 1|10@0+ (1,0) [0|0] "Counts" Vector__XXX
+
+BO_ 1683 FPCU_Outside_Air_Temp: 2 Vector__XXX
+ SG_ Outside_Air_Temp : 7|16@0+ (1,0) [0|0] "Counts" Vector__XXX
+
+BO_ 1682 FPCU_Power_Bus_Status: 6 Vector__XXX
+ SG_ Landing_Bus_Voltage : 33|10@0+ (1,0) [0|0] "Counts" Vector__XXX
+ SG_ Payload_Bus_Current : 23|16@0+ (1,0) [0|0] "Counts" Vector__XXX
+ SG_ Payload_Bus_Voltage : 1|10@0+ (1,0) [0|0] "Counts" Vector__XXX
+
+BO_ 1671 APCU_Weight_On_Skids: 2 Vector__XXX
+ SG_ WOS_RL : 15|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ WOS_FR : 2|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ WOS_FL : 1|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ WOS_RR : 0|1@0+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 1670 APCU_Light_Harpoon_Stat: 3 Vector__XXX
+ SG_ Harpoon_Status_1 : 17|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Harpoon_Status_2 : 16|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ LH_Tank_Pressure : 7|16@0+ (1,0) [0|0] "Counts" Vector__XXX
+
+BO_ 1669 APCU_Discrete_Status: 3 Vector__XXX
+ SG_ Gen2_Over_Voltage : 19|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ COMSEC_Hold : 18|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ COMSEC_Zeroize : 17|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ GCP_CAN_Present : 14|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ GCP_PEDD_Present : 13|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ GCP_MLV_Present : 12|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ GCP_Mode_GRD_SAFE : 11|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ GCP_Mode_RELEASE : 10|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ GCS_VMS2_Emg_Stop : 9|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ GCS_VMS1_Emg_Stop : 8|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Lt_Harpoon_Fault : 4|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Gen2_Low_Voltage : 3|1@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 1668 APCU_ADT_RFE_Temp: 2 Vector__XXX
+ SG_ ADT_RFE__Ref_Temp : 1|10@0+ (1,0) [0|0] "Counts" Vector__XXX
+
+BO_ 1667 APCU_Bus_Current_Stat: 6 Vector__XXX
+ SG_ Generater_2_Current : 39|16@0+ (1,0) [0|0] "Counts" Vector__XXX
+ SG_ Flight_Bus_2_Current : 23|16@0+ (1,0) [0|0] "Counts" Vector__XXX
+ SG_ Battery_2_Current : 7|16@0+ (1,0) [0|0] "Counts" Vector__XXX
+
+BO_ 1666 APCU_Bus_Voltage_Stat: 4 Vector__XXX
+ SG_ Flight_Bus_2_Voltage : 17|10@0+ (1,0) [0|0] "Counts" Vector__XXX
+ SG_ Start_Bus_2_Voltage : 1|10@0+ (1,0) [0|0] "Counts" Vector__XXX
+
+BO_ 1633 N2_Actuator_POS: 4 Vector__XXX
+ SG_ N2_EnableA_DisableB_Stat : 23|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ N2_POS : 7|16@0- (0.00061037,0) [-20|20] "Deg" Vector__XXX
+
+BO_ 1617 Engine_Throttle_Actuator_POS: 4 Vector__XXX
+ SG_ Eng_Thrtl_EnableA_DisableB_Stat : 23|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Eng_Thrtl_POS : 7|16@0- (0.00061037,0) [-20|20] "Deg" Vector__XXX
+
+BO_ 1601 Collective_Actuator_POS: 4 Vector__XXX
+ SG_ Collective_EnableA_DisableB_Stat : 23|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Collective_POS : 7|16@0- (0.00061037,0) [-20|20] "Deg" Vector__XXX
+
+BO_ 1585 Yaw_Actuator_POS: 4 Vector__XXX
+ SG_ Yaw_EnableA_DisableB_Stat : 23|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Yaw_POS : 7|16@0- (0.00061037,0) [-20|20] "Deg" Vector__XXX
+
+BO_ 1569 Roll_Actuator_POS: 4 Vector__XXX
+ SG_ Roll_EnableA_DisableB_Stat : 23|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Roll_POS : 7|16@0- (0.00061037,0) [-20|20] "Deg" Vector__XXX
+
+BO_ 1553 Pitch_Actuator_POS: 4 Vector__XXX
+ SG_ Pitch_EnableA_DisableB_Stat : 23|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Pitch_POS : 7|16@0- (0.00061037,0) [-20|20] "Deg" Vector__XXX
+
+BO_ 1441 EIU_Disrete_Command: 2 Vector__XXX
+ SG_ Rotor_Brake_Control : 11|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Rotor_Brake_Anti_Lock : 10|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ External_Power_Permit : 9|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Battery_1_Disconnect : 8|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Engine_Anti_Ice_Valve_Enable : 7|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Fuel_Valve_Open_Command : 6|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Engine_Start : 5|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Ignitor_Power : 4|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Rotor_Brake_Enable : 3|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Flight_Bus_1_Line_Con : 2|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Generator1_Reset : 1|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Generator1_Controller_Enable : 0|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+
+BO_ 1410 APCU_GCP_LED_Cmd: 1 Vector__XXX
+ SG_ LED_Rates : 7|8@0+ (1,0) [0|0] "Discrete" Vector__XXX
+
+BO_ 1169 FPCU_Discrete_Command: 4 Vector__XXX
+ SG_ Pulse_Enable : 31|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Pulse_Length4 : 27|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Pulse_Length3 : 26|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Pulse_Length2 : 25|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Pulse_Length1 : 24|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ IFF_Emergency_Enb : 22|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ IFF_Refuel_Hold : 21|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Zeroize_Cmd_2 : 20|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Zeroize_Cmd_1 : 19|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Flight_Termination_Stat_1_2 : 17|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Avionics_RT_Fan_Enb : 16|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Avionics_LT_Fan_Enb : 15|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Payload_RT_Fan_Enb : 14|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Payload_LT_Fan_Enb : 13|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ GPS_NAV_2_Pwr_On_Reset : 11|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ GPS_NAV_1_Pwr_On_Reset : 10|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ UCARS_Ant_Sel_1 : 9|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ UCARS_Transponder_Pwr_Enb : 8|1@0+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ IFF_Power_Enb : 7|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ ADT_Power_Enb : 6|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Radar_Alt_Power : 5|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Radar_Alt_Mute_PPT : 4|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Radar_Alt_PRF_Inh : 3|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Landing_Bus_Select : 2|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Payload_Bus_line_Conta : 1|1@0+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 1153 APCU_Discrete_Command: 3 Vector__XXX
+ SG_ Light_Harpoon_Disengage : 21|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Light_Harpoon_Engage : 20|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Battery_2_Disconnect : 8|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Recognition_Light_On : 7|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ IR_Light_On : 6|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Anti_Collision_Light_On : 5|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Nav_Lights_On : 4|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Flt_Bus_2_Line_Contactor : 2|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Gen_2_Line_Contactor : 1|1@0+ (1,0) [0|0] "" Vector__XXX
+ SG_ Gen_2_Controller_Enb : 0|1@0+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 848 Eng_Throttle_Actuator_CMD: 4 Vector__XXX
+ SG_ Eng_Thrt_Enable_Act : 23|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Eng_Thrtl_EnableA_DisableB_CMD : 22|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Eng_Throttle_CMD : 7|16@0- (0.00061037,0) [-20|20] "Deg" Vector__XXX
+
+BO_ 608 N2_Actuator_CMD: 4 Vector__XXX
+ SG_ N2_Enable_Act : 23|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ N2_EnableA_DisableB_CMD : 22|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ N2_CMD : 7|16@0- (0.00061037,0) [-20|20] "Deg" Vector__XXX
+
+BO_ 576 Collective_Actuator_CMD: 4 Vector__XXX
+ SG_ Collective_Enable_Act : 23|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Collective_EnableA_DisableB_CMD : 22|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Collective_CMD : 7|16@0- (0.00061037,0) [-20|20] "Deg" Vector__XXX
+
+BO_ 560 Yaw_Actuator_CMD: 4 Vector__XXX
+ SG_ Yaw_Enable_Act : 23|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Yaw_EnableA_DisableB_CMD : 22|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Yaw_CMD : 7|16@0- (0.00061037,0) [-20|20] "Deg" Vector__XXX
+
+BO_ 288 Roll_Actuator_CMD: 4 Vector__XXX
+ SG_ Roll_Enable_Act : 23|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Roll_EnableA_DisableB_CMD : 22|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Roll_CMD : 7|16@0- (0.00061037,0) [-20|20] "Deg" Vector__XXX
+
+BO_ 272 Pitch_Actuator_CMD: 4 Vector__XXX
+ SG_ Pitch_Enable_Act : 23|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Pitch_EnableA_DisableB_CMD : 22|1@1+ (1,0) [0|0] "Discrete" Vector__XXX
+ SG_ Pitch_CMD : 7|16@0- (0.00061037,0) [-20|20] "Deg" Vector__XXX
+
+
+VAL_ 1410 LED_Rates 4 "Rate_4" 3 "Rate_3" 2 "Rate_2" 1 "Rate_1" 0 "Rate_Off" ;
