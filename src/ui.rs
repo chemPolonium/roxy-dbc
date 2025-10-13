@@ -254,339 +254,7 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
             );
 
         window.build(|| {
-            // 文件信息区域
-
-            if ui.button("Reload") {
-                if !window_state.dbc_data.file_path.is_empty() {
-                    let path = std::path::PathBuf::from(&window_state.dbc_data.file_path);
-                    match window_state.dbc_data.load_dbc_file(&path) {
-                        Ok(_) => {
-                            println!("DBC file reloaded successfully");
-                        }
-                        Err(e) => {
-                            window_state.dbc_data.error_message = e;
-                        }
-                    }
-                }
-            }
-
-            // 显示当前加载的文件
-            if !window_state.dbc_data.file_path.is_empty() {
-                ui.text(format!("Loaded: {}", window_state.dbc_data.file_path));
-                ui.text(format!(
-                    "Messages: {}",
-                    window_state.dbc_data.message_count()
-                ));
-            } else {
-                ui.text("No DBC file loaded");
-            }
-
-            // 显示错误信息
-            if !window_state.dbc_data.error_message.is_empty() {
-                ui.text_colored([1.0, 0.0, 0.0, 1.0], &window_state.dbc_data.error_message);
-            }
-
-            ui.separator();
-
-            // 搜索框
-            ui.text("Search Messages:");
-            ui.input_text("##search", &mut window_state.search_query)
-                .build();
-
-            ui.separator();
-
-            // 消息列表
-            let filtered_messages = window_state
-                .dbc_data
-                .search_messages(&window_state.search_query);
-
-            // 计算可用高度，平分给两个table
-            let available_height = ui.content_region_avail()[1];
-            let table_height = (available_height - 40.0) * 0.5; // 减去一些空间给separator和文字
-
-            ui.child_window("messages_list")
-                .size([0.0, table_height])
-                .build(|| {
-                    if let Some(_table) = ui.begin_table_with_flags(
-                        "messages_table",
-                        4,
-                        TableFlags::RESIZABLE
-                            | TableFlags::BORDERS_V
-                            | TableFlags::SCROLL_Y
-                            | TableFlags::SORTABLE,
-                    ) {
-                        // 设置列的初始宽度 - 按比例分配
-                        ui.table_setup_column_with(TableColumnSetup {
-                            name: "ID",
-                            flags: TableColumnFlags::DEFAULT_SORT | TableColumnFlags::WIDTH_FIXED,
-                            init_width_or_weight: 80.0,
-                            user_id: ui.new_id_str("id_col"),
-                        });
-                        ui.table_setup_column_with(TableColumnSetup {
-                            name: "Name",
-                            flags: TableColumnFlags::WIDTH_STRETCH,
-                            init_width_or_weight: 0.0,
-                            user_id: ui.new_id_str("name_col"),
-                        });
-                        ui.table_setup_column_with(TableColumnSetup {
-                            name: "Length",
-                            flags: TableColumnFlags::WIDTH_FIXED,
-                            init_width_or_weight: 60.0,
-                            user_id: ui.new_id_str("len_col"),
-                        });
-                        ui.table_setup_column_with(TableColumnSetup {
-                            name: "Signals",
-                            flags: TableColumnFlags::WIDTH_FIXED,
-                            init_width_or_weight: 60.0,
-                            user_id: ui.new_id_str("sig_col"),
-                        });
-
-                        // 使用ImGui原生的表头和排序
-                        ui.table_headers_row();
-
-                        // 检查排序规格并应用排序
-                        let mut sorted_messages = filtered_messages;
-                        if let Some(sort_specs) = ui.table_sort_specs_mut() {
-                            // 简单检查是否有排序请求
-                            let specs = sort_specs.specs();
-                            for (i, spec) in specs.iter().enumerate() {
-                                if i == 0 {
-                                    // 只处理第一个排序规格
-                                    let ascending = spec.sort_direction()
-                                        == Some(TableSortDirection::Ascending);
-
-                                    sorted_messages.sort_by(|a, b| {
-                                        let ordering = match spec.column_idx() {
-                                            0 => a.message_id().raw().cmp(&b.message_id().raw()),                       // ID列
-                                            1 => a.message_name().cmp(b.message_name()),                   // Name列
-                                            2 => a.message_size().cmp(b.message_size()),               // Length列
-                                            3 => a.signals().len().cmp(&b.signals().len()), // Signals列
-                                            _ => std::cmp::Ordering::Equal,
-                                        };
-                                        if ascending {
-                                            ordering
-                                        } else {
-                                            ordering.reverse()
-                                        }
-                                    });
-                                    break;
-                                }
-                            }
-                        }
-
-                        for message in sorted_messages {
-                            ui.table_next_row();
-
-                            let selected = window_state.selected_message_id == Some(message.message_id().raw());
-
-                            // 如果选中，设置行背景色
-                            if selected {
-                                ui.table_set_bg_color(
-                                    imgui::TableBgTarget::ROW_BG0,
-                                    [0.3, 0.3, 0.7, 0.65],
-                                );
-                            }
-
-                            ui.table_set_column_index(0);
-                            if ui
-                                .selectable_config(format!("0x{:03X}", message.message_id().raw()))
-                                .selected(selected)
-                                .span_all_columns(true)
-                                .build()
-                            {
-                                window_state.selected_message_id = Some(message.message_id().raw());
-                            }
-
-                            ui.table_set_column_index(1);
-                            ui.text(message.message_name());
-
-                            ui.table_set_column_index(2);
-                            ui.text(format!("{}", message.message_size()));
-
-                            ui.table_set_column_index(3);
-                            ui.text(format!("{}", message.signals().len()));
-                        }
-                    }
-                });
-
-            ui.separator();
-
-            // 信号详细信息
-            if let Some(selected_id) = window_state.selected_message_id {
-                if let Some(message) = window_state.dbc_data.get_message_by_id(selected_id) {
-                    ui.text(format!(
-                        "Message Details: {} (0x{:03X})",
-                        message.message_name(), message.message_id().raw()
-                    ));
-                    ui.separator();
-
-                    ui.child_window("signals_list")
-                        .size([0.0, table_height])
-                        .build(|| {
-                            if let Some(_table) = ui.begin_table_with_flags(
-                                "signals_table",
-                                10, // 增加到10列
-                                TableFlags::RESIZABLE
-                                    | TableFlags::BORDERS_V
-                                    | TableFlags::SCROLL_Y
-                                    | TableFlags::SORTABLE,
-                            ) {
-                                // 设置列的配置
-                                ui.table_setup_column_with(TableColumnSetup {
-                                    name: "Signal",
-                                    flags: TableColumnFlags::DEFAULT_SORT
-                                        | TableColumnFlags::WIDTH_STRETCH,
-                                    init_width_or_weight: 0.0,
-                                    user_id: ui.new_id_str("signal_name_col"),
-                                });
-                                ui.table_setup_column_with(TableColumnSetup {
-                                    name: "Start",
-                                    flags: TableColumnFlags::WIDTH_FIXED,
-                                    init_width_or_weight: 50.0,
-                                    user_id: ui.new_id_str("start_bit_col"),
-                                });
-                                ui.table_setup_column_with(TableColumnSetup {
-                                    name: "Length",
-                                    flags: TableColumnFlags::WIDTH_FIXED,
-                                    init_width_or_weight: 50.0,
-                                    user_id: ui.new_id_str("signal_len_col"),
-                                });
-                                ui.table_setup_column_with(TableColumnSetup {
-                                    name: "Factor",
-                                    flags: TableColumnFlags::WIDTH_FIXED,
-                                    init_width_or_weight: 50.0,
-                                    user_id: ui.new_id_str("factor_col"),
-                                });
-                                ui.table_setup_column_with(TableColumnSetup {
-                                    name: "Offset",
-                                    flags: TableColumnFlags::WIDTH_FIXED,
-                                    init_width_or_weight: 50.0,
-                                    user_id: ui.new_id_str("offset_col"),
-                                });
-                                ui.table_setup_column_with(TableColumnSetup {
-                                    name: "Min",
-                                    flags: TableColumnFlags::WIDTH_FIXED,
-                                    init_width_or_weight: 70.0,
-                                    user_id: ui.new_id_str("min_col"),
-                                });
-                                ui.table_setup_column_with(TableColumnSetup {
-                                    name: "Max",
-                                    flags: TableColumnFlags::WIDTH_FIXED,
-                                    init_width_or_weight: 70.0,
-                                    user_id: ui.new_id_str("max_col"),
-                                });
-                                ui.table_setup_column_with(TableColumnSetup {
-                                    name: "Unit",
-                                    flags: TableColumnFlags::WIDTH_FIXED,
-                                    init_width_or_weight: 60.0,
-                                    user_id: ui.new_id_str("unit_col"),
-                                });
-                                ui.table_setup_column_with(TableColumnSetup {
-                                    name: "Type",
-                                    flags: TableColumnFlags::WIDTH_FIXED,
-                                    init_width_or_weight: 60.0,
-                                    user_id: ui.new_id_str("data_type_col"),
-                                });
-                                ui.table_setup_column_with(TableColumnSetup {
-                                    name: "Order",
-                                    flags: TableColumnFlags::WIDTH_FIXED,
-                                    init_width_or_weight: 60.0,
-                                    user_id: ui.new_id_str("byte_order_col"),
-                                });
-                                ui.table_headers_row();
-
-                                // 获取并排序信号
-                                let mut sorted_signals: Vec<_> = message.signals().iter().collect();
-                                if let Some(sort_specs) = ui.table_sort_specs_mut() {
-                                    let specs = sort_specs.specs();
-                                    for (i, spec) in specs.iter().enumerate() {
-                                        if i == 0 {
-                                            // 只处理第一个排序规格
-                                            let ascending = spec.sort_direction()
-                                                == Some(TableSortDirection::Ascending);
-
-                                            sorted_signals.sort_by(|a, b| {
-                                                let ordering = match spec.column_idx() {
-                                                    0 => a.name().cmp(b.name()),           // Signal名称
-                                                    1 => a.start_bit().cmp(b.start_bit()), // Start Bit
-                                                    2 => a.signal_size().cmp(b.signal_size()),       // Length
-                                                    3 => a
-                                                        .factor()
-                                                        .partial_cmp(b.factor())
-                                                        .unwrap_or(std::cmp::Ordering::Equal), // Factor
-                                                    4 => a
-                                                        .offset()
-                                                        .partial_cmp(b.offset())
-                                                        .unwrap_or(std::cmp::Ordering::Equal), // Offset
-                                                    5 => a
-                                                        .min()
-                                                        .partial_cmp(b.min())
-                                                        .unwrap_or(std::cmp::Ordering::Equal), // Min
-                                                    6 => a
-                                                        .max()
-                                                        .partial_cmp(b.max())
-                                                        .unwrap_or(std::cmp::Ordering::Equal), // Max
-                                                    7 => a.unit().cmp(b.unit()), // Unit
-                                                    8 => format!("{:?}", a.value_type()).cmp(&format!("{:?}", b.value_type())), // Data Type
-                                                    9 => format!("{:?}", a.byte_order()).cmp(&format!("{:?}", b.byte_order())), // Byte Order
-                                                    _ => std::cmp::Ordering::Equal,
-                                                };
-                                                if ascending {
-                                                    ordering
-                                                } else {
-                                                    ordering.reverse()
-                                                }
-                                            });
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                for signal in sorted_signals {
-                                    ui.table_next_row();
-
-                                    ui.table_set_column_index(0);
-                                    ui.text(signal.name());
-
-                                    ui.table_set_column_index(1);
-                                    ui.text(format!("{}", signal.start_bit()));
-
-                                    ui.table_set_column_index(2);
-                                    ui.text(format!("{}", signal.signal_size()));
-
-                                    ui.table_set_column_index(3);
-                                    ui.text(format!("{:.3}", signal.factor()));
-
-                                    ui.table_set_column_index(4);
-                                    ui.text(format!("{:.3}", signal.offset()));
-
-                                    ui.table_set_column_index(5);
-                                    ui.text(format!("{:.1}", signal.min()));
-
-                                    ui.table_set_column_index(6);
-                                    ui.text(format!("{:.1}", signal.max()));
-
-                                    ui.table_set_column_index(7);
-                                    ui.text(signal.unit());
-
-                                    ui.table_set_column_index(8);
-                                    let data_type = match signal.value_type() {
-                                        can_dbc::ValueType::Signed => "signed",
-                                        can_dbc::ValueType::Unsigned => "unsigned",
-                                    };
-                                    ui.text(data_type);
-
-                                    ui.table_set_column_index(9);
-                                    let byte_order = match signal.byte_order() {
-                                        can_dbc::ByteOrder::LittleEndian => "Intel",
-                                        can_dbc::ByteOrder::BigEndian => "Motorola",
-                                    };
-                                    ui.text(byte_order);
-                                }
-                            }
-                        });
-                }
-            }
+            render_dbc_window_content(ui, window_state);
         });
     }
 
@@ -595,6 +263,362 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
     }
 
     window_state.is_open
+}
+
+/// 渲染DBC窗口的内容
+fn render_dbc_window_content(ui: &Ui, window_state: &mut DbcWindowState) {
+    // 文件信息区域
+    render_dbc_file_info(ui, window_state);
+
+    // 搜索栏
+    render_dbc_search_bar(ui, window_state);
+
+    // 计算表格高度
+    let table_height = (ui.content_region_avail()[1] - 40.0) * 0.5;
+
+    // 消息列表表格
+    render_messages_table(ui, window_state, table_height);
+
+    // 信号详细信息表格
+    render_signals_table(ui, window_state, table_height);
+}
+
+/// 渲染DBC文件信息区域
+fn render_dbc_file_info(ui: &Ui, window_state: &mut DbcWindowState) {
+    if ui.button("Reload") {
+        if !window_state.dbc_data.file_path.is_empty() {
+            let path = std::path::PathBuf::from(&window_state.dbc_data.file_path);
+            match window_state.dbc_data.load_dbc_file(&path) {
+                Ok(_) => {
+                    println!("DBC file reloaded successfully");
+                }
+                Err(e) => {
+                    window_state.dbc_data.error_message = e;
+                }
+            }
+        }
+    }
+
+    // 显示当前加载的文件
+    if !window_state.dbc_data.file_path.is_empty() {
+        ui.text(format!("Loaded: {}", window_state.dbc_data.file_path));
+        ui.text(format!(
+            "Messages: {}",
+            window_state.dbc_data.message_count()
+        ));
+    } else {
+        ui.text("No DBC file loaded");
+    }
+
+    // 显示错误信息
+    if !window_state.dbc_data.error_message.is_empty() {
+        ui.text_colored([1.0, 0.0, 0.0, 1.0], &window_state.dbc_data.error_message);
+    }
+
+    ui.separator();
+}
+
+/// 渲染搜索栏
+fn render_dbc_search_bar(ui: &Ui, window_state: &mut DbcWindowState) {
+    ui.text("Search Messages:");
+    ui.input_text("##search", &mut window_state.search_query)
+        .build();
+    ui.separator();
+}
+
+/// 渲染消息列表表格
+fn render_messages_table(ui: &Ui, window_state: &mut DbcWindowState, table_height: f32) {
+    ui.child_window("messages_list")
+        .size([0.0, table_height])
+        .build(|| {
+            let filtered_messages = window_state
+                .dbc_data
+                .search_messages(&window_state.search_query);
+
+            if let Some(_table) = ui.begin_table_with_flags(
+                "messages_table",
+                4,
+                TableFlags::RESIZABLE
+                    | TableFlags::BORDERS_V
+                    | TableFlags::SCROLL_Y
+                    | TableFlags::SORTABLE,
+            ) {
+                setup_messages_table_columns(ui);
+                ui.table_headers_row();
+
+                let sorted_messages = sort_messages(ui, filtered_messages);
+                render_messages_rows(ui, &mut window_state.selected_message_id, sorted_messages);
+            }
+        });
+
+    ui.separator();
+}
+
+/// 设置消息表格的列
+fn setup_messages_table_columns(ui: &Ui) {
+    ui.table_setup_column_with(TableColumnSetup {
+        name: "ID",
+        flags: TableColumnFlags::DEFAULT_SORT | TableColumnFlags::WIDTH_FIXED,
+        init_width_or_weight: 80.0,
+        user_id: ui.new_id_str("id_col"),
+    });
+    ui.table_setup_column_with(TableColumnSetup {
+        name: "Name",
+        flags: TableColumnFlags::WIDTH_STRETCH,
+        init_width_or_weight: 0.0,
+        user_id: ui.new_id_str("name_col"),
+    });
+    ui.table_setup_column_with(TableColumnSetup {
+        name: "Length",
+        flags: TableColumnFlags::WIDTH_FIXED,
+        init_width_or_weight: 60.0,
+        user_id: ui.new_id_str("len_col"),
+    });
+    ui.table_setup_column_with(TableColumnSetup {
+        name: "Signals",
+        flags: TableColumnFlags::WIDTH_FIXED,
+        init_width_or_weight: 60.0,
+        user_id: ui.new_id_str("sig_col"),
+    });
+}
+
+/// 排序消息列表
+fn sort_messages<'a>(
+    ui: &Ui,
+    mut messages: Vec<&'a crate::dbc::Message>,
+) -> Vec<&'a crate::dbc::Message> {
+    if let Some(sort_specs) = ui.table_sort_specs_mut() {
+        let specs = sort_specs.specs();
+        for (i, spec) in specs.iter().enumerate() {
+            if i == 0 {
+                let ascending = spec.sort_direction() == Some(TableSortDirection::Ascending);
+                messages.sort_by(|a, b| {
+                    let ordering = match spec.column_idx() {
+                        0 => a.message_id().raw().cmp(&b.message_id().raw()),
+                        1 => a.message_name().cmp(b.message_name()),
+                        2 => a.message_size().cmp(b.message_size()),
+                        3 => a.signals().len().cmp(&b.signals().len()),
+                        _ => std::cmp::Ordering::Equal,
+                    };
+                    if ascending {
+                        ordering
+                    } else {
+                        ordering.reverse()
+                    }
+                });
+                break;
+            }
+        }
+    }
+    messages
+}
+
+/// 渲染消息表格的行
+fn render_messages_rows(
+    ui: &Ui,
+    current_selection: &mut Option<u32>,
+    messages: Vec<&crate::dbc::Message>,
+) {
+    for message in messages {
+        ui.table_next_row();
+
+        let selected = *current_selection == Some(message.message_id().raw());
+
+        if selected {
+            ui.table_set_bg_color(imgui::TableBgTarget::ROW_BG0, [0.3, 0.3, 0.7, 0.65]);
+        }
+
+        ui.table_set_column_index(0);
+        if ui
+            .selectable_config(format!("0x{:03X}", message.message_id().raw()))
+            .selected(selected)
+            .span_all_columns(true)
+            .build()
+        {
+            *current_selection = Some(message.message_id().raw());
+        }
+
+        ui.table_set_column_index(1);
+        ui.text(message.message_name());
+
+        ui.table_set_column_index(2);
+        ui.text(format!("{}", message.message_size()));
+
+        ui.table_set_column_index(3);
+        ui.text(format!("{}", message.signals().len()));
+    }
+}
+
+/// 渲染信号详细信息表格
+fn render_signals_table(ui: &Ui, window_state: &mut DbcWindowState, table_height: f32) {
+    if let Some(selected_id) = window_state.selected_message_id {
+        if let Some(message) = window_state.dbc_data.get_message_by_id(selected_id) {
+            ui.text(format!(
+                "Message Details: {} (0x{:03X})",
+                message.message_name(),
+                message.message_id().raw()
+            ));
+            ui.separator();
+
+            ui.child_window("signals_list")
+                .size([0.0, table_height])
+                .build(|| {
+                    if let Some(_table) = ui.begin_table_with_flags(
+                        "signals_table",
+                        10,
+                        TableFlags::RESIZABLE
+                            | TableFlags::BORDERS_V
+                            | TableFlags::SCROLL_Y
+                            | TableFlags::SORTABLE,
+                    ) {
+                        setup_signals_table_columns(ui);
+                        ui.table_headers_row();
+
+                        let sorted_signals = sort_signals(ui, message);
+                        render_signals_rows(ui, sorted_signals);
+                    }
+                });
+        }
+    }
+}
+
+/// 设置信号表格的列
+fn setup_signals_table_columns(ui: &Ui) {
+    let columns = [
+        (
+            "Signal",
+            TableColumnFlags::DEFAULT_SORT | TableColumnFlags::WIDTH_STRETCH,
+            0.0,
+            "signal_name_col",
+        ),
+        (
+            "Start",
+            TableColumnFlags::WIDTH_FIXED,
+            50.0,
+            "start_bit_col",
+        ),
+        (
+            "Length",
+            TableColumnFlags::WIDTH_FIXED,
+            50.0,
+            "signal_len_col",
+        ),
+        ("Factor", TableColumnFlags::WIDTH_FIXED, 50.0, "factor_col"),
+        ("Offset", TableColumnFlags::WIDTH_FIXED, 50.0, "offset_col"),
+        ("Min", TableColumnFlags::WIDTH_FIXED, 70.0, "min_col"),
+        ("Max", TableColumnFlags::WIDTH_FIXED, 70.0, "max_col"),
+        ("Unit", TableColumnFlags::WIDTH_FIXED, 60.0, "unit_col"),
+        ("Type", TableColumnFlags::WIDTH_FIXED, 60.0, "data_type_col"),
+        (
+            "Order",
+            TableColumnFlags::WIDTH_FIXED,
+            60.0,
+            "byte_order_col",
+        ),
+    ];
+
+    for (name, flags, width, id) in &columns {
+        ui.table_setup_column_with(TableColumnSetup {
+            name,
+            flags: *flags,
+            init_width_or_weight: *width,
+            user_id: ui.new_id_str(id),
+        });
+    }
+}
+
+/// 排序信号列表
+fn sort_signals<'a>(ui: &Ui, message: &'a crate::dbc::Message) -> Vec<&'a can_dbc::Signal> {
+    let mut sorted_signals: Vec<_> = message.signals().iter().collect();
+
+    if let Some(sort_specs) = ui.table_sort_specs_mut() {
+        let specs = sort_specs.specs();
+        for (i, spec) in specs.iter().enumerate() {
+            if i == 0 {
+                let ascending = spec.sort_direction() == Some(TableSortDirection::Ascending);
+                sorted_signals.sort_by(|a, b| {
+                    let ordering = match spec.column_idx() {
+                        0 => a.name().cmp(b.name()),
+                        1 => a.start_bit().cmp(b.start_bit()),
+                        2 => a.signal_size().cmp(b.signal_size()),
+                        3 => a
+                            .factor()
+                            .partial_cmp(b.factor())
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                        4 => a
+                            .offset()
+                            .partial_cmp(b.offset())
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                        5 => a
+                            .min()
+                            .partial_cmp(b.min())
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                        6 => a
+                            .max()
+                            .partial_cmp(b.max())
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                        7 => a.unit().cmp(b.unit()),
+                        8 => format!("{:?}", a.value_type()).cmp(&format!("{:?}", b.value_type())),
+                        9 => format!("{:?}", a.byte_order()).cmp(&format!("{:?}", b.byte_order())),
+                        _ => std::cmp::Ordering::Equal,
+                    };
+                    if ascending {
+                        ordering
+                    } else {
+                        ordering.reverse()
+                    }
+                });
+                break;
+            }
+        }
+    }
+
+    sorted_signals
+}
+
+/// 渲染信号表格的行
+fn render_signals_rows(ui: &Ui, signals: Vec<&can_dbc::Signal>) {
+    for signal in signals {
+        ui.table_next_row();
+
+        ui.table_set_column_index(0);
+        ui.text(signal.name());
+
+        ui.table_set_column_index(1);
+        ui.text(format!("{}", signal.start_bit()));
+
+        ui.table_set_column_index(2);
+        ui.text(format!("{}", signal.signal_size()));
+
+        ui.table_set_column_index(3);
+        ui.text(format!("{:.3}", signal.factor()));
+
+        ui.table_set_column_index(4);
+        ui.text(format!("{:.3}", signal.offset()));
+
+        ui.table_set_column_index(5);
+        ui.text(format!("{:.1}", signal.min()));
+
+        ui.table_set_column_index(6);
+        ui.text(format!("{:.1}", signal.max()));
+
+        ui.table_set_column_index(7);
+        ui.text(signal.unit());
+
+        ui.table_set_column_index(8);
+        let data_type = match signal.value_type() {
+            can_dbc::ValueType::Signed => "signed",
+            can_dbc::ValueType::Unsigned => "unsigned",
+        };
+        ui.text(data_type);
+
+        ui.table_set_column_index(9);
+        let byte_order = match signal.byte_order() {
+            can_dbc::ByteOrder::LittleEndian => "Intel",
+            can_dbc::ByteOrder::BigEndian => "Motorola",
+        };
+        ui.text(byte_order);
+    }
 }
 
 /// 渲染错误对话框
