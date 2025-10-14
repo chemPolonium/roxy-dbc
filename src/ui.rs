@@ -22,7 +22,6 @@ pub struct ErrorDialog {
 /// UI 状态管理
 pub struct UiState {
     pub show_performance_window: bool,
-    pub show_hello_window: bool,
     pub show_about_dialog: bool,
     pub show_can_window: bool,
     pub show_chart_window: bool,
@@ -34,8 +33,7 @@ pub struct UiState {
 impl Default for UiState {
     fn default() -> Self {
         Self {
-            show_performance_window: true,
-            show_hello_window: true,
+            show_performance_window: false,
             show_about_dialog: false,
             show_can_window: false,
             show_chart_window: false,
@@ -49,16 +47,21 @@ impl Default for UiState {
     }
 }
 
-/// 渲染主界面  
-pub fn render_ui(ui: &Ui, delta_s: Duration, target_frame_time: Duration, ui_state: &mut UiState) {
+/// 设置主dockspace占满整个窗口
+fn setup_main_dockspace(ui: &Ui, ui_state: &mut UiState) {
     // 主菜单栏
     render_main_menu_bar(ui, ui_state);
 
-    // 根据菜单状态显示窗口
-    if ui_state.show_hello_window {
-        render_hello_window(ui);
-    }
+    // 使用dockspace_over_main_viewport API创建全屏dockspace
+    ui.dockspace_over_main_viewport();
+}
 
+/// 渲染主界面  
+pub fn render_ui(ui: &Ui, delta_s: Duration, target_frame_time: Duration, ui_state: &mut UiState) {
+    // 创建全屏主dockspace
+    setup_main_dockspace(ui, ui_state);
+
+    // 根据菜单状态显示窗口
     if ui_state.show_performance_window {
         render_performance_window(ui, delta_s, target_frame_time);
     }
@@ -132,7 +135,6 @@ fn render_main_menu_bar(ui: &Ui, ui_state: &mut UiState) {
         });
 
         ui.menu("View", || {
-            ui.checkbox("Hello Window", &mut ui_state.show_hello_window);
             ui.checkbox("Performance Window", &mut ui_state.show_performance_window);
         });
 
@@ -142,18 +144,6 @@ fn render_main_menu_bar(ui: &Ui, ui_state: &mut UiState) {
             }
         });
     });
-}
-
-/// 渲染 Hello 窗口
-fn render_hello_window(ui: &Ui) {
-    let window = ui.window("Hello World");
-    window
-        .size([300.0, 150.0], Condition::FirstUseEver)
-        .position([50.0, 50.0], Condition::FirstUseEver)
-        .build(|| {
-            ui.text("All Hail Roxy Migurdia!");
-            ui.text("Yet another dbc viewer");
-        });
 }
 
 /// 渲染性能信息窗口

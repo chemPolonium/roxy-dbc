@@ -92,13 +92,6 @@ impl AppWindow {
 
         // 启用docking功能，但仅限标签页模式
         context.io_mut().config_flags |= ConfigFlags::DOCKING_ENABLE;
-        
-        // 配置docking行为：禁用分割式docking，只允许标签页合并
-        context.io_mut().config_docking_no_split = true;
-        context.io_mut().config_docking_with_shift = false;
-        
-        // 可选：启用viewport功能（多显示器支持）
-        // context.io_mut().config_flags |= ConfigFlags::VIEWPORTS_ENABLE;
 
         let mut platform = imgui_winit_support::WinitPlatform::new(&mut context);
         platform.attach_window(
