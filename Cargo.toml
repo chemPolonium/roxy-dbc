@@ -1,13 +1,13 @@
 [package]
 name = "roxy-dbc"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 
 [dependencies]
 can-dbc = "6.0.0"
 imgui-wgpu = "0.25"
 bytemuck = "1"
-imgui = { version = "0.12", features = ["tables-api"] }
+imgui = { version = "0.12", features = ["docking", "tables-api"] }
 log = "0.4"
 smallvec = "1"
 wgpu = "25.0.2"

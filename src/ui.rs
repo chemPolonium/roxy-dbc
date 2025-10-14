@@ -49,7 +49,7 @@ impl Default for UiState {
     }
 }
 
-/// 渲染主界面
+/// 渲染主界面  
 pub fn render_ui(ui: &Ui, delta_s: Duration, target_frame_time: Duration, ui_state: &mut UiState) {
     // 主菜单栏
     render_main_menu_bar(ui, ui_state);
@@ -160,7 +160,7 @@ fn render_hello_window(ui: &Ui) {
 fn render_performance_window(ui: &Ui, delta_s: Duration, target_frame_time: Duration) {
     let window = ui.window("Performance Information");
     window
-        .size([400.0, 150.0], Condition::FirstUseEver)
+        .size([300.0, 150.0], Condition::FirstUseEver)
         .position([400.0, 50.0], Condition::FirstUseEver)
         .build(|| {
             ui.text(format!("Frame Time: {delta_s:?}"));
@@ -667,11 +667,7 @@ fn render_signals_rows(ui: &Ui, signals: Vec<&can_dbc::Signal>) {
         let factor_text = if signal.factor().fract() == 0.0 {
             format!("{}", *signal.factor() as i64)
         } else {
-            format!(
-                "{:.prec$}",
-                signal.factor(),
-                prec = factor_precision
-            )
+            format!("{:.prec$}", signal.factor(), prec = factor_precision)
         };
         ui.text(factor_text);
 
@@ -680,11 +676,7 @@ fn render_signals_rows(ui: &Ui, signals: Vec<&can_dbc::Signal>) {
         let offset_text = if signal.offset().fract() == 0.0 {
             format!("{}", *signal.offset() as i64)
         } else {
-            format!(
-                "{:.prec$}",
-                signal.offset(),
-                prec = offset_precision
-            )
+            format!("{:.prec$}", signal.offset(), prec = offset_precision)
         };
         ui.text(offset_text);
 
@@ -773,7 +765,7 @@ fn render_about_dialog(ui: &Ui, show_about: &mut bool) {
     ui.modal_popup_config("About").resizable(false).build(|| {
         ui.text("Roxy dbc viewer");
         ui.separator();
-        ui.text("Version: 0.2.1");
+        ui.text("Version: 0.3.0");
         ui.text("Built with Rust and ImGui");
         ui.separator();
         ui.text("An application for viewing CAN DBC files.");
