@@ -426,7 +426,7 @@ fn setup_signals_table_columns(ui: &Ui) {
         ("Offset", TableColumnFlags::default(), 45.0, "offset_col"),
         ("Min", TableColumnFlags::default(), 70.0, "min_col"),
         ("Max", TableColumnFlags::default(), 70.0, "max_col"),
-        ("Unit", TableColumnFlags::default(), 50.0, "unit_col"),
+        ("Unit", TableColumnFlags::default(), 60.0, "unit_col"),
     ];
 
     for (name, flags, width, id) in &columns {
