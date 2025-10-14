@@ -650,8 +650,8 @@ fn render_signals_rows(ui: &Ui, signals: Vec<&can_dbc::Signal>) {
         let factor_precision = get_decimal_places(*signal.factor());
         let offset_precision = get_decimal_places(*signal.offset());
 
-        // 对于min/max，使用factor精度，因为它们通常需要和factor保持一致的精度
-        let value_precision = factor_precision.max(1); // 至少显示1位小数
+        // 对于min/max，使用factor精度来确定小数位数
+        let value_precision = factor_precision;
 
         ui.table_set_column_index(0);
         ui.text(signal.name());
@@ -663,30 +663,48 @@ fn render_signals_rows(ui: &Ui, signals: Vec<&can_dbc::Signal>) {
         ui.text(format!("{}", signal.signal_size()));
 
         ui.table_set_column_index(3);
-        // Factor: 使用其自身的精度，最少显示1位
-        let factor_display_precision = factor_precision.max(1);
-        ui.text(format!(
-            "{:.prec$}",
-            signal.factor(),
-            prec = factor_display_precision
-        ));
+        // Factor: 如果是整数则显示整数，否则使用适当精度
+        let factor_text = if signal.factor().fract() == 0.0 {
+            format!("{}", *signal.factor() as i64)
+        } else {
+            format!(
+                "{:.prec$}",
+                signal.factor(),
+                prec = factor_precision
+            )
+        };
+        ui.text(factor_text);
 
         ui.table_set_column_index(4);
-        // Offset: 使用其自身的精度，最少显示1位
-        let offset_display_precision = offset_precision.max(1);
-        ui.text(format!(
-            "{:.prec$}",
-            signal.offset(),
-            prec = offset_display_precision
-        ));
+        // Offset: 如果是整数则显示整数，否则使用适当精度
+        let offset_text = if signal.offset().fract() == 0.0 {
+            format!("{}", *signal.offset() as i64)
+        } else {
+            format!(
+                "{:.prec$}",
+                signal.offset(),
+                prec = offset_precision
+            )
+        };
+        ui.text(offset_text);
 
         ui.table_set_column_index(5);
-        // Min: 使用与factor相同的精度
-        ui.text(format!("{:.prec$}", signal.min(), prec = value_precision));
+        // Min: 如果是整数则显示整数，否则使用与factor相同的精度
+        let min_text = if signal.min().fract() == 0.0 {
+            format!("{}", *signal.min() as i64)
+        } else {
+            format!("{:.prec$}", signal.min(), prec = value_precision)
+        };
+        ui.text(min_text);
 
         ui.table_set_column_index(6);
-        // Max: 使用与factor相同的精度
-        ui.text(format!("{:.prec$}", signal.max(), prec = value_precision));
+        // Max: 如果是整数则显示整数，否则使用与factor相同的精度
+        let max_text = if signal.max().fract() == 0.0 {
+            format!("{}", *signal.max() as i64)
+        } else {
+            format!("{:.prec$}", signal.max(), prec = value_precision)
+        };
+        ui.text(max_text);
 
         ui.table_set_column_index(7);
         ui.text(signal.unit());
@@ -755,7 +773,7 @@ fn render_about_dialog(ui: &Ui, show_about: &mut bool) {
     ui.modal_popup_config("About").resizable(false).build(|| {
         ui.text("Roxy dbc viewer");
         ui.separator();
-        ui.text("Version: 0.1.0");
+        ui.text("Version: 0.2.1");
         ui.text("Built with Rust and ImGui");
         ui.separator();
         ui.text("An application for viewing CAN DBC files.");
