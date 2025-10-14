@@ -23,8 +23,6 @@ pub struct ErrorDialog {
 pub struct UiState {
     pub show_performance_window: bool,
     pub show_about_dialog: bool,
-    pub show_can_window: bool,
-    pub show_chart_window: bool,
     pub dbc_windows: Vec<DbcWindowState>,
     pub next_dbc_id: usize,
     pub error_dialog: ErrorDialog,
@@ -35,8 +33,6 @@ impl Default for UiState {
         Self {
             show_performance_window: false,
             show_about_dialog: false,
-            show_can_window: false,
-            show_chart_window: false,
             dbc_windows: Vec::new(),
             next_dbc_id: 1,
             error_dialog: ErrorDialog {
@@ -64,14 +60,6 @@ pub fn render_ui(ui: &Ui, delta_s: Duration, target_frame_time: Duration, ui_sta
     // 根据菜单状态显示窗口
     if ui_state.show_performance_window {
         render_performance_window(ui, delta_s, target_frame_time);
-    }
-
-    if ui_state.show_can_window {
-        render_can_window(ui);
-    }
-
-    if ui_state.show_chart_window {
-        render_chart_window(ui);
     }
 
     // Render all DBC windows
@@ -163,59 +151,6 @@ fn render_performance_window(ui: &Ui, delta_s: Duration, target_frame_time: Dura
         });
 }
 
-/// 渲染 CAN 数据窗口
-fn render_can_window(ui: &Ui) {
-    let window = ui.window("CAN Data Display");
-    window
-        .size([500.0, 300.0], Condition::FirstUseEver)
-        .position([100.0, 100.0], Condition::FirstUseEver)
-        .build(|| {
-            ui.text("CAN Bus Monitoring");
-            ui.separator();
-
-            ui.text("Status: Disconnected");
-            ui.same_line();
-            if ui.button("Connect") {
-                println!("CAN connect clicked");
-            }
-
-            ui.separator();
-            ui.text("Message Log:");
-            ui.child_window("can_log").size([0.0, 150.0]).build(|| {
-                ui.text("0x123: 01 02 03 04 05 06 07 08");
-                ui.text("0x456: AA BB CC DD EE FF 00 11");
-                ui.text("0x789: DE AD BE EF CA FE BA BE");
-            });
-        });
-}
-
-/// 渲染图表窗口
-fn render_chart_window(ui: &Ui) {
-    let window = ui.window("Charts and Plotting");
-    window
-        .size([600.0, 400.0], Condition::FirstUseEver)
-        .position([200.0, 150.0], Condition::FirstUseEver)
-        .build(|| {
-            ui.text("Data Visualization");
-            ui.separator();
-
-            ui.text("Chart Type:");
-            ui.radio_button("Line Chart", &mut 0, 0);
-            ui.same_line();
-            ui.radio_button("Bar Chart", &mut 0, 1);
-            ui.same_line();
-            ui.radio_button("Scatter Plot", &mut 0, 2);
-
-            ui.separator();
-            ui.text("Placeholder for chart rendering");
-            ui.text("Chart area would be implemented here with plotting library");
-
-            if ui.button("Generate Sample Data") {
-                println!("Generate sample data clicked");
-            }
-        });
-}
-
 /// 渲染单个 DBC 浏览器窗口
 fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
     let window_title = format!(
@@ -224,7 +159,11 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
         if window_state.dbc_data.file_path.is_empty() {
             "No file"
         } else {
-            &window_state.dbc_data.file_path
+            // 只显示文件名，不显示完整路径
+            std::path::Path::new(&window_state.dbc_data.file_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Unknown file")
         }
     );
 
@@ -275,20 +214,6 @@ fn render_dbc_window_content(ui: &Ui, window_state: &mut DbcWindowState) {
 
 /// 渲染DBC文件信息区域
 fn render_dbc_file_info(ui: &Ui, window_state: &mut DbcWindowState) {
-    if ui.button("Reload") {
-        if !window_state.dbc_data.file_path.is_empty() {
-            let path = std::path::PathBuf::from(&window_state.dbc_data.file_path);
-            match window_state.dbc_data.load_dbc_file(&path) {
-                Ok(_) => {
-                    println!("DBC file reloaded successfully");
-                }
-                Err(e) => {
-                    window_state.dbc_data.error_message = e;
-                }
-            }
-        }
-    }
-
     // 显示当前加载的文件
     if !window_state.dbc_data.file_path.is_empty() {
         ui.text(format!("Loaded: {}", window_state.dbc_data.file_path));
@@ -310,7 +235,7 @@ fn render_dbc_file_info(ui: &Ui, window_state: &mut DbcWindowState) {
 
 /// 渲染搜索栏
 fn render_dbc_search_bar(ui: &Ui, window_state: &mut DbcWindowState) {
-    ui.text("Search Messages:");
+    ui.text("Search Messages & Signals:");
     ui.input_text("##search", &mut window_state.search_query)
         .build();
     ui.separator();
@@ -329,7 +254,9 @@ fn render_messages_table(ui: &Ui, window_state: &mut DbcWindowState, table_heigh
                 "messages_table",
                 4,
                 TableFlags::RESIZABLE
-                    | TableFlags::BORDERS_V
+                    | TableFlags::REORDERABLE
+                    | TableFlags::SIZING_FIXED_FIT
+                    | TableFlags::BORDERS
                     | TableFlags::SCROLL_Y
                     | TableFlags::SORTABLE,
             ) {
@@ -337,6 +264,7 @@ fn render_messages_table(ui: &Ui, window_state: &mut DbcWindowState, table_heigh
                 ui.table_headers_row();
 
                 let sorted_messages = sort_messages(ui, filtered_messages);
+
                 render_messages_rows(ui, &mut window_state.selected_message_id, sorted_messages);
             }
         });
@@ -348,7 +276,7 @@ fn render_messages_table(ui: &Ui, window_state: &mut DbcWindowState, table_heigh
 fn setup_messages_table_columns(ui: &Ui) {
     ui.table_setup_column_with(TableColumnSetup {
         name: "ID",
-        flags: TableColumnFlags::DEFAULT_SORT | TableColumnFlags::WIDTH_FIXED,
+        flags: TableColumnFlags::DEFAULT_SORT,
         init_width_or_weight: 80.0,
         user_id: ui.new_id_str("id_col"),
     });
@@ -360,47 +288,16 @@ fn setup_messages_table_columns(ui: &Ui) {
     });
     ui.table_setup_column_with(TableColumnSetup {
         name: "Length",
-        flags: TableColumnFlags::WIDTH_FIXED,
+        flags: TableColumnFlags::default(),
         init_width_or_weight: 60.0,
         user_id: ui.new_id_str("len_col"),
     });
     ui.table_setup_column_with(TableColumnSetup {
         name: "Signals",
-        flags: TableColumnFlags::WIDTH_FIXED,
+        flags: TableColumnFlags::default(),
         init_width_or_weight: 60.0,
         user_id: ui.new_id_str("sig_col"),
     });
-}
-
-/// 排序消息列表
-fn sort_messages<'a>(
-    ui: &Ui,
-    mut messages: Vec<&'a crate::dbc::Message>,
-) -> Vec<&'a crate::dbc::Message> {
-    if let Some(sort_specs) = ui.table_sort_specs_mut() {
-        let specs = sort_specs.specs();
-        for (i, spec) in specs.iter().enumerate() {
-            if i == 0 {
-                let ascending = spec.sort_direction() == Some(TableSortDirection::Ascending);
-                messages.sort_by(|a, b| {
-                    let ordering = match spec.column_idx() {
-                        0 => a.message_id().raw().cmp(&b.message_id().raw()),
-                        1 => a.message_name().cmp(b.message_name()),
-                        2 => a.message_size().cmp(b.message_size()),
-                        3 => a.signals().len().cmp(&b.signals().len()),
-                        _ => std::cmp::Ordering::Equal,
-                    };
-                    if ascending {
-                        ordering
-                    } else {
-                        ordering.reverse()
-                    }
-                });
-                break;
-            }
-        }
-    }
-    messages
 }
 
 /// 渲染消息表格的行
@@ -439,6 +336,37 @@ fn render_messages_rows(
     }
 }
 
+/// 排序消息列表
+fn sort_messages<'a>(
+    ui: &Ui,
+    mut messages: Vec<&'a crate::dbc::Message>,
+) -> Vec<&'a crate::dbc::Message> {
+    if let Some(sort_specs) = ui.table_sort_specs_mut() {
+        let specs = sort_specs.specs();
+        for (i, spec) in specs.iter().enumerate() {
+            if i == 0 {
+                let ascending = spec.sort_direction() == Some(TableSortDirection::Ascending);
+                messages.sort_by(|a, b| {
+                    let ordering = match spec.column_idx() {
+                        0 => a.message_id().raw().cmp(&b.message_id().raw()),
+                        1 => a.message_name().cmp(b.message_name()),
+                        2 => a.message_size().cmp(b.message_size()),
+                        3 => a.signals().len().cmp(&b.signals().len()),
+                        _ => std::cmp::Ordering::Equal,
+                    };
+                    if ascending {
+                        ordering
+                    } else {
+                        ordering.reverse()
+                    }
+                });
+                break;
+            }
+        }
+    }
+    messages
+}
+
 /// 渲染信号详细信息表格
 fn render_signals_table(ui: &Ui, window_state: &mut DbcWindowState, table_height: f32) {
     if let Some(selected_id) = window_state.selected_message_id {
@@ -457,11 +385,15 @@ fn render_signals_table(ui: &Ui, window_state: &mut DbcWindowState, table_height
                         "signals_table",
                         10,
                         TableFlags::RESIZABLE
-                            | TableFlags::BORDERS_V
+                            | TableFlags::REORDERABLE
+                            | TableFlags::HIDEABLE
+                            | TableFlags::BORDERS
+                            | TableFlags::SIZING_FIXED_FIT
                             | TableFlags::SCROLL_Y
                             | TableFlags::SORTABLE,
                     ) {
                         setup_signals_table_columns(ui);
+
                         ui.table_headers_row();
 
                         let sorted_signals = sort_signals(ui, message);
@@ -481,30 +413,20 @@ fn setup_signals_table_columns(ui: &Ui) {
             0.0,
             "signal_name_col",
         ),
-        (
-            "Start",
-            TableColumnFlags::WIDTH_FIXED,
-            50.0,
-            "start_bit_col",
-        ),
+        ("Type", TableColumnFlags::default(), 50.0, "data_type_col"),
+        ("Order", TableColumnFlags::default(), 40.0, "byte_order_col"),
+        ("Start", TableColumnFlags::default(), 45.0, "start_bit_col"),
         (
             "Length",
-            TableColumnFlags::WIDTH_FIXED,
-            50.0,
+            TableColumnFlags::default(),
+            45.0,
             "signal_len_col",
         ),
-        ("Factor", TableColumnFlags::WIDTH_FIXED, 50.0, "factor_col"),
-        ("Offset", TableColumnFlags::WIDTH_FIXED, 50.0, "offset_col"),
-        ("Min", TableColumnFlags::WIDTH_FIXED, 70.0, "min_col"),
-        ("Max", TableColumnFlags::WIDTH_FIXED, 70.0, "max_col"),
-        ("Unit", TableColumnFlags::WIDTH_FIXED, 60.0, "unit_col"),
-        ("Type", TableColumnFlags::WIDTH_FIXED, 60.0, "data_type_col"),
-        (
-            "Order",
-            TableColumnFlags::WIDTH_FIXED,
-            60.0,
-            "byte_order_col",
-        ),
+        ("Factor", TableColumnFlags::default(), 55.0, "factor_col"),
+        ("Offset", TableColumnFlags::default(), 45.0, "offset_col"),
+        ("Min", TableColumnFlags::default(), 70.0, "min_col"),
+        ("Max", TableColumnFlags::default(), 70.0, "max_col"),
+        ("Unit", TableColumnFlags::default(), 40.0, "unit_col"),
     ];
 
     for (name, flags, width, id) in &columns {
@@ -529,27 +451,27 @@ fn sort_signals<'a>(ui: &Ui, message: &'a crate::dbc::Message) -> Vec<&'a can_db
                 sorted_signals.sort_by(|a, b| {
                     let ordering = match spec.column_idx() {
                         0 => a.name().cmp(b.name()),
-                        1 => a.start_bit().cmp(b.start_bit()),
-                        2 => a.signal_size().cmp(b.signal_size()),
-                        3 => a
+                        1 => format!("{:?}", a.value_type()).cmp(&format!("{:?}", b.value_type())),
+                        2 => format!("{:?}", a.byte_order()).cmp(&format!("{:?}", b.byte_order())),
+                        3 => a.start_bit().cmp(b.start_bit()),
+                        4 => a.signal_size().cmp(b.signal_size()),
+                        5 => a
                             .factor()
                             .partial_cmp(b.factor())
                             .unwrap_or(std::cmp::Ordering::Equal),
-                        4 => a
+                        6 => a
                             .offset()
                             .partial_cmp(b.offset())
                             .unwrap_or(std::cmp::Ordering::Equal),
-                        5 => a
+                        7 => a
                             .min()
                             .partial_cmp(b.min())
                             .unwrap_or(std::cmp::Ordering::Equal),
-                        6 => a
+                        8 => a
                             .max()
                             .partial_cmp(b.max())
                             .unwrap_or(std::cmp::Ordering::Equal),
-                        7 => a.unit().cmp(b.unit()),
-                        8 => format!("{:?}", a.value_type()).cmp(&format!("{:?}", b.value_type())),
-                        9 => format!("{:?}", a.byte_order()).cmp(&format!("{:?}", b.byte_order())),
+                        9 => a.unit().cmp(b.unit()),
                         _ => std::cmp::Ordering::Equal,
                     };
                     if ascending {
@@ -647,12 +569,26 @@ fn render_signals_rows(ui: &Ui, signals: Vec<&can_dbc::Signal>) {
         ui.text(signal.name());
 
         ui.table_set_column_index(1);
-        ui.text(format!("{}", signal.start_bit()));
+        let data_type = match signal.value_type() {
+            can_dbc::ValueType::Signed => "signed",
+            can_dbc::ValueType::Unsigned => "unsigned",
+        };
+        ui.text(data_type);
 
         ui.table_set_column_index(2);
-        ui.text(format!("{}", signal.signal_size()));
+        let byte_order = match signal.byte_order() {
+            can_dbc::ByteOrder::LittleEndian => "Intel",
+            can_dbc::ByteOrder::BigEndian => "Motorola",
+        };
+        ui.text(byte_order);
 
         ui.table_set_column_index(3);
+        ui.text(format!("{}", signal.start_bit()));
+
+        ui.table_set_column_index(4);
+        ui.text(format!("{}", signal.signal_size()));
+
+        ui.table_set_column_index(5);
         // Factor: 如果是整数则显示整数，否则使用适当精度
         let factor_text = if signal.factor().fract() == 0.0 {
             format!("{}", *signal.factor() as i64)
@@ -661,7 +597,7 @@ fn render_signals_rows(ui: &Ui, signals: Vec<&can_dbc::Signal>) {
         };
         ui.text(factor_text);
 
-        ui.table_set_column_index(4);
+        ui.table_set_column_index(6);
         // Offset: 如果是整数则显示整数，否则使用适当精度
         let offset_text = if signal.offset().fract() == 0.0 {
             format!("{}", *signal.offset() as i64)
@@ -670,7 +606,7 @@ fn render_signals_rows(ui: &Ui, signals: Vec<&can_dbc::Signal>) {
         };
         ui.text(offset_text);
 
-        ui.table_set_column_index(5);
+        ui.table_set_column_index(7);
         // Min: 如果是整数则显示整数，否则使用与factor相同的精度
         let min_text = if signal.min().fract() == 0.0 {
             format!("{}", *signal.min() as i64)
@@ -679,7 +615,7 @@ fn render_signals_rows(ui: &Ui, signals: Vec<&can_dbc::Signal>) {
         };
         ui.text(min_text);
 
-        ui.table_set_column_index(6);
+        ui.table_set_column_index(8);
         // Max: 如果是整数则显示整数，否则使用与factor相同的精度
         let max_text = if signal.max().fract() == 0.0 {
             format!("{}", *signal.max() as i64)
@@ -688,22 +624,8 @@ fn render_signals_rows(ui: &Ui, signals: Vec<&can_dbc::Signal>) {
         };
         ui.text(max_text);
 
-        ui.table_set_column_index(7);
-        ui.text(signal.unit());
-
-        ui.table_set_column_index(8);
-        let data_type = match signal.value_type() {
-            can_dbc::ValueType::Signed => "signed",
-            can_dbc::ValueType::Unsigned => "unsigned",
-        };
-        ui.text(data_type);
-
         ui.table_set_column_index(9);
-        let byte_order = match signal.byte_order() {
-            can_dbc::ByteOrder::LittleEndian => "Intel",
-            can_dbc::ByteOrder::BigEndian => "Motorola",
-        };
-        ui.text(byte_order);
+        ui.text(signal.unit());
     }
 }
 
