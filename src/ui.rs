@@ -414,7 +414,7 @@ fn setup_signals_table_columns(ui: &Ui) {
             "signal_name_col",
         ),
         ("Type", TableColumnFlags::default(), 50.0, "data_type_col"),
-        ("Order", TableColumnFlags::default(), 40.0, "byte_order_col"),
+        ("Order", TableColumnFlags::default(), 50.0, "byte_order_col"),
         ("Start", TableColumnFlags::default(), 45.0, "start_bit_col"),
         (
             "Length",
@@ -426,7 +426,7 @@ fn setup_signals_table_columns(ui: &Ui) {
         ("Offset", TableColumnFlags::default(), 45.0, "offset_col"),
         ("Min", TableColumnFlags::default(), 70.0, "min_col"),
         ("Max", TableColumnFlags::default(), 70.0, "max_col"),
-        ("Unit", TableColumnFlags::default(), 40.0, "unit_col"),
+        ("Unit", TableColumnFlags::default(), 50.0, "unit_col"),
     ];
 
     for (name, flags, width, id) in &columns {
@@ -506,7 +506,7 @@ fn render_signals_rows(ui: &Ui, signals: Vec<&can_dbc::Signal>) {
         ui.table_set_column_index(2);
         let byte_order = match signal.byte_order() {
             can_dbc::ByteOrder::LittleEndian => "Intel",
-            can_dbc::ByteOrder::BigEndian => "Moto",
+            can_dbc::ByteOrder::BigEndian => "Motorola",
         };
         ui.text(byte_order);
 
