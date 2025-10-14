@@ -568,7 +568,7 @@ fn render_about_dialog(ui: &Ui, show_about: &mut bool) {
     ui.modal_popup_config("About").resizable(false).build(|| {
         ui.text("Roxy dbc viewer");
         ui.separator();
-        ui.text("Version: 0.3.0");
+        ui.text("Version: 0.4.0");
         ui.text("Built with Rust and ImGui");
         ui.separator();
         ui.text("An application for viewing CAN DBC files.");
