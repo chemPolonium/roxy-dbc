@@ -102,5 +102,6 @@ src/
 ## 🙏 致谢
 
 - [can-dbc](https://github.com/marcelbuesing/can-dbc) - DBC 文件解析库
-- [ImGui](https://github.com/ocornut/imgui) - 即时模式GUI库
-- [wgpu](https://github.com/gfx-rs/wgpu) - 现代图形API
+- [Dear ImGui](https://github.com/ocornut/imgui) - 即时模式 GUI 库
+- [imgui-rs](https://github.com/imgui-rs/imgui-rs) - ImGui 的 Rust 绑定
+- [wgpu](https://github.com/gfx-rs/wgpu) - 现代图形 API
