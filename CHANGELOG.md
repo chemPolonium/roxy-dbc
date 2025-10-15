@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2025-10-15
+
+### Added
+- 悬停信号预览功能
+  - 鼠标悬停在消息行上时显示信号详情弹出窗口
+  - 显示消息名称、ID和最多10个信号的5列摘要表格（Signal、Start、Length、Factor、Unit）
+  - 超过10个信号时显示"...and X more"提示
+- 双击创建信号详情窗口
+  - 双击消息行可创建专用的信号详情窗口
+  - 新窗口显示完整的10列信号表格
+  - 支持同时打开多个信号窗口进行对比分析
+  - 每个信号窗口都有独特的标题显示消息名称和ID
+
+### Changed
+- 重大UI布局优化
+  - 移除原有的分割式消息/信号表格布局
+  - 消息表格现在占用全部可用空间
+  - 采用渐进式信息披露模式：悬停预览 → 双击详情
+
+### Removed
+- 移除固定的信号表格面板
+  - 删除 `render_signals_table`、`setup_signals_table_columns`、`sort_signals`、`render_signals_rows` 等函数
+  - 移除相关的表格状态管理代码
+- 清理死代码
+  - 移除未使用的 `DbcData::get_message_by_id` 方法
+
+### Improved
+- 屏幕空间利用率大幅提升
+- 更符合用户交互习惯的操作模式
+- 支持多信号窗口的并行工作流程
+- 代码结构更加清晰，职责分离更明确
+
 ## [0.4.0] - 2025-10-14
 
 ### Added
