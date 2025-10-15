@@ -65,16 +65,7 @@ impl DbcData {
         self.dbc.as_ref().map_or(0, |dbc| dbc.messages().len())
     }
 
-    /// 获取指定 ID 的消息
-    pub fn get_message_by_id(&self, id: u32) -> Option<&Message> {
-        self.dbc
-            .as_ref()?
-            .messages()
-            .iter()
-            .find(|msg| msg.message_id().raw() == id)
-    }
-
-    /// 搜索消息（按名称）
+    /// 搜索包含指定关键词的消息
     pub fn search_messages(&self, query: &str) -> Vec<&Message> {
         let Some(dbc) = self.dbc.as_ref() else {
             return Vec::new();

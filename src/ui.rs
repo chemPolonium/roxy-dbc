@@ -19,11 +19,20 @@ pub struct ErrorDialog {
     pub message: String,
 }
 
+/// Signal详细窗口状态
+#[derive(Clone)]
+pub struct SignalWindowState {
+    pub id: usize,
+    pub message: crate::dbc::Message,
+    pub is_open: bool,
+}
+
 /// UI 状态管理
 pub struct UiState {
     pub show_performance_window: bool,
     pub show_about_dialog: bool,
     pub dbc_windows: Vec<DbcWindowState>,
+    pub signal_windows: Vec<SignalWindowState>,
     pub next_dbc_id: usize,
     pub error_dialog: ErrorDialog,
 }
@@ -34,6 +43,7 @@ impl Default for UiState {
             show_performance_window: false,
             show_about_dialog: false,
             dbc_windows: Vec::new(),
+            signal_windows: Vec::new(),
             next_dbc_id: 1,
             error_dialog: ErrorDialog {
                 show: false,
@@ -66,14 +76,40 @@ pub fn render_ui(ui: &Ui, delta_s: Duration, target_frame_time: Duration, ui_sta
     let mut windows_to_remove = Vec::new();
     for (index, window) in ui_state.dbc_windows.iter_mut().enumerate() {
         if window.is_open {
-            if !render_dbc_window(ui, window) {
+            let (still_open, clicked_message) = render_dbc_window(ui, window);
+            if !still_open {
                 windows_to_remove.push(index);
+            }
+
+            // 如果检测到双击消息，创建新的信号窗口
+            if let Some(message) = clicked_message {
+                let signal_window_id = ui_state.signal_windows.len();
+                let signal_window = SignalWindowState {
+                    id: signal_window_id,
+                    message,
+                    is_open: true,
+                };
+                ui_state.signal_windows.push(signal_window);
             }
         }
     }
     // Remove closed windows in reverse order to maintain indices
     for &index in windows_to_remove.iter().rev() {
         ui_state.dbc_windows.remove(index);
+    }
+
+    // Render all Signal windows
+    let mut signal_windows_to_remove = Vec::new();
+    for (index, window) in ui_state.signal_windows.iter_mut().enumerate() {
+        if window.is_open {
+            if !render_signal_window(ui, window) {
+                signal_windows_to_remove.push(index);
+            }
+        }
+    }
+    // Remove closed signal windows in reverse order to maintain indices
+    for &index in signal_windows_to_remove.iter().rev() {
+        ui_state.signal_windows.remove(index);
     }
 
     // Render error dialog
@@ -152,7 +188,10 @@ fn render_performance_window(ui: &Ui, delta_s: Duration, target_frame_time: Dura
 }
 
 /// 渲染单个 DBC 浏览器窗口
-fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
+fn render_dbc_window(
+    ui: &Ui,
+    window_state: &mut DbcWindowState,
+) -> (bool, Option<crate::dbc::Message>) {
     let window_title = format!(
         "DBC Browser {} - {}",
         window_state.id,
@@ -168,6 +207,7 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
     );
 
     let mut is_open = window_state.is_open;
+    let mut clicked_message = None;
 
     if is_open {
         let window = ui
@@ -183,7 +223,42 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
             );
 
         window.build(|| {
-            render_dbc_window_content(ui, window_state);
+            clicked_message = render_dbc_window_content(ui, window_state);
+        });
+    }
+
+    if !is_open {
+        window_state.is_open = false;
+    }
+
+    (window_state.is_open, clicked_message)
+}
+
+/// 渲染单个 Signal 详细窗口
+fn render_signal_window(ui: &Ui, window_state: &mut SignalWindowState) -> bool {
+    let window_title = format!(
+        "Signals - {} (0x{:03X})",
+        window_state.message.message_name(),
+        window_state.message.message_id().raw()
+    );
+
+    let mut is_open = window_state.is_open;
+
+    if is_open {
+        let window = ui
+            .window(&window_title)
+            .opened(&mut is_open)
+            .size([900.0, 500.0], Condition::FirstUseEver)
+            .position(
+                [
+                    100.0 + (window_state.id as f32 * 30.0),
+                    100.0 + (window_state.id as f32 * 30.0),
+                ],
+                Condition::FirstUseEver,
+            );
+
+        window.build(|| {
+            render_signal_window_content(ui, &window_state.message);
         });
     }
 
@@ -194,22 +269,115 @@ fn render_dbc_window(ui: &Ui, window_state: &mut DbcWindowState) -> bool {
     window_state.is_open
 }
 
+/// 渲染Signal窗口的内容
+fn render_signal_window_content(ui: &Ui, message: &crate::dbc::Message) {
+    ui.text(format!(
+        "Message: {} (0x{:03X}) - {} signals",
+        message.message_name(),
+        message.message_id().raw(),
+        message.signals().len()
+    ));
+    ui.separator();
+
+    // 创建完整的信号表格
+    if let Some(_table) = ui.begin_table_with_flags(
+        "full_signals_table",
+        10,
+        TableFlags::RESIZABLE
+            | TableFlags::REORDERABLE
+            | TableFlags::HIDEABLE
+            | TableFlags::BORDERS
+            | TableFlags::SIZING_FIXED_FIT
+            | TableFlags::SCROLL_Y
+            | TableFlags::SORTABLE,
+    ) {
+        // 设置完整的表格列
+        let columns = [
+            (
+                "Signal",
+                TableColumnFlags::DEFAULT_SORT | TableColumnFlags::WIDTH_STRETCH,
+                0.0,
+            ),
+            ("Type", TableColumnFlags::default(), 60.0),
+            ("Order", TableColumnFlags::default(), 60.0),
+            ("Start", TableColumnFlags::default(), 50.0),
+            ("Length", TableColumnFlags::default(), 60.0),
+            ("Factor", TableColumnFlags::default(), 80.0),
+            ("Offset", TableColumnFlags::default(), 80.0),
+            ("Min", TableColumnFlags::default(), 80.0),
+            ("Max", TableColumnFlags::default(), 80.0),
+            ("Unit", TableColumnFlags::default(), 60.0),
+        ];
+
+        for (name, flags, width) in &columns {
+            ui.table_setup_column_with(TableColumnSetup {
+                name,
+                flags: *flags,
+                init_width_or_weight: *width,
+                user_id: ui.new_id_str(&format!("full_{}", name.to_lowercase())),
+            });
+        }
+
+        ui.table_headers_row();
+
+        // 显示所有信号
+        for signal in message.signals().iter() {
+            ui.table_next_row();
+
+            ui.table_set_column_index(0);
+            ui.text(signal.name());
+
+            ui.table_set_column_index(1);
+            let data_type = match signal.value_type() {
+                can_dbc::ValueType::Signed => "signed",
+                can_dbc::ValueType::Unsigned => "unsigned",
+            };
+            ui.text(data_type);
+
+            ui.table_set_column_index(2);
+            let byte_order = match signal.byte_order() {
+                can_dbc::ByteOrder::LittleEndian => "Intel",
+                can_dbc::ByteOrder::BigEndian => "Motorola",
+            };
+            ui.text(byte_order);
+
+            ui.table_set_column_index(3);
+            ui.text(format!("{}", signal.start_bit()));
+
+            ui.table_set_column_index(4);
+            ui.text(format!("{}", signal.signal_size()));
+
+            ui.table_set_column_index(5);
+            ui.text(format!("{}", signal.factor()));
+
+            ui.table_set_column_index(6);
+            ui.text(format!("{}", signal.offset()));
+
+            ui.table_set_column_index(7);
+            ui.text(format!("{}", signal.min()));
+
+            ui.table_set_column_index(8);
+            ui.text(format!("{}", signal.max()));
+
+            ui.table_set_column_index(9);
+            ui.text(signal.unit());
+        }
+    }
+}
+
 /// 渲染DBC窗口的内容
-fn render_dbc_window_content(ui: &Ui, window_state: &mut DbcWindowState) {
+fn render_dbc_window_content(
+    ui: &Ui,
+    window_state: &mut DbcWindowState,
+) -> Option<crate::dbc::Message> {
     // 文件信息区域
     render_dbc_file_info(ui, window_state);
 
     // 搜索栏
     render_dbc_search_bar(ui, window_state);
 
-    // 计算表格高度
-    let table_height = (ui.content_region_avail()[1] - 40.0) * 0.5;
-
     // 消息列表表格
-    render_messages_table(ui, window_state, table_height);
-
-    // 信号详细信息表格
-    render_signals_table(ui, window_state, table_height);
+    render_messages_table(ui, window_state)
 }
 
 /// 渲染DBC文件信息区域
@@ -242,34 +410,38 @@ fn render_dbc_search_bar(ui: &Ui, window_state: &mut DbcWindowState) {
 }
 
 /// 渲染消息列表表格
-fn render_messages_table(ui: &Ui, window_state: &mut DbcWindowState, table_height: f32) {
-    ui.child_window("messages_list")
-        .size([0.0, table_height])
-        .build(|| {
-            let filtered_messages = window_state
-                .dbc_data
-                .search_messages(&window_state.search_query);
+fn render_messages_table(
+    ui: &Ui,
+    window_state: &mut DbcWindowState,
+) -> Option<crate::dbc::Message> {
+    let mut clicked_message = None;
 
-            if let Some(_table) = ui.begin_table_with_flags(
-                "messages_table",
-                4,
-                TableFlags::RESIZABLE
-                    | TableFlags::REORDERABLE
-                    | TableFlags::SIZING_FIXED_FIT
-                    | TableFlags::BORDERS
-                    | TableFlags::SCROLL_Y
-                    | TableFlags::SORTABLE,
-            ) {
-                setup_messages_table_columns(ui);
-                ui.table_headers_row();
+    ui.child_window("messages_list").size([0.0, 0.0]).build(|| {
+        let filtered_messages = window_state
+            .dbc_data
+            .search_messages(&window_state.search_query);
 
-                let sorted_messages = sort_messages(ui, filtered_messages);
+        if let Some(_table) = ui.begin_table_with_flags(
+            "messages_table",
+            4,
+            TableFlags::RESIZABLE
+                | TableFlags::REORDERABLE
+                | TableFlags::SIZING_FIXED_FIT
+                | TableFlags::BORDERS
+                | TableFlags::SCROLL_Y
+                | TableFlags::SORTABLE,
+        ) {
+            setup_messages_table_columns(ui);
+            ui.table_headers_row();
 
+            let sorted_messages = sort_messages(ui, filtered_messages);
+
+            clicked_message =
                 render_messages_rows(ui, &mut window_state.selected_message_id, sorted_messages);
-            }
-        });
+        }
+    });
 
-    ui.separator();
+    clicked_message
 }
 
 /// 设置消息表格的列
@@ -300,12 +472,14 @@ fn setup_messages_table_columns(ui: &Ui) {
     });
 }
 
-/// 渲染消息表格的行
+/// 渲染消息表格的行，返回双击的消息（如果有的话）
 fn render_messages_rows(
     ui: &Ui,
     current_selection: &mut Option<u32>,
     messages: Vec<&crate::dbc::Message>,
-) {
+) -> Option<crate::dbc::Message> {
+    let mut double_clicked_message = None;
+
     for message in messages {
         ui.table_next_row();
 
@@ -325,6 +499,16 @@ fn render_messages_rows(
             *current_selection = Some(message.message_id().raw());
         }
 
+        // 检测鼠标悬停在这一行上
+        if ui.is_item_hovered() {
+            render_signal_popup(ui, message);
+
+            // 检测双击事件
+            if ui.is_mouse_double_clicked(imgui::MouseButton::Left) {
+                double_clicked_message = Some(message.clone());
+            }
+        }
+
         ui.table_set_column_index(1);
         ui.text(message.message_name());
 
@@ -334,6 +518,69 @@ fn render_messages_rows(
         ui.table_set_column_index(3);
         ui.text(format!("{}", message.signals().len()));
     }
+
+    double_clicked_message
+}
+
+/// 渲染信号详情弹出窗口
+fn render_signal_popup(ui: &Ui, message: &crate::dbc::Message) {
+    ui.tooltip(|| {
+        ui.text(format!(
+            "Message: {} (0x{:03X})",
+            message.message_name(),
+            message.message_id().raw()
+        ));
+        ui.separator();
+
+        if message.signals().is_empty() {
+            ui.text("No signals in this message");
+            return;
+        }
+
+        // 创建一个简化的信号表格
+        if let Some(_table) = ui.begin_table_with_flags(
+            "popup_signals_table",
+            5, // 减少列数，只显示关键信息
+            TableFlags::BORDERS | TableFlags::SIZING_FIXED_FIT,
+        ) {
+            // 设置表格列
+            ui.table_setup_column("Signal");
+            ui.table_setup_column("Start");
+            ui.table_setup_column("Length");
+            ui.table_setup_column("Factor");
+            ui.table_setup_column("Unit");
+            ui.table_headers_row();
+
+            // 显示前几个信号（避免popup过大）
+            for signal in message.signals().iter().take(10) {
+                ui.table_next_row();
+
+                ui.table_set_column_index(0);
+                ui.text(signal.name());
+
+                ui.table_set_column_index(1);
+                ui.text(format!("{}", signal.start_bit()));
+
+                ui.table_set_column_index(2);
+                ui.text(format!("{}", signal.signal_size()));
+
+                ui.table_set_column_index(3);
+                ui.text(format!("{}", signal.factor()));
+
+                ui.table_set_column_index(4);
+                ui.text(signal.unit());
+            }
+
+            if message.signals().len() > 10 {
+                ui.table_next_row();
+                ui.table_set_column_index(0);
+                ui.text(format!(
+                    "... and {} more signals",
+                    message.signals().len() - 10
+                ));
+            }
+        }
+    });
 }
 
 /// 排序消息列表
@@ -365,172 +612,6 @@ fn sort_messages<'a>(
         }
     }
     messages
-}
-
-/// 渲染信号详细信息表格
-fn render_signals_table(ui: &Ui, window_state: &mut DbcWindowState, table_height: f32) {
-    if let Some(selected_id) = window_state.selected_message_id {
-        if let Some(message) = window_state.dbc_data.get_message_by_id(selected_id) {
-            ui.text(format!(
-                "Message Details: {} (0x{:03X})",
-                message.message_name(),
-                message.message_id().raw()
-            ));
-            ui.separator();
-
-            ui.child_window("signals_list")
-                .size([0.0, table_height])
-                .build(|| {
-                    if let Some(_table) = ui.begin_table_with_flags(
-                        "signals_table",
-                        10,
-                        TableFlags::RESIZABLE
-                            | TableFlags::REORDERABLE
-                            | TableFlags::HIDEABLE
-                            | TableFlags::BORDERS
-                            | TableFlags::SIZING_FIXED_FIT
-                            | TableFlags::SCROLL_Y
-                            | TableFlags::SORTABLE,
-                    ) {
-                        setup_signals_table_columns(ui);
-
-                        ui.table_headers_row();
-
-                        let sorted_signals = sort_signals(ui, message);
-                        render_signals_rows(ui, sorted_signals);
-                    }
-                });
-        }
-    }
-}
-
-/// 设置信号表格的列
-fn setup_signals_table_columns(ui: &Ui) {
-    let columns = [
-        (
-            "Signal",
-            TableColumnFlags::DEFAULT_SORT | TableColumnFlags::WIDTH_STRETCH,
-            0.0,
-            "signal_name_col",
-        ),
-        ("Type", TableColumnFlags::default(), 50.0, "data_type_col"),
-        ("Order", TableColumnFlags::default(), 50.0, "byte_order_col"),
-        ("Start", TableColumnFlags::default(), 45.0, "start_bit_col"),
-        (
-            "Length",
-            TableColumnFlags::default(),
-            45.0,
-            "signal_len_col",
-        ),
-        ("Factor", TableColumnFlags::default(), 55.0, "factor_col"),
-        ("Offset", TableColumnFlags::default(), 45.0, "offset_col"),
-        ("Min", TableColumnFlags::default(), 70.0, "min_col"),
-        ("Max", TableColumnFlags::default(), 70.0, "max_col"),
-        ("Unit", TableColumnFlags::default(), 60.0, "unit_col"),
-    ];
-
-    for (name, flags, width, id) in &columns {
-        ui.table_setup_column_with(TableColumnSetup {
-            name,
-            flags: *flags,
-            init_width_or_weight: *width,
-            user_id: ui.new_id_str(id),
-        });
-    }
-}
-
-/// 排序信号列表
-fn sort_signals<'a>(ui: &Ui, message: &'a crate::dbc::Message) -> Vec<&'a can_dbc::Signal> {
-    let mut sorted_signals: Vec<_> = message.signals().iter().collect();
-
-    if let Some(sort_specs) = ui.table_sort_specs_mut() {
-        let specs = sort_specs.specs();
-        for (i, spec) in specs.iter().enumerate() {
-            if i == 0 {
-                let ascending = spec.sort_direction() == Some(TableSortDirection::Ascending);
-                sorted_signals.sort_by(|a, b| {
-                    let ordering = match spec.column_idx() {
-                        0 => a.name().cmp(b.name()),
-                        1 => format!("{:?}", a.value_type()).cmp(&format!("{:?}", b.value_type())),
-                        2 => format!("{:?}", a.byte_order()).cmp(&format!("{:?}", b.byte_order())),
-                        3 => a.start_bit().cmp(b.start_bit()),
-                        4 => a.signal_size().cmp(b.signal_size()),
-                        5 => a
-                            .factor()
-                            .partial_cmp(b.factor())
-                            .unwrap_or(std::cmp::Ordering::Equal),
-                        6 => a
-                            .offset()
-                            .partial_cmp(b.offset())
-                            .unwrap_or(std::cmp::Ordering::Equal),
-                        7 => a
-                            .min()
-                            .partial_cmp(b.min())
-                            .unwrap_or(std::cmp::Ordering::Equal),
-                        8 => a
-                            .max()
-                            .partial_cmp(b.max())
-                            .unwrap_or(std::cmp::Ordering::Equal),
-                        9 => a.unit().cmp(b.unit()),
-                        _ => std::cmp::Ordering::Equal,
-                    };
-                    if ascending {
-                        ordering
-                    } else {
-                        ordering.reverse()
-                    }
-                });
-                break;
-            }
-        }
-    }
-
-    sorted_signals
-}
-
-/// 渲染信号表格的行
-fn render_signals_rows(ui: &Ui, signals: Vec<&can_dbc::Signal>) {
-    for signal in signals {
-        ui.table_next_row();
-
-        ui.table_set_column_index(0);
-        ui.text(signal.name());
-
-        ui.table_set_column_index(1);
-        let data_type = match signal.value_type() {
-            can_dbc::ValueType::Signed => "signed",
-            can_dbc::ValueType::Unsigned => "unsigned",
-        };
-        ui.text(data_type);
-
-        ui.table_set_column_index(2);
-        let byte_order = match signal.byte_order() {
-            can_dbc::ByteOrder::LittleEndian => "Intel",
-            can_dbc::ByteOrder::BigEndian => "Motorola",
-        };
-        ui.text(byte_order);
-
-        ui.table_set_column_index(3);
-        ui.text(format!("{}", signal.start_bit()));
-
-        ui.table_set_column_index(4);
-        ui.text(format!("{}", signal.signal_size()));
-
-        ui.table_set_column_index(5);
-        ui.text(format!("{}", signal.factor()));
-
-        ui.table_set_column_index(6);
-        ui.text(format!("{}", signal.offset()));
-
-        ui.table_set_column_index(7);
-        ui.text(format!("{}", signal.min()));
-
-        ui.table_set_column_index(8);
-        ui.text(format!("{}", signal.max()));
-
-        ui.table_set_column_index(9);
-        ui.text(signal.unit());
-    }
 }
 
 /// 渲染错误对话框
