@@ -86,7 +86,7 @@ impl ApplicationHandler for App {
                     .expect("Failed to prepare frame");
                 let ui = imgui.context.frame();
 
-                // 使用分离的 UI 模块渲染界面
+                // 使用重构后的 UI 模块渲染界面
                 ui::render_ui(&ui, delta_s, imgui.target_frame_time, &mut self.ui_state);
 
                 let mut encoder: wgpu::CommandEncoder = window

@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2024-12-XX
+
+### Added
+- **扩展编辑功能：支持完整的 Message 属性编辑**
+  - 新增 **Message ID** 编辑：支持十六进制（0x123）、十进制（291）等多种格式输入
+  - 新增 **Message Size** 编辑：支持 0-8 字节范围，带实时验证
+  - 新增 **Transmitter** 编辑：可设置发送该消息的 ECU/节点名称
+  - 所有新增字段都支持 Undo/Redo
+  - 编辑对话框扩展为 600×550 像素以容纳新字段
+  - 所有输入框都有工具提示说明格式和用途
+
+### Changed
+- **重大改进：编辑对话框模式重构**
+  - 从实时保存模式改为传统的确认/取消/应用三按钮模式
+  - 新增 **OK** 按钮：应用所有修改并关闭对话框
+  - 新增 **Cancel** 按钮：放弃所有修改并关闭对话框
+  - 新增 **Apply** 按钮：应用修改但保持对话框打开，支持持续编辑工作流
+  - Apply 按钮智能状态管理：仅在有未保存修改时可用
+  - 实时修改状态提示："You have unsaved changes"（橙色）或 "No changes"（灰色）
+  - 修改不再在失去焦点时自动保存，用户完全控制保存时机
+  - 提高编辑安全性：防止误操作，提供后悔机会
+- **数据层扩展**
+  - `EditableDbcData` 新增 3 个覆盖映射：`message_id_overrides`、`message_size_overrides`、`message_transmitter_overrides`
+  - `OverridesSnapshot` 相应扩展以支持新的覆盖类型
+  - 表格显示自动使用覆盖后的值（ID、Size 等）
+  - 排序功能支持按覆盖后的值进行排序
+
+### Fixed
+- **严重 Bug：Message Name 列排序错位问题**
+  - 修复了排序时 Name 列不跟随其他列一起排序的问题
+  - 修复了 popup 中显示的名称与表格不一致的问题
+  - 根本原因：显示名称在排序前提取，导致索引错位
+  - 解决方案：使用 `MessageWithDisplayName` 结构体将 Message 和名称打包，一起排序
+  - 影响：所有使用了名称覆盖功能的用户都会遇到此问题
+
+### Improved
+- 编辑体验更符合传统桌面应用习惯
+- 与 Windows/Linux/macOS 原生应用的编辑模式保持一致
+- 支持分步应用工作流：可以先保存名称修改，再继续编辑其他属性
+- 更好的 Undo/Redo 集成：每次 Apply/OK 产生独立的 Undo 条目
+- Cancel 操作会恢复到原始值或最后一次 Apply 的值
+- 消息排序逻辑重构：确保所有列数据保持一致性
+- Undo 操作描述更详细：包括 "Modify ID"、"Modify Size"、"Modify Transmitter" 等
+- 修改计数统计包含所有类型的覆盖（名称、注释、ID、Size、Transmitter）
+
+### Removed
+- 移除了焦点跟踪逻辑（name_had_focus、comment_had_focus）
+- 移除了自动保存机制
+- 移除了旧的排序函数（sort_messages_owned、render_messages_rows_owned）
+
+### Technical
+- 新增 `parse_message_id()` 函数：智能解析多种 ID 格式
+- `MessageWithDisplayData` 结构扩展：包含 display_id 和 display_size
+- 所有编辑字段都在 `MessageEditDialog` 中有对应的缓冲区和原始值
+- 数据验证在 Apply/OK 时进行：无效输入采用静默失败策略
+
 ## [0.5.0] - 2025-10-15
 
 ### Added
