@@ -1,6 +1,6 @@
 //! DBC 文件读取和解析模块
-pub use can_dbc::{DBC, Message};
-use std::collections::HashMap;
+pub use can_dbc::{ByteOrder, DBC, Message, Signal, ValueType};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -69,6 +69,55 @@ impl DbcData {
     }
 }
 
+/// 自定义 Message 结构（用于新建的 Message）
+#[derive(Debug, Clone)]
+pub struct CustomMessage {
+    pub message_id: u32,
+    pub message_name: String,
+    pub message_size: u64,
+    pub transmitter: String,
+    pub comment: String,
+    pub signals: Vec<Signal>,
+}
+
+impl CustomMessage {
+    /// 从 can_dbc::Message 创建 CustomMessage
+    pub fn from_message(msg: &Message) -> Self {
+        Self {
+            message_id: msg.message_id().raw(),
+            message_name: msg.message_name().to_string(),
+            message_size: *msg.message_size(),
+            transmitter: String::new(), // can_dbc::Message 没有暴露 transmitter
+            comment: String::new(),
+            signals: msg.signals().to_vec(),
+        }
+    }
+
+    /// 创建一个空的新 Message
+    pub fn new(message_id: u32) -> Self {
+        Self {
+            message_id,
+            message_name: format!("NewMessage_{:03X}", message_id),
+            message_size: 8,
+            transmitter: String::new(),
+            comment: String::new(),
+            signals: Vec::new(),
+        }
+    }
+
+    /// 创建副本（用于复制功能）
+    pub fn duplicate(&self, new_id: u32) -> Self {
+        Self {
+            message_id: new_id,
+            message_name: format!("{}_Copy", self.message_name),
+            message_size: self.message_size,
+            transmitter: self.transmitter.clone(),
+            comment: self.comment.clone(),
+            signals: self.signals.clone(),
+        }
+    }
+}
+
 /// 可编辑的 DBC 数据层
 ///
 /// 这个结构包装了只读的 DbcData，并添加了覆盖层来支持编辑功能。
@@ -92,9 +141,12 @@ pub struct EditableDbcData {
 
     /// Message Transmitter 覆盖映射 (original_message_id -> transmitter)
     pub message_transmitter_overrides: HashMap<u32, String>,
-    // 未来可以添加更多覆盖层：
-    // pub signal_name_overrides: HashMap<(u32, String), String>,
-    // pub signal_value_overrides: HashMap<(u32, String), SignalValues>,
+
+    /// 新建的 Message 列表 (message_id -> CustomMessage)
+    pub added_messages: HashMap<u32, CustomMessage>,
+
+    /// 被删除的 Message ID 集合
+    pub deleted_message_ids: HashSet<u32>,
 }
 
 impl EditableDbcData {
@@ -107,6 +159,8 @@ impl EditableDbcData {
             message_id_overrides: HashMap::new(),
             message_size_overrides: HashMap::new(),
             message_transmitter_overrides: HashMap::new(),
+            added_messages: HashMap::new(),
+            deleted_message_ids: HashSet::new(),
         }
     }
 
@@ -125,6 +179,8 @@ impl EditableDbcData {
         self.message_id_overrides.clear();
         self.message_size_overrides.clear();
         self.message_transmitter_overrides.clear();
+        self.added_messages.clear();
+        self.deleted_message_ids.clear();
         Ok(())
     }
 
@@ -147,10 +203,25 @@ impl EditableDbcData {
 
     /// 获取 message 的注释（考虑覆盖）
     pub fn get_message_comment(&self, message_id: u32) -> String {
-        self.message_comment_overrides
-            .get(&message_id)
-            .cloned()
-            .unwrap_or_default()
+        // 优先返回覆盖的注释
+        if let Some(comment) = self.message_comment_overrides.get(&message_id) {
+            return comment.clone();
+        }
+
+        // 否则从原始 DBC 中获取注释
+        if let Some(dbc) = self.base.dbc.as_ref() {
+            // 遍历消息找到对应的 MessageId
+            for msg in dbc.messages() {
+                if msg.message_id().raw() == message_id {
+                    if let Some(comment) = dbc.message_comment(*msg.message_id()) {
+                        return comment.to_string();
+                    }
+                    break;
+                }
+            }
+        }
+
+        String::new()
     }
 
     /// 设置 message 的注释覆盖
@@ -212,39 +283,107 @@ impl EditableDbcData {
         }
     }
 
-    /// 搜索包含指定关键词的消息（考虑名称覆盖）
-    pub fn search_messages(&self, query: &str) -> Vec<&Message> {
-        let Some(dbc) = self.base.dbc.as_ref() else {
-            return Vec::new();
-        };
+    /// 添加新 Message
+    pub fn add_message(&mut self, message: CustomMessage) {
+        let id = message.message_id;
+        self.added_messages.insert(id, message);
+        // 如果之前被删除了，从删除列表中移除
+        self.deleted_message_ids.remove(&id);
+    }
+
+    /// 删除 Message（标记为删除）
+    pub fn delete_message(&mut self, message_id: u32) {
+        // 如果是新建的 Message，直接从 added_messages 中移除
+        if self.added_messages.remove(&message_id).is_some() {
+            return;
+        }
+        // 否则标记为删除
+        self.deleted_message_ids.insert(message_id);
+    }
+
+    /// 检查 Message 是否被删除
+    pub fn is_message_deleted(&self, message_id: u32) -> bool {
+        self.deleted_message_ids.contains(&message_id)
+    }
+
+    /// 检查 Message 是否是新建的
+    pub fn is_message_added(&self, message_id: u32) -> bool {
+        self.added_messages.contains_key(&message_id)
+    }
+
+    /// 获取新建的 Message
+    pub fn get_added_message(&self, message_id: u32) -> Option<&CustomMessage> {
+        self.added_messages.get(&message_id)
+    }
+
+    /// 获取所有可见的 Message（基础 + 新建 - 删除）
+    pub fn get_all_messages(&self) -> Vec<MessageRef> {
+        let mut messages = Vec::new();
+
+        // 添加基础 DBC 中未删除的 Message
+        if let Some(dbc) = self.base.dbc.as_ref() {
+            for msg in dbc.messages() {
+                let id = msg.message_id().raw();
+                if !self.deleted_message_ids.contains(&id) {
+                    messages.push(MessageRef::Original(msg));
+                }
+            }
+        }
+
+        // 添加新建的 Message
+        for custom_msg in self.added_messages.values() {
+            messages.push(MessageRef::Custom(custom_msg));
+        }
+
+        messages
+    }
+
+    /// 搜索包含指定关键词的消息（考虑名称覆盖、新建和删除）
+    pub fn search_messages(&self, query: &str) -> Vec<MessageRef> {
+        let all_messages = self.get_all_messages();
 
         if query.is_empty() {
-            return dbc.messages().iter().collect();
+            return all_messages;
         }
 
         let query_lower = query.to_lowercase();
 
-        dbc.messages()
-            .iter()
-            .filter(|msg| {
-                let message_id = msg.message_id().raw();
+        all_messages
+            .into_iter()
+            .filter(|msg_ref| {
+                match msg_ref {
+                    MessageRef::Original(msg) => {
+                        let message_id = msg.message_id().raw();
 
-                // 检查覆盖名称
-                if let Some(override_name) = self.message_name_overrides.get(&message_id) {
-                    if override_name.to_lowercase().contains(&query_lower) {
-                        return true;
+                        // 检查覆盖名称
+                        if let Some(override_name) = self.message_name_overrides.get(&message_id) {
+                            if override_name.to_lowercase().contains(&query_lower) {
+                                return true;
+                            }
+                        }
+
+                        // 检查原始名称
+                        if msg.message_name().to_lowercase().contains(&query_lower) {
+                            return true;
+                        }
+
+                        // 检查信号名称
+                        msg.signals()
+                            .iter()
+                            .any(|sig| sig.name().to_lowercase().contains(&query_lower))
+                    }
+                    MessageRef::Custom(custom_msg) => {
+                        // 检查自定义消息名称
+                        custom_msg
+                            .message_name
+                            .to_lowercase()
+                            .contains(&query_lower)
+                            || custom_msg
+                                .signals
+                                .iter()
+                                .any(|sig| sig.name().to_lowercase().contains(&query_lower))
                     }
                 }
-
-                // 检查原始名称
-                if msg.message_name().to_lowercase().contains(&query_lower) {
-                    return true;
-                }
-
-                // 检查信号名称
-                msg.signals()
-                    .iter()
-                    .any(|sig| sig.name().to_lowercase().contains(&query_lower))
             })
             .collect()
     }
@@ -256,6 +395,8 @@ impl EditableDbcData {
             || !self.message_id_overrides.is_empty()
             || !self.message_size_overrides.is_empty()
             || !self.message_transmitter_overrides.is_empty()
+            || !self.added_messages.is_empty()
+            || !self.deleted_message_ids.is_empty()
     }
 
     /// 清空所有修改
@@ -266,6 +407,8 @@ impl EditableDbcData {
         self.message_id_overrides.clear();
         self.message_size_overrides.clear();
         self.message_transmitter_overrides.clear();
+        self.added_messages.clear();
+        self.deleted_message_ids.clear();
     }
 
     /// 获取修改数量
@@ -275,6 +418,99 @@ impl EditableDbcData {
             + self.message_id_overrides.len()
             + self.message_size_overrides.len()
             + self.message_transmitter_overrides.len()
+            + self.added_messages.len()
+            + self.deleted_message_ids.len()
+    }
+
+    /// 根据 message_id 获取 Message（用于双击操作）
+    /// 注意：只返回原始 Message，不返回新建的 CustomMessage
+    pub fn get_message_by_id(&self, message_id: u32) -> Option<Message> {
+        // 先检查是否在原始 DBC 中
+        if let Some(dbc) = self.base.dbc.as_ref() {
+            for msg in dbc.messages() {
+                if msg.message_id().raw() == message_id
+                    && !self.deleted_message_ids.contains(&message_id)
+                {
+                    return Some(msg.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// 根据 message_id 获取 MessageRef（支持原始和新建的 Message）
+    pub fn get_message_ref_by_id(&self, message_id: u32) -> Option<MessageRef> {
+        // 先检查是否在原始 DBC 中
+        if let Some(dbc) = self.base.dbc.as_ref() {
+            for msg in dbc.messages() {
+                if msg.message_id().raw() == message_id
+                    && !self.deleted_message_ids.contains(&message_id)
+                {
+                    return Some(MessageRef::Original(msg));
+                }
+            }
+        }
+
+        // 检查是否是新建的 Message
+        if let Some(custom_msg) = self.added_messages.get(&message_id) {
+            return Some(MessageRef::Custom(custom_msg));
+        }
+
+        None
+    }
+}
+
+/// Message 引用枚举（用于统一访问原始和自定义 Message）
+#[derive(Clone)]
+pub enum MessageRef<'a> {
+    Original(&'a Message),
+    Custom(&'a CustomMessage),
+}
+
+impl<'a> MessageRef<'a> {
+    /// 获取 Message ID
+    pub fn message_id(&self) -> u32 {
+        match self {
+            MessageRef::Original(msg) => msg.message_id().raw(),
+            MessageRef::Custom(msg) => msg.message_id,
+        }
+    }
+
+    /// 获取 Message Name
+    pub fn message_name(&self) -> &str {
+        match self {
+            MessageRef::Original(msg) => msg.message_name(),
+            MessageRef::Custom(msg) => &msg.message_name,
+        }
+    }
+
+    /// 获取 Message Size
+    pub fn message_size(&self) -> u64 {
+        match self {
+            MessageRef::Original(msg) => *msg.message_size(),
+            MessageRef::Custom(msg) => msg.message_size,
+        }
+    }
+
+    /// 获取 Signals
+    pub fn signals(&self) -> &[Signal] {
+        match self {
+            MessageRef::Original(msg) => msg.signals(),
+            MessageRef::Custom(msg) => &msg.signals,
+        }
+    }
+
+    /// 转换为 CustomMessage（用于复制）
+    pub fn to_custom_message(&self) -> CustomMessage {
+        match self {
+            MessageRef::Original(msg) => CustomMessage::from_message(msg),
+            MessageRef::Custom(msg) => (*msg).clone(),
+        }
+    }
+
+    /// 检查是否是自定义 Message
+    pub fn is_custom(&self) -> bool {
+        matches!(self, MessageRef::Custom(_))
     }
 }
 
@@ -295,6 +531,8 @@ pub struct OverridesSnapshot {
     pub message_id_overrides: HashMap<u32, u32>,
     pub message_size_overrides: HashMap<u32, u64>,
     pub message_transmitter_overrides: HashMap<u32, String>,
+    pub added_messages: HashMap<u32, CustomMessage>,
+    pub deleted_message_ids: HashSet<u32>,
 }
 
 impl OverridesSnapshot {
@@ -306,6 +544,8 @@ impl OverridesSnapshot {
             message_id_overrides: data.message_id_overrides.clone(),
             message_size_overrides: data.message_size_overrides.clone(),
             message_transmitter_overrides: data.message_transmitter_overrides.clone(),
+            added_messages: data.added_messages.clone(),
+            deleted_message_ids: data.deleted_message_ids.clone(),
         }
     }
 
@@ -316,5 +556,7 @@ impl OverridesSnapshot {
         data.message_id_overrides = self.message_id_overrides.clone();
         data.message_size_overrides = self.message_size_overrides.clone();
         data.message_transmitter_overrides = self.message_transmitter_overrides.clone();
+        data.added_messages = self.added_messages.clone();
+        data.deleted_message_ids = self.deleted_message_ids.clone();
     }
 }

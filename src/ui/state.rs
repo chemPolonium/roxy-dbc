@@ -1,6 +1,6 @@
 //! UI 状态管理模块
 
-use crate::dbc::{EditableDbcData, Message, OverridesSnapshot};
+use crate::dbc::{CustomMessage, EditableDbcData, Message, MessageRef, OverridesSnapshot};
 
 /// DBC 窗口状态
 #[derive(Clone)]
@@ -44,9 +44,13 @@ pub enum UndoOperationKind {
         old_transmitter: String,
         new_transmitter: String,
     },
+    AddMessage {
+        message_id: u32,
+    },
+    DeleteMessage {
+        message_id: u32,
+    },
     // 预留：未来可以添加更多操作类型
-    // AddMessage { message_id: u32 },
-    // RemoveMessage { message_id: u32 },
     // ModifySignal { ... },
 }
 
@@ -169,6 +173,8 @@ pub fn describe_undo_operation(entry: &UndoEntry) -> &'static str {
         UndoOperationKind::ModifyMessageId { .. } => "Modify ID",
         UndoOperationKind::ModifyMessageSize { .. } => "Modify Size",
         UndoOperationKind::ModifyMessageTransmitter { .. } => "Modify Transmitter",
+        UndoOperationKind::AddMessage { .. } => "Add Message",
+        UndoOperationKind::DeleteMessage { .. } => "Delete Message",
     }
 }
 
@@ -236,7 +242,7 @@ impl MessageEditDialog {
         }
     }
 
-    /// 打开编辑对话框
+    /// 打开编辑对话框（使用 Message，用于兼容性）
     pub fn open(
         &mut self,
         parent_dbc_id: usize,
@@ -264,6 +270,43 @@ impl MessageEditDialog {
 
         // 初始化 Size 缓冲区（考虑覆盖）
         let display_size = editable_data.get_message_size(self.message_id, *message.message_size());
+        self.size_buffer = display_size.to_string();
+        self.original_size = display_size;
+
+        // 初始化 Transmitter 缓冲区（考虑覆盖）
+        let transmitter = editable_data.get_message_transmitter(self.message_id);
+        self.transmitter_buffer = transmitter.clone();
+        self.original_transmitter = transmitter;
+    }
+
+    /// 打开编辑对话框（使用 MessageRef，支持原始和新建的 Message）
+    pub fn open_with_ref(
+        &mut self,
+        parent_dbc_id: usize,
+        message: &MessageRef,
+        editable_data: &EditableDbcData,
+    ) {
+        self.show = true;
+        self.parent_dbc_id = parent_dbc_id;
+        self.message_id = message.message_id();
+
+        // 初始化名称缓冲区（考虑覆盖）
+        let display_name = editable_data.get_message_name(self.message_id, message.message_name());
+        self.name_buffer = display_name.clone();
+        self.original_name = display_name;
+
+        // 初始化注释缓冲区
+        let comment = editable_data.get_message_comment(self.message_id);
+        self.comment_buffer = comment.clone();
+        self.original_comment = comment;
+
+        // 初始化 ID 缓冲区（考虑覆盖）
+        let display_id = editable_data.get_message_id(self.message_id);
+        self.id_buffer = format!("0x{:X}", display_id);
+        self.original_id = display_id;
+
+        // 初始化 Size 缓冲区（考虑覆盖）
+        let display_size = editable_data.get_message_size(self.message_id, message.message_size());
         self.size_buffer = display_size.to_string();
         self.original_size = display_size;
 
@@ -303,6 +346,112 @@ impl Default for MessageEditDialog {
     }
 }
 
+/// Message 新建对话框状态
+pub struct MessageCreateDialog {
+    pub show: bool,
+    pub parent_dbc_id: usize,
+
+    // 输入缓冲区
+    pub name_buffer: String,
+    pub comment_buffer: String,
+    pub id_buffer: String,
+    pub size_buffer: String,
+    pub transmitter_buffer: String,
+}
+
+impl MessageCreateDialog {
+    pub fn new() -> Self {
+        Self {
+            show: false,
+            parent_dbc_id: 0,
+            name_buffer: String::new(),
+            comment_buffer: String::new(),
+            id_buffer: String::new(),
+            size_buffer: String::from("8"), // 默认8字节
+            transmitter_buffer: String::new(),
+        }
+    }
+
+    /// 打开创建对话框
+    pub fn open(&mut self, parent_dbc_id: usize, suggested_id: u32) {
+        self.show = true;
+        self.parent_dbc_id = parent_dbc_id;
+
+        // 重置所有字段
+        self.name_buffer.clear();
+        self.comment_buffer.clear();
+        self.id_buffer = format!("0x{:X}", suggested_id);
+        self.size_buffer = String::from("8");
+        self.transmitter_buffer.clear();
+    }
+
+    /// 关闭对话框
+    pub fn close(&mut self) {
+        self.show = false;
+    }
+
+    /// 检查输入是否有效
+    pub fn is_valid(&self) -> bool {
+        !self.name_buffer.trim().is_empty()
+            && !self.id_buffer.trim().is_empty()
+            && self.parse_id().is_some()
+            && self.parse_size().is_some()
+    }
+
+    /// 解析 ID
+    pub fn parse_id(&self) -> Option<u32> {
+        let s = self.id_buffer.trim();
+        if s.is_empty() {
+            return None;
+        }
+        // 尝试解析十六进制（0x 或 0X 前缀）
+        if s.starts_with("0x") || s.starts_with("0X") {
+            if let Ok(id) = u32::from_str_radix(&s[2..], 16) {
+                return Some(id);
+            }
+        }
+        // 尝试解析十进制
+        if let Ok(id) = s.parse::<u32>() {
+            return Some(id);
+        }
+        // 尝试直接解析为十六进制（没有 0x 前缀）
+        if let Ok(id) = u32::from_str_radix(s, 16) {
+            return Some(id);
+        }
+        None
+    }
+
+    /// 解析 Size
+    pub fn parse_size(&self) -> Option<u64> {
+        let s = self.size_buffer.trim();
+        if let Ok(size) = s.parse::<u64>() {
+            if size <= 8 {
+                return Some(size);
+            }
+        }
+        None
+    }
+}
+
+impl Default for MessageCreateDialog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 剪贴板状态（用于复制/粘贴）
+pub struct ClipboardState {
+    pub copied_message: Option<CustomMessage>,
+}
+
+impl Default for ClipboardState {
+    fn default() -> Self {
+        Self {
+            copied_message: None,
+        }
+    }
+}
+
 /// 主 UI 状态管理
 pub struct UiState {
     pub show_performance_window: bool,
@@ -312,10 +461,12 @@ pub struct UiState {
     pub next_dbc_id: usize,
     pub error_dialog: ErrorDialog,
     pub message_edit_dialog: MessageEditDialog,
+    pub message_create_dialog: MessageCreateDialog,
     pub last_focused_dbc_index: Option<usize>,
     pub dbc_window_focus_request: Option<usize>,
     pub signal_window_focus_request: Option<usize>,
     pub last_focused_signal_window: Option<usize>,
+    pub clipboard: ClipboardState,
 }
 
 impl Default for UiState {
@@ -328,10 +479,12 @@ impl Default for UiState {
             next_dbc_id: 1,
             error_dialog: ErrorDialog::default(),
             message_edit_dialog: MessageEditDialog::default(),
+            message_create_dialog: MessageCreateDialog::default(),
             last_focused_dbc_index: None,
             dbc_window_focus_request: None,
             signal_window_focus_request: None,
             last_focused_signal_window: None,
+            clipboard: ClipboardState::default(),
         }
     }
 }
@@ -359,9 +512,33 @@ impl UiState {
     }
 
     /// 获取当前聚焦的 DBC 窗口
-    #[allow(dead_code)]
     pub fn get_focused_dbc_window(&mut self) -> Option<&mut DbcWindowState> {
         let idx = self.last_focused_dbc_index?;
         self.dbc_windows.get_mut(idx)
+    }
+
+    /// 复制 Message 到剪贴板
+    pub fn copy_message(&mut self, message: &MessageRef) {
+        self.clipboard.copied_message = Some(message.to_custom_message());
+    }
+
+    /// 检查剪贴板是否有内容
+    pub fn has_clipboard_message(&self) -> bool {
+        self.clipboard.copied_message.is_some()
+    }
+
+    /// 生成下一个可用的 Message ID
+    pub fn generate_next_message_id(&self, dbc_window_index: usize) -> u32 {
+        if let Some(window) = self.dbc_windows.get(dbc_window_index) {
+            let all_messages = window.editable_data.get_all_messages();
+            let max_id = all_messages
+                .iter()
+                .map(|m| m.message_id())
+                .max()
+                .unwrap_or(0);
+            max_id + 1
+        } else {
+            0x100
+        }
     }
 }
