@@ -21,6 +21,354 @@ pub fn render_dialogs(ui: &Ui, ui_state: &mut UiState) {
     if ui_state.message_create_dialog.show {
         render_message_create_dialog(ui, ui_state);
     }
+
+    if ui_state.signal_edit_dialog.show {
+        render_signal_edit_dialog(ui, ui_state);
+    }
+
+    if ui_state.confirm_delete_dialog.show {
+        render_confirm_delete_dialog(ui, ui_state);
+    }
+}
+
+/// 渲染 Signal 编辑对话框
+pub fn render_signal_edit_dialog(ui: &Ui, ui_state: &mut crate::ui::state::UiState) {
+    if !ui_state.signal_edit_dialog.show {
+        return;
+    }
+
+    let mut should_apply = false;
+    let mut should_cancel = false;
+    let mut should_ok = false;
+
+    ui.window("Edit Signal")
+        .size([500.0, 420.0], imgui::Condition::FirstUseEver)
+        .position([120.0, 120.0], imgui::Condition::FirstUseEver)
+        .opened(&mut ui_state.signal_edit_dialog.show)
+        .build(|| {
+            ui.text("Signal Properties");
+            ui.separator();
+
+            ui.text("Name:");
+            ui.set_next_item_width(-1.0);
+            ui.input_text("##sig_name", &mut ui_state.signal_edit_dialog.name_buffer)
+                .build();
+
+            ui.spacing();
+            ui.columns(2, "sig_layout", false);
+
+            ui.text("Start Bit:");
+            ui.next_column();
+            ui.set_next_item_width(-1.0);
+            ui.input_text(
+                "##sig_start",
+                &mut ui_state.signal_edit_dialog.start_bit_buffer,
+            )
+            .build();
+            ui.next_column();
+
+            ui.text("Length:");
+            ui.next_column();
+            ui.set_next_item_width(-1.0);
+            ui.input_text("##sig_len", &mut ui_state.signal_edit_dialog.size_buffer)
+                .build();
+            ui.next_column();
+
+            ui.text("Byte Order (Intel):");
+            ui.next_column();
+            ui.checkbox(
+                "##sig_bo",
+                &mut ui_state.signal_edit_dialog.byte_order_is_little,
+            );
+            ui.next_column();
+
+            ui.text("Signed:");
+            ui.next_column();
+            ui.checkbox("##sig_signed", &mut ui_state.signal_edit_dialog.signed);
+            ui.next_column();
+
+            ui.text("Factor:");
+            ui.next_column();
+            ui.set_next_item_width(-1.0);
+            ui.input_text(
+                "##sig_factor",
+                &mut ui_state.signal_edit_dialog.factor_buffer,
+            )
+            .build();
+            ui.next_column();
+
+            ui.text("Offset:");
+            ui.next_column();
+            ui.set_next_item_width(-1.0);
+            ui.input_text(
+                "##sig_offset",
+                &mut ui_state.signal_edit_dialog.offset_buffer,
+            )
+            .build();
+            ui.next_column();
+
+            ui.text("Min:");
+            ui.next_column();
+            ui.set_next_item_width(-1.0);
+            ui.input_text("##sig_min", &mut ui_state.signal_edit_dialog.min_buffer)
+                .build();
+            ui.next_column();
+
+            ui.text("Max:");
+            ui.next_column();
+            ui.set_next_item_width(-1.0);
+            ui.input_text("##sig_max", &mut ui_state.signal_edit_dialog.max_buffer)
+                .build();
+            ui.next_column();
+
+            ui.text("Unit:");
+            ui.next_column();
+            ui.set_next_item_width(-1.0);
+            ui.input_text("##sig_unit", &mut ui_state.signal_edit_dialog.unit_buffer)
+                .build();
+            ui.next_column();
+
+            ui.columns(1, "sig_layout_end", false);
+
+            ui.spacing();
+            ui.text("Comment:");
+            ui.set_next_item_width(-1.0);
+            ui.input_text_multiline(
+                "##sig_comment",
+                &mut ui_state.signal_edit_dialog.comment_buffer,
+                [0.0, 60.0],
+            )
+            .build();
+
+            ui.separator();
+
+            if ui.button_with_size("OK", [80.0, 0.0]) {
+                should_ok = true;
+            }
+            ui.same_line();
+            if ui.button_with_size("Cancel", [80.0, 0.0]) {
+                should_cancel = true;
+            }
+            ui.same_line();
+            if ui.button_with_size("Apply", [80.0, 0.0]) {
+                should_apply = true;
+            }
+        });
+
+    // 处理按钮点击
+    if should_ok {
+        apply_signal_changes(ui_state);
+        ui_state.signal_edit_dialog.close();
+    } else if should_cancel {
+        ui_state.signal_edit_dialog.close();
+    } else if should_apply {
+        apply_signal_changes(ui_state);
+    }
+}
+
+/// 渲染删除确认对话框
+pub fn render_confirm_delete_dialog(ui: &Ui, ui_state: &mut UiState) {
+    if !ui_state.confirm_delete_dialog.show {
+        return;
+    }
+
+    // copy needed fields so we don't hold a mutable borrow across the UI closure
+    let parent_dbc_id = ui_state.confirm_delete_dialog.parent_dbc_id;
+    let message_id = ui_state.confirm_delete_dialog.message_id;
+    let display_name = ui_state.confirm_delete_dialog.display_name.clone();
+
+    ui.open_popup("Confirm Delete");
+    ui.modal_popup_config("Confirm Delete")
+        .resizable(false)
+        .build(|| {
+            ui.text("Confirm Delete");
+            ui.separator();
+            ui.text(format!(
+                "Delete message '{}' (0x{:03X})? This action can be undone.",
+                display_name, message_id
+            ));
+            ui.separator();
+
+            let mut do_delete = false;
+            if ui.button_with_size("Delete", [80.0, 0.0]) {
+                do_delete = true;
+            }
+            ui.same_line();
+            if ui.button_with_size("Cancel", [80.0, 0.0]) {
+                // cancel
+                ui_state.confirm_delete_dialog.show = false;
+            }
+
+            if do_delete {
+                // perform delete on the specified parent window
+                if let Some(idx) = ui_state
+                    .dbc_windows
+                    .iter()
+                    .position(|w| w.id == parent_dbc_id)
+                {
+                    if ui_state
+                        .ensure_message_not_in_open_signal_windows(message_id)
+                        .is_ok()
+                    {
+                        if let Some(window) = ui_state.dbc_windows.get_mut(idx) {
+                            let before_snapshot =
+                                crate::dbc::OverridesSnapshot::from_editable(&window.editable_data);
+                            window.editable_data.delete_message(message_id);
+                            let after_snapshot =
+                                crate::dbc::OverridesSnapshot::from_editable(&window.editable_data);
+                            window.push_undo(
+                                crate::ui::state::UndoOperationKind::DeleteMessage { message_id },
+                                &before_snapshot,
+                                &after_snapshot,
+                            );
+                            window.selected_message_id = None;
+                        }
+                    }
+                }
+                ui_state.confirm_delete_dialog.show = false;
+            }
+        });
+}
+fn apply_signal_changes(ui_state: &mut crate::ui::state::UiState) {
+    // 解析并写回覆盖层或直接修改 CustomMessage
+    let parent = ui_state.signal_edit_dialog.parent_dbc_id;
+    let message_id = ui_state.signal_edit_dialog.message_id;
+
+    // 准备 snapshot for undo
+    if let Some(dbc_window) = ui_state.dbc_windows.iter_mut().find(|w| w.id == parent) {
+        let before = crate::dbc::OverridesSnapshot::from_editable(&dbc_window.editable_data);
+
+        // 尝试找到对应 signal（按 name）并修改
+        let sig_name = ui_state.signal_edit_dialog.name_buffer.trim().to_string();
+
+        // parse numeric fields
+        let start_bit_opt = ui_state
+            .signal_edit_dialog
+            .start_bit_buffer
+            .trim()
+            .parse::<u64>()
+            .ok();
+        let size_opt = ui_state
+            .signal_edit_dialog
+            .size_buffer
+            .trim()
+            .parse::<u64>()
+            .ok();
+        let factor = ui_state
+            .signal_edit_dialog
+            .factor_buffer
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .unwrap_or(1.0);
+        let offset = ui_state
+            .signal_edit_dialog
+            .offset_buffer
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .unwrap_or(0.0);
+        let minimum = ui_state
+            .signal_edit_dialog
+            .min_buffer
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .unwrap_or(0.0);
+        let maximum = ui_state
+            .signal_edit_dialog
+            .max_buffer
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .unwrap_or(0.0);
+
+        // Validate start_bit and size
+        // Determine message size in bits (consider overrides)
+        let msg_size_bytes = dbc_window.editable_data.get_message_size(message_id, 8);
+        let msg_size_bits = msg_size_bytes.saturating_mul(8);
+
+        if start_bit_opt.is_none() || size_opt.is_none() {
+            ui_state.error_dialog.message =
+                format!("Invalid start bit or length: must be integer values");
+            ui_state.error_dialog.show = true;
+            return;
+        }
+
+        let start_bit = start_bit_opt.unwrap();
+        let size = size_opt.unwrap();
+
+        if size == 0 || size > msg_size_bits {
+            ui_state.error_dialog.message = format!(
+                "Invalid signal length: {} bits (message has {} bits)",
+                size, msg_size_bits
+            );
+            ui_state.error_dialog.show = true;
+            return;
+        }
+
+        if start_bit >= msg_size_bits {
+            ui_state.error_dialog.message = format!(
+                "Start bit {} out of range (message has {} bits)",
+                start_bit, msg_size_bits
+            );
+            ui_state.error_dialog.show = true;
+            return;
+        }
+
+        // Store a SignalOverride in editable_data.signal_overrides for both original and custom messages
+        let override_entry = crate::dbc::SignalOverride {
+            name: sig_name.clone(),
+            start_bit: start_bit,
+            signal_size: size,
+            byte_order: if ui_state.signal_edit_dialog.byte_order_is_little {
+                crate::dbc::ByteOrder::LittleEndian
+            } else {
+                crate::dbc::ByteOrder::BigEndian
+            },
+            value_type: if ui_state.signal_edit_dialog.signed {
+                crate::dbc::ValueType::Signed
+            } else {
+                crate::dbc::ValueType::Unsigned
+            },
+            factor,
+            offset,
+            minimum,
+            maximum,
+            unit: ui_state.signal_edit_dialog.unit_buffer.trim().to_string(),
+            comment: ui_state
+                .signal_edit_dialog
+                .comment_buffer
+                .trim()
+                .to_string(),
+        };
+
+        dbc_window
+            .editable_data
+            .signal_overrides
+            .insert((message_id, sig_name.clone()), override_entry);
+
+        let after = crate::dbc::OverridesSnapshot::from_editable(&dbc_window.editable_data);
+        let undo_op = crate::ui::state::UndoOperationKind::ModifySignal {
+            message_id,
+            signal_name: sig_name.clone(),
+        };
+        // record undo
+        dbc_window.push_undo(undo_op, &before, &after);
+
+        // Update any open Signal windows showing this message so they reflect the new overrides
+        if let Some(message_ref) = dbc_window.editable_data.get_message_ref_by_id(message_id) {
+            let new_view = crate::ui::view::MessageView::from_message_ref(
+                &message_ref,
+                &dbc_window.editable_data,
+            );
+            for sw in ui_state.signal_windows.iter_mut() {
+                if sw.parent_dbc_id == parent && sw.message.message_id == message_id {
+                    sw.message = new_view.clone();
+                }
+            }
+        }
+    }
 }
 
 /// 渲染错误对话框
@@ -618,15 +966,13 @@ fn handle_create_message(ui_state: &mut UiState) {
         // 创建操作前快照
         let before_snapshot = OverridesSnapshot::from_editable(&dbc_window.editable_data);
 
-        // 创建新消息
-        let new_message = CustomMessage {
-            message_id,
-            message_name: name.clone(),
-            message_size: size,
-            transmitter,
-            comment,
-            signals: Vec::new(),
-        };
+        // 创建新消息（使用 CustomMessage::new 并设置字段）
+        let mut new_message = CustomMessage::new(message_id);
+        new_message.message_name = name.clone();
+        new_message.message_size = size;
+        new_message.transmitter = transmitter;
+        new_message.comment = comment;
+        new_message.signals = Vec::new();
 
         // 添加消息
         dbc_window.editable_data.add_message(new_message);

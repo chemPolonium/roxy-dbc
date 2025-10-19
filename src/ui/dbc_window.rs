@@ -1,6 +1,5 @@
 //! DBC 窗口渲染模块
 
-use crate::dbc::{Message, Signal};
 use crate::ui::state::{DbcWindowState, UiState};
 use imgui::{
     Condition, TableBgTarget, TableColumnFlags, TableColumnSetup, TableFlags, TableSortDirection,
@@ -14,6 +13,8 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
     let mut edit_request_ids = Vec::new(); // 收集编辑请求，稍后处理
     let mut copy_request_ids = Vec::new(); // 收集复制请求，稍后处理
     let mut paste_requests = Vec::new(); // 收集粘贴请求，稍后处理
+    let mut delete_request_ids = Vec::new(); // 收集删除请求，稍后处理
+    let mut signal_edit_requests: Vec<(u32, String, usize)> = Vec::new(); // (message_id, signal_name, parent_dbc_id)
 
     for (index, window) in ui_state.dbc_windows.iter_mut().enumerate() {
         request_window_focus_if_needed(ui_state.dbc_window_focus_request, window.id);
@@ -52,17 +53,84 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
             copy_request_ids.push((msg_id, window.id));
         }
 
+        // collect delete request if window set it during rendering
+        if let Some(msg_id) = window.pending_delete_message.take() {
+            delete_request_ids.push((msg_id, window.id));
+        }
+
         if paste_requested {
             paste_requests.push(window.id);
+        }
+
+        // check if this window reported a pending signal edit (set during tooltip handling)
+        if let Some((msg_id, sig_name)) = window.pending_signal_edit.take() {
+            signal_edit_requests.push((msg_id, sig_name, window.id));
         }
     }
 
     // 处理所有双击事件
     for (message_id, parent_dbc_id) in clicked_message_ids {
-        if let Some(dbc_window) = ui_state.dbc_windows.iter().find(|w| w.id == parent_dbc_id) {
-            // 尝试获取 Message（只支持原始 Message 的双击打开信号窗口）
-            if let Some(message) = dbc_window.editable_data.get_message_by_id(message_id) {
-                handle_message_double_click(ui_state, &message, parent_dbc_id);
+        // call handler with ids; the handler will perform mutable lookup inside to avoid borrow conflicts
+        handle_message_double_click(ui_state, message_id, parent_dbc_id);
+    }
+
+    // 处理所有信号编辑请求（来自 tooltip 双击信号名）
+    for (message_id, signal_name, parent_dbc_id) in signal_edit_requests {
+        // 找到对应的 DBC 窗口
+        if let Some(dbc_window) = ui_state
+            .dbc_windows
+            .iter_mut()
+            .find(|w| w.id == parent_dbc_id)
+        {
+            // 使用 MessageRef 来支持原始和新建的 Message
+            if let Some(message_ref) = dbc_window.editable_data.get_message_ref_by_id(message_id) {
+                // 打开并初始化 SignalEditDialog
+                ui_state.signal_edit_dialog.open(parent_dbc_id, message_id);
+
+                // Try to populate fields from overrides first
+                if let Some(ov) = dbc_window
+                    .editable_data
+                    .signal_overrides
+                    .get(&(message_id, signal_name.clone()))
+                {
+                    ui_state.signal_edit_dialog.name_buffer = ov.name.clone();
+                    ui_state.signal_edit_dialog.original_name = ov.name.clone();
+                    ui_state.signal_edit_dialog.start_bit_buffer = ov.start_bit.to_string();
+                    ui_state.signal_edit_dialog.size_buffer = ov.signal_size.to_string();
+                    ui_state.signal_edit_dialog.byte_order_is_little =
+                        matches!(ov.byte_order, crate::dbc::ByteOrder::LittleEndian);
+                    ui_state.signal_edit_dialog.signed =
+                        matches!(ov.value_type, crate::dbc::ValueType::Signed);
+                    ui_state.signal_edit_dialog.factor_buffer = ov.factor.to_string();
+                    ui_state.signal_edit_dialog.offset_buffer = ov.offset.to_string();
+                    ui_state.signal_edit_dialog.min_buffer = ov.minimum.to_string();
+                    ui_state.signal_edit_dialog.max_buffer = ov.maximum.to_string();
+                    ui_state.signal_edit_dialog.unit_buffer = ov.unit.clone();
+                    ui_state.signal_edit_dialog.comment_buffer = ov.comment.clone();
+                } else {
+                    // Build a MessageView and find the SignalView by name (avoid using can_dbc::Signal in UI path)
+                    let view = crate::ui::view::MessageView::from_message_ref(
+                        &message_ref,
+                        &dbc_window.editable_data,
+                    );
+                    if let Some(sig_view) = view.signals.iter().find(|s| s.name == signal_name) {
+                        ui_state.signal_edit_dialog.name_buffer = sig_view.name.clone();
+                        ui_state.signal_edit_dialog.original_name = sig_view.name.clone();
+                        ui_state.signal_edit_dialog.start_bit_buffer =
+                            sig_view.start_bit.to_string();
+                        ui_state.signal_edit_dialog.size_buffer = sig_view.signal_size.to_string();
+                        ui_state.signal_edit_dialog.byte_order_is_little =
+                            matches!(sig_view.byte_order, crate::dbc::ByteOrder::LittleEndian);
+                        ui_state.signal_edit_dialog.signed =
+                            matches!(sig_view.value_type, crate::dbc::ValueType::Signed);
+                        ui_state.signal_edit_dialog.factor_buffer = sig_view.factor.to_string();
+                        ui_state.signal_edit_dialog.offset_buffer = sig_view.offset.to_string();
+                        ui_state.signal_edit_dialog.min_buffer = sig_view.minimum.to_string();
+                        ui_state.signal_edit_dialog.max_buffer = sig_view.maximum.to_string();
+                        ui_state.signal_edit_dialog.unit_buffer = sig_view.unit.clone();
+                        ui_state.signal_edit_dialog.comment_buffer = sig_view.comment.clone();
+                    }
+                }
             }
         }
     }
@@ -107,6 +175,23 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
             .position(|w| w.id == parent_dbc_id)
         {
             handle_paste_message(ui_state, dbc_index);
+        }
+    }
+
+    // If any delete requests were collected during rendering, open the confirmation dialog for the first one
+    if let Some((message_id, parent_dbc_id)) = delete_request_ids.into_iter().next() {
+        if let Some(idx) = ui_state
+            .dbc_windows
+            .iter()
+            .position(|w| w.id == parent_dbc_id)
+        {
+            ui_state.confirm_delete_dialog.show = true;
+            ui_state.confirm_delete_dialog.parent_dbc_id = parent_dbc_id;
+            ui_state.confirm_delete_dialog.message_id = message_id;
+            ui_state.confirm_delete_dialog.display_name = ui_state.dbc_windows[idx]
+                .pending_confirm_delete_display_name
+                .take()
+                .unwrap_or_else(|| format!("Message 0x{:03X}", message_id));
         }
     }
 
@@ -246,7 +331,7 @@ fn render_dbc_search_bar(ui: &Ui, window_state: &mut DbcWindowState) {
     ui.separator();
 }
 
-/// Message 和所有显示属性的打包结构
+/// Message and all display attributes packaged for UI
 #[derive(Clone)]
 struct MessageWithDisplayData {
     message_id: u32,
@@ -255,7 +340,7 @@ struct MessageWithDisplayData {
     display_id: u32,
     display_size: u64,
     signals_count: usize,
-    signals: Vec<Signal>,
+    view: crate::ui::view::MessageView,
 }
 
 /// 渲染消息列表表格
@@ -279,19 +364,21 @@ fn render_messages_table(
             let display_size = window_state
                 .editable_data
                 .get_message_size(original_id, m.message_size());
+            let view =
+                crate::ui::view::MessageView::from_message_ref(m, &window_state.editable_data);
             MessageWithDisplayData {
                 message_id: original_id,
                 message_name: m.message_name().to_string(),
                 display_name,
                 display_id,
                 display_size,
-                signals_count: m.signals().len(),
-                signals: m.signals().to_vec(),
+                signals_count: view.signals.len(),
+                view,
             }
         })
         .collect();
 
-    let selected_message_id = &mut window_state.selected_message_id;
+    // use window_state.selected_message_id directly
 
     ui.child_window("messages_list")
         .size([0.0, 0.0])
@@ -312,11 +399,7 @@ fn render_messages_table(
                 // 排序（Message 和所有显示数据一起排序）
                 let sorted_messages_with_data = sort_messages_with_data(ui, messages_with_data);
 
-                return render_messages_rows_with_data(
-                    ui,
-                    selected_message_id,
-                    sorted_messages_with_data,
-                );
+                return render_messages_rows_with_data(ui, window_state, sorted_messages_with_data);
             }
             (None, None, None, false)
         })
@@ -354,7 +437,7 @@ fn setup_messages_table_columns(ui: &Ui) {
 /// 渲染消息表格的行（使用打包的消息和所有显示数据）
 fn render_messages_rows_with_data(
     ui: &Ui,
-    selected_message_id: &mut Option<u32>,
+    window_state: &mut DbcWindowState,
     messages_with_data: Vec<MessageWithDisplayData>,
 ) -> (Option<u32>, Option<u32>, Option<u32>, bool) {
     let mut double_clicked_message_id = None;
@@ -372,7 +455,7 @@ fn render_messages_rows_with_data(
 
         ui.table_next_row();
 
-        let selected = *selected_message_id == Some(message_id);
+        let selected = window_state.selected_message_id == Some(message_id);
 
         if selected {
             ui.table_set_bg_color(TableBgTarget::ROW_BG0, [0.3, 0.3, 0.7, 0.65]);
@@ -385,12 +468,17 @@ fn render_messages_rows_with_data(
             .span_all_columns(true)
             .build()
         {
-            *selected_message_id = Some(message_id);
+            window_state.selected_message_id = Some(message_id);
         }
 
         // 检测鼠标悬停在这一行上
         if ui.is_item_hovered() {
-            render_signal_popup_with_table(ui, message_name, message_id, &item.signals);
+            // render signal tooltip; if a signal name was double-clicked in tooltip, request signal edit
+            if let Some(sig_name) =
+                render_signal_popup_with_table(ui, message_name, message_id, &item.view.signals)
+            {
+                window_state.pending_signal_edit = Some((message_id, sig_name));
+            }
 
             // 检测双击事件
             if ui.is_mouse_double_clicked(imgui::MouseButton::Left) {
@@ -402,7 +490,7 @@ fn render_messages_rows_with_data(
         let popup_id = format!("message_context_menu_{}", message_id);
         if ui.is_item_clicked_with_button(imgui::MouseButton::Right) {
             // 右键点击时也要选中该行
-            *selected_message_id = Some(message_id);
+            window_state.selected_message_id = Some(message_id);
             ui.open_popup(&popup_id);
         }
 
@@ -420,6 +508,16 @@ fn render_messages_rows_with_data(
 
             if ui.menu_item("Paste") {
                 paste_requested = true;
+            }
+
+            if ui.menu_item("Delete") {
+                // mark pending delete on the window and store a display name for confirmation
+                window_state.pending_delete_message = Some(message_id);
+                window_state.pending_confirm_delete_display_name = Some(
+                    window_state
+                        .editable_data
+                        .get_message_name(message_id, message_name.as_str()),
+                );
             }
 
             // 未来可以添加更多选项
@@ -443,7 +541,7 @@ fn render_messages_rows_with_data(
 
         // Ctrl+C: 复制选中的消息
         if io.key_ctrl && ui.is_key_pressed(imgui::Key::C) {
-            if let Some(msg_id) = *selected_message_id {
+            if let Some(msg_id) = window_state.selected_message_id {
                 copy_requested_message_id = Some(msg_id);
             }
         }
@@ -467,8 +565,9 @@ fn render_signal_popup_with_table(
     ui: &Ui,
     message_name: &str,
     message_id: u32,
-    signals: &[Signal],
-) {
+    signals: &[crate::ui::view::SignalView],
+) -> Option<String> {
+    let requested: Option<String> = None;
     ui.tooltip(|| {
         ui.text(format!("Message: {} (0x{:03X})", message_name, message_id));
         ui.separator();
@@ -482,7 +581,7 @@ fn render_signal_popup_with_table(
         ui.text(format!("Signals: {}", signals.len()));
         ui.separator();
 
-        // 创建一个信号表格
+        // 创建一个非交互的信号表格（tooltip 本身不支持可靠交互，因此不捕获双击）
         if let Some(_table) = ui.begin_table_with_flags(
             "popup_signals_table",
             6, // 显示更多列：Name, Start Bit, Length, Byte Order, Factor, Unit
@@ -502,26 +601,27 @@ fn render_signal_popup_with_table(
                 ui.table_next_row();
 
                 ui.table_set_column_index(0);
-                ui.text(signal.name());
+                // tooltip 内仅显示文本，避免交互
+                ui.text(&signal.name);
 
                 ui.table_set_column_index(1);
-                ui.text(format!("{}", signal.start_bit()));
+                ui.text(format!("{}", signal.start_bit));
 
                 ui.table_set_column_index(2);
-                ui.text(format!("{}", signal.signal_size()));
+                ui.text(format!("{}", signal.signal_size));
 
                 ui.table_set_column_index(3);
-                let byte_order = match signal.byte_order() {
-                    can_dbc::ByteOrder::LittleEndian => "LE",
-                    can_dbc::ByteOrder::BigEndian => "BE",
+                let byte_order = match signal.byte_order {
+                    crate::dbc::ByteOrder::LittleEndian => "LE",
+                    crate::dbc::ByteOrder::BigEndian => "BE",
                 };
                 ui.text(byte_order);
 
                 ui.table_set_column_index(4);
-                ui.text(format!("{:.2}", signal.factor()));
+                ui.text(format!("{:.2}", signal.factor));
 
                 ui.table_set_column_index(5);
-                ui.text(signal.unit());
+                ui.text(&signal.unit);
             }
 
             if signals.len() > 10 {
@@ -532,70 +632,14 @@ fn render_signal_popup_with_table(
         }
 
         ui.separator();
-        ui.text_colored([0.7, 0.7, 0.7, 1.0], "Double-click to view all signals");
+        ui.text_colored([0.7, 0.7, 0.7, 1.0], "Open the full Signal window (double-click a message) or right-click in the Signal window to Edit...");
     });
+    requested
 }
 
-/// 渲染信号详情弹出窗口
-fn render_signal_popup(ui: &Ui, message: &Message) {
-    ui.tooltip(|| {
-        ui.text(format!(
-            "Message: {} (0x{:03X})",
-            message.message_name(),
-            message.message_id().raw()
-        ));
-        ui.separator();
-
-        if message.signals().is_empty() {
-            ui.text("No signals in this message");
-            return;
-        }
-
-        // 创建一个简化的信号表格
-        if let Some(_table) = ui.begin_table_with_flags(
-            "popup_signals_table",
-            5, // 减少列数，只显示关键信息
-            TableFlags::BORDERS | TableFlags::SIZING_FIXED_FIT,
-        ) {
-            // 设置表格列
-            ui.table_setup_column("Signal");
-            ui.table_setup_column("Start");
-            ui.table_setup_column("Length");
-            ui.table_setup_column("Factor");
-            ui.table_setup_column("Unit");
-            ui.table_headers_row();
-
-            // 显示前几个信号（避免popup过大）
-            for signal in message.signals().iter().take(10) {
-                ui.table_next_row();
-
-                ui.table_set_column_index(0);
-                ui.text(signal.name());
-
-                ui.table_set_column_index(1);
-                ui.text(format!("{}", signal.start_bit()));
-
-                ui.table_set_column_index(2);
-                ui.text(format!("{}", signal.signal_size()));
-
-                ui.table_set_column_index(3);
-                ui.text(format!("{}", signal.factor()));
-
-                ui.table_set_column_index(4);
-                ui.text(signal.unit());
-            }
-
-            if message.signals().len() > 10 {
-                ui.table_next_row();
-                ui.table_set_column_index(0);
-                ui.text(format!(
-                    "... and {} more signals",
-                    message.signals().len() - 10
-                ));
-            }
-        }
-    });
-}
+// Note: previous helper `render_signal_popup` removed — tooltip now handled by
+// `render_signal_popup_with_table` which returns an edit request when a signal
+// name is double-clicked.
 
 /// 排序消息列表（使用打包的消息和所有显示数据）
 fn sort_messages_with_data(
@@ -629,29 +673,42 @@ fn sort_messages_with_data(
 }
 
 /// 处理消息双击事件，打开或聚焦对应的 Signal 窗口
-fn handle_message_double_click(ui_state: &mut UiState, message: &Message, parent_dbc_id: usize) {
-    let msg_id = message.message_id().raw();
-
+fn handle_message_double_click(ui_state: &mut UiState, message_id: u32, parent_dbc_id: usize) {
+    // first check if a signal window for this message is already open
     if let Some(existing_idx) = ui_state
         .signal_windows
         .iter()
-        .position(|w| w.message.message_id().raw() == msg_id && w.parent_dbc_id == parent_dbc_id)
+        .position(|w| w.message.message_id == message_id && w.parent_dbc_id == parent_dbc_id)
     {
-        // 窗口已存在，请求聚焦
         let existing_id = ui_state.signal_windows[existing_idx].id;
         ui_state.signal_window_focus_request = Some(existing_id);
-    } else {
-        // 创建新窗口
-        let new_id = ui_state.signal_windows.len();
-        ui_state
-            .signal_windows
-            .push(crate::ui::state::SignalWindowState {
-                id: new_id,
-                message: message.clone(),
-                is_open: true,
-                parent_dbc_id,
-            });
-        ui_state.signal_window_focus_request = Some(new_id);
+        return;
+    }
+
+    // otherwise create a new Signal window by finding the corresponding DBC window mutably
+    if let Some(dbc_window) = ui_state
+        .dbc_windows
+        .iter_mut()
+        .find(|w| w.id == parent_dbc_id)
+    {
+        if let Some(message_ref) = dbc_window.editable_data.get_message_ref_by_id(message_id) {
+            let view = crate::ui::view::MessageView::from_message_ref(
+                &message_ref,
+                &dbc_window.editable_data,
+            );
+            let new_id = ui_state.signal_windows.len();
+            ui_state
+                .signal_windows
+                .push(crate::ui::state::SignalWindowState {
+                    id: new_id,
+                    message: view,
+                    is_open: true,
+                    parent_dbc_id,
+                    pending_signal_edit: None,
+                    selected_signal_name: None,
+                });
+            ui_state.signal_window_focus_request = Some(new_id);
+        }
     }
 }
 

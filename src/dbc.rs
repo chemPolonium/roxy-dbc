@@ -56,17 +56,10 @@ impl DbcData {
         }
     }
 
-    /// 获取DBC对象的引用
-    #[allow(dead_code)]
-    pub fn dbc(&self) -> Option<&DBC> {
-        self.dbc.as_ref()
-    }
-
-    /// 获取消息数量
-    #[allow(dead_code)]
-    pub fn message_count(&self) -> usize {
-        self.dbc.as_ref().map_or(0, |dbc| dbc.messages().len())
-    }
+    // 获取DBC对象的引用
+    // Note: direct accessors `dbc()` and `message_count()` were removed as they were
+    // unused at runtime. Access to parsed DBC is kept via `EditableDbcData` and
+    // conversion helpers (MessageRef / MessageView) for UI-safe usage.
 }
 
 /// 自定义 Message 结构（用于新建的 Message）
@@ -78,6 +71,22 @@ pub struct CustomMessage {
     pub transmitter: String,
     pub comment: String,
     pub signals: Vec<Signal>,
+}
+
+/// 对单个 Signal 的覆盖表示（只存储可编辑字段）
+#[derive(Debug, Clone)]
+pub struct SignalOverride {
+    pub name: String,
+    pub start_bit: u64,
+    pub signal_size: u64,
+    pub byte_order: ByteOrder,
+    pub value_type: ValueType,
+    pub factor: f64,
+    pub offset: f64,
+    pub minimum: f64,
+    pub maximum: f64,
+    pub unit: String,
+    pub comment: String,
 }
 
 impl CustomMessage {
@@ -94,6 +103,7 @@ impl CustomMessage {
     }
 
     /// 创建一个空的新 Message
+    #[allow(dead_code)]
     pub fn new(message_id: u32) -> Self {
         Self {
             message_id,
@@ -145,6 +155,9 @@ pub struct EditableDbcData {
     /// 新建的 Message 列表 (message_id -> CustomMessage)
     pub added_messages: HashMap<u32, CustomMessage>,
 
+    /// Signal 级别的覆盖 (message_id, signal_name) -> SignalOverride
+    pub signal_overrides: HashMap<(u32, String), SignalOverride>,
+
     /// 被删除的 Message ID 集合
     pub deleted_message_ids: HashSet<u32>,
 }
@@ -160,6 +173,7 @@ impl EditableDbcData {
             message_size_overrides: HashMap::new(),
             message_transmitter_overrides: HashMap::new(),
             added_messages: HashMap::new(),
+            signal_overrides: HashMap::new(),
             deleted_message_ids: HashSet::new(),
         }
     }
@@ -180,6 +194,7 @@ impl EditableDbcData {
         self.message_size_overrides.clear();
         self.message_transmitter_overrides.clear();
         self.added_messages.clear();
+        self.signal_overrides.clear();
         self.deleted_message_ids.clear();
         Ok(())
     }
@@ -301,23 +316,10 @@ impl EditableDbcData {
         self.deleted_message_ids.insert(message_id);
     }
 
-    /// 检查 Message 是否被删除
-    pub fn is_message_deleted(&self, message_id: u32) -> bool {
-        self.deleted_message_ids.contains(&message_id)
-    }
-
-    /// 检查 Message 是否是新建的
-    pub fn is_message_added(&self, message_id: u32) -> bool {
-        self.added_messages.contains_key(&message_id)
-    }
-
-    /// 获取新建的 Message
-    pub fn get_added_message(&self, message_id: u32) -> Option<&CustomMessage> {
-        self.added_messages.get(&message_id)
-    }
+    // (Removed unused helper methods: is_message_deleted, is_message_added, get_added_message)
 
     /// 获取所有可见的 Message（基础 + 新建 - 删除）
-    pub fn get_all_messages(&self) -> Vec<MessageRef> {
+    pub fn get_all_messages(&self) -> Vec<MessageRef<'_>> {
         let mut messages = Vec::new();
 
         // 添加基础 DBC 中未删除的 Message
@@ -339,7 +341,7 @@ impl EditableDbcData {
     }
 
     /// 搜索包含指定关键词的消息（考虑名称覆盖、新建和删除）
-    pub fn search_messages(&self, query: &str) -> Vec<MessageRef> {
+    pub fn search_messages(&self, query: &str) -> Vec<MessageRef<'_>> {
         let all_messages = self.get_all_messages();
 
         if query.is_empty() {
@@ -399,17 +401,9 @@ impl EditableDbcData {
             || !self.deleted_message_ids.is_empty()
     }
 
-    /// 清空所有修改
-    #[allow(dead_code)]
-    pub fn clear_modifications(&mut self) {
-        self.message_name_overrides.clear();
-        self.message_comment_overrides.clear();
-        self.message_id_overrides.clear();
-        self.message_size_overrides.clear();
-        self.message_transmitter_overrides.clear();
-        self.added_messages.clear();
-        self.deleted_message_ids.clear();
-    }
+    // 清空所有修改
+    // clear_modifications removed (unused). Clearing of specific override maps
+    // is performed where appropriate in load/reset code paths.
 
     /// 获取修改数量
     pub fn modification_count(&self) -> usize {
@@ -424,22 +418,12 @@ impl EditableDbcData {
 
     /// 根据 message_id 获取 Message（用于双击操作）
     /// 注意：只返回原始 Message，不返回新建的 CustomMessage
-    pub fn get_message_by_id(&self, message_id: u32) -> Option<Message> {
-        // 先检查是否在原始 DBC 中
-        if let Some(dbc) = self.base.dbc.as_ref() {
-            for msg in dbc.messages() {
-                if msg.message_id().raw() == message_id
-                    && !self.deleted_message_ids.contains(&message_id)
-                {
-                    return Some(msg.clone());
-                }
-            }
-        }
-        None
-    }
+    // Note: direct parser accessors (like get_message_by_id) should be avoided at runtime.
+    // Use MessageRef / MessageView conversion helpers during import to provide UI-safe
+    // representations. Unused parser-dependent accessors were removed per project policy.
 
     /// 根据 message_id 获取 MessageRef（支持原始和新建的 Message）
-    pub fn get_message_ref_by_id(&self, message_id: u32) -> Option<MessageRef> {
+    pub fn get_message_ref_by_id(&self, message_id: u32) -> Option<MessageRef<'_>> {
         // 先检查是否在原始 DBC 中
         if let Some(dbc) = self.base.dbc.as_ref() {
             for msg in dbc.messages() {
@@ -508,10 +492,7 @@ impl<'a> MessageRef<'a> {
         }
     }
 
-    /// 检查是否是自定义 Message
-    pub fn is_custom(&self) -> bool {
-        matches!(self, MessageRef::Custom(_))
-    }
+    // 检查是否是自定义 Message (removed)
 }
 
 impl Default for EditableDbcData {
@@ -532,6 +513,7 @@ pub struct OverridesSnapshot {
     pub message_size_overrides: HashMap<u32, u64>,
     pub message_transmitter_overrides: HashMap<u32, String>,
     pub added_messages: HashMap<u32, CustomMessage>,
+    pub signal_overrides: HashMap<(u32, String), SignalOverride>,
     pub deleted_message_ids: HashSet<u32>,
 }
 
@@ -545,6 +527,7 @@ impl OverridesSnapshot {
             message_size_overrides: data.message_size_overrides.clone(),
             message_transmitter_overrides: data.message_transmitter_overrides.clone(),
             added_messages: data.added_messages.clone(),
+            signal_overrides: data.signal_overrides.clone(),
             deleted_message_ids: data.deleted_message_ids.clone(),
         }
     }
@@ -557,6 +540,7 @@ impl OverridesSnapshot {
         data.message_size_overrides = self.message_size_overrides.clone();
         data.message_transmitter_overrides = self.message_transmitter_overrides.clone();
         data.added_messages = self.added_messages.clone();
+        data.signal_overrides = self.signal_overrides.clone();
         data.deleted_message_ids = self.deleted_message_ids.clone();
     }
 }

@@ -12,6 +12,7 @@ mod dialogs;
 mod menu;
 mod signal_window;
 pub mod state;
+mod view;
 
 use imgui::Ui;
 use std::time::Duration;

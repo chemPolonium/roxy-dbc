@@ -38,7 +38,7 @@ fn get_context_label(ui_state: &UiState) -> Option<String> {
             {
                 let file_part =
                     format_file_label(&parent.editable_data.base.file_path, "(message)");
-                return Some(format!("{}/{}", file_part, sw.message.message_name()));
+                return Some(format!("{}/{}", file_part, &sw.message.message_name));
             }
         }
     }
@@ -190,7 +190,7 @@ fn render_message_edit_menu_items(ui: &Ui, ui_state: &mut UiState) {
 }
 
 /// 处理删除消息请求
-fn handle_delete_message(ui_state: &mut UiState, message_id: u32) {
+pub(crate) fn handle_delete_message(ui_state: &mut UiState, message_id: u32) {
     // 检查是否有打开的 Signal 窗口引用这个消息
     if ui_state
         .ensure_message_not_in_open_signal_windows(message_id)
@@ -238,7 +238,7 @@ fn handle_delete_message(ui_state: &mut UiState, message_id: u32) {
 /// 生成建议的消息ID（找到第一个未使用的ID）
 fn generate_suggested_message_id(window: &DbcWindowState) -> u32 {
     let all_messages = window.editable_data.get_all_messages();
-    let mut used_ids: std::collections::HashSet<u32> =
+    let used_ids: std::collections::HashSet<u32> =
         all_messages.iter().map(|m| m.message_id()).collect();
 
     // 从0x100开始查找第一个未使用的ID

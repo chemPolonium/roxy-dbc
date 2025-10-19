@@ -1,6 +1,26 @@
 //! UI 状态管理模块
 
-use crate::dbc::{CustomMessage, EditableDbcData, Message, MessageRef, OverridesSnapshot};
+use crate::dbc::{CustomMessage, EditableDbcData, MessageRef, OverridesSnapshot};
+use crate::ui::view::MessageView;
+
+/// Confirmation dialog state for delete operations
+pub struct ConfirmDeleteDialog {
+    pub show: bool,
+    pub parent_dbc_id: usize,
+    pub message_id: u32,
+    pub display_name: String,
+}
+
+impl Default for ConfirmDeleteDialog {
+    fn default() -> Self {
+        Self {
+            show: false,
+            parent_dbc_id: 0,
+            message_id: 0,
+            display_name: String::new(),
+        }
+    }
+}
 
 /// DBC 窗口状态
 #[derive(Clone)]
@@ -13,6 +33,12 @@ pub struct DbcWindowState {
     // Undo/Redo 支持
     pub undo_stack: Vec<UndoEntry>,
     pub redo_stack: Vec<UndoEntry>,
+    // 临时存放信号编辑请求 (message_id, signal_name)
+    pub pending_signal_edit: Option<(u32, String)>,
+    // pending deletion request from per-row context menu
+    pub pending_delete_message: Option<u32>,
+    // optional display name for pending delete (to show in confirmation dialog)
+    pub pending_confirm_delete_display_name: Option<String>,
 }
 
 /// 可撤销的操作类型
@@ -43,6 +69,11 @@ pub enum UndoOperationKind {
         message_id: u32,
         old_transmitter: String,
         new_transmitter: String,
+    },
+    ModifySignal {
+        message_id: u32,
+        signal_name: String,
+        // could store before/after minimal fields if desired
     },
     AddMessage {
         message_id: u32,
@@ -78,6 +109,9 @@ impl DbcWindowState {
             is_open: true,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            pending_signal_edit: None,
+            pending_delete_message: None,
+            pending_confirm_delete_display_name: None,
         }
     }
 
@@ -155,26 +189,36 @@ impl DbcWindowState {
     }
 
     /// 获取最后一次撤销操作的描述
-    pub fn last_undo_description(&self) -> Option<&'static str> {
-        self.undo_stack.last().map(describe_undo_operation)
+    pub fn last_undo_description(&self) -> Option<String> {
+        self.undo_stack
+            .last()
+            .map(|entry| describe_undo_operation(entry))
     }
 
     /// 获取最后一次重做操作的描述
-    pub fn last_redo_description(&self) -> Option<&'static str> {
-        self.redo_stack.last().map(describe_undo_operation)
+    pub fn last_redo_description(&self) -> Option<String> {
+        self.redo_stack
+            .last()
+            .map(|entry| describe_undo_operation(entry))
     }
 }
 
 /// 描述撤销/重做操作
-pub fn describe_undo_operation(entry: &UndoEntry) -> &'static str {
+pub fn describe_undo_operation(entry: &UndoEntry) -> String {
     match &entry.op {
-        UndoOperationKind::RenameMessage { .. } => "Rename Message",
-        UndoOperationKind::ModifyMessageComment { .. } => "Modify Comment",
-        UndoOperationKind::ModifyMessageId { .. } => "Modify ID",
-        UndoOperationKind::ModifyMessageSize { .. } => "Modify Size",
-        UndoOperationKind::ModifyMessageTransmitter { .. } => "Modify Transmitter",
-        UndoOperationKind::AddMessage { .. } => "Add Message",
-        UndoOperationKind::DeleteMessage { .. } => "Delete Message",
+        UndoOperationKind::RenameMessage { .. } => "Rename Message".to_string(),
+        UndoOperationKind::ModifyMessageComment { .. } => "Modify Comment".to_string(),
+        UndoOperationKind::ModifyMessageId { .. } => "Modify ID".to_string(),
+        UndoOperationKind::ModifyMessageSize { .. } => "Modify Size".to_string(),
+        UndoOperationKind::ModifyMessageTransmitter { .. } => "Modify Transmitter".to_string(),
+        UndoOperationKind::AddMessage { .. } => "Add Message".to_string(),
+        UndoOperationKind::DeleteMessage { .. } => "Delete Message".to_string(),
+        UndoOperationKind::ModifySignal {
+            message_id: _,
+            signal_name,
+        } => {
+            format!("Modify Signal '{}'", signal_name)
+        }
     }
 }
 
@@ -182,9 +226,13 @@ pub fn describe_undo_operation(entry: &UndoEntry) -> &'static str {
 #[derive(Clone)]
 pub struct SignalWindowState {
     pub id: usize,
-    pub message: Message,
+    pub message: MessageView,
     pub is_open: bool,
     pub parent_dbc_id: usize,
+    // 临时信号编辑请求（仅在窗口内双击某个信号时设置，主循环会处理并打开编辑对话框）
+    pub pending_signal_edit: Option<String>,
+    // 选中信号的名称（用于在表格中高亮整行）
+    pub selected_signal_name: Option<String>,
 }
 
 /// 错误对话框状态
@@ -242,42 +290,7 @@ impl MessageEditDialog {
         }
     }
 
-    /// 打开编辑对话框（使用 Message，用于兼容性）
-    pub fn open(
-        &mut self,
-        parent_dbc_id: usize,
-        message: &Message,
-        editable_data: &EditableDbcData,
-    ) {
-        self.show = true;
-        self.parent_dbc_id = parent_dbc_id;
-        self.message_id = message.message_id().raw();
-
-        // 初始化名称缓冲区（考虑覆盖）
-        let display_name = editable_data.get_message_name(self.message_id, message.message_name());
-        self.name_buffer = display_name.clone();
-        self.original_name = display_name;
-
-        // 初始化注释缓冲区
-        let comment = editable_data.get_message_comment(self.message_id);
-        self.comment_buffer = comment.clone();
-        self.original_comment = comment;
-
-        // 初始化 ID 缓冲区（考虑覆盖）
-        let display_id = editable_data.get_message_id(self.message_id);
-        self.id_buffer = format!("0x{:X}", display_id);
-        self.original_id = display_id;
-
-        // 初始化 Size 缓冲区（考虑覆盖）
-        let display_size = editable_data.get_message_size(self.message_id, *message.message_size());
-        self.size_buffer = display_size.to_string();
-        self.original_size = display_size;
-
-        // 初始化 Transmitter 缓冲区（考虑覆盖）
-        let transmitter = editable_data.get_message_transmitter(self.message_id);
-        self.transmitter_buffer = transmitter.clone();
-        self.original_transmitter = transmitter;
-    }
+    // MessageEditDialog::open (Message) removed; use open_with_ref which supports both Original and Custom messages
 
     /// 打开编辑对话框（使用 MessageRef，支持原始和新建的 Message）
     pub fn open_with_ref(
@@ -439,6 +452,68 @@ impl Default for MessageCreateDialog {
     }
 }
 
+/// Signal 编辑对话框状态
+pub struct SignalEditDialog {
+    pub show: bool,
+    pub parent_dbc_id: usize,
+    pub message_id: u32,
+
+    // 编辑缓冲区
+    pub name_buffer: String,
+    pub start_bit_buffer: String,
+    pub size_buffer: String,
+    pub byte_order_is_little: bool,
+    pub signed: bool,
+    pub factor_buffer: String,
+    pub offset_buffer: String,
+    pub min_buffer: String,
+    pub max_buffer: String,
+    pub unit_buffer: String,
+    pub comment_buffer: String,
+
+    // 原始值（用于取消）
+    pub original_name: String,
+}
+
+impl SignalEditDialog {
+    pub fn new() -> Self {
+        Self {
+            show: false,
+            parent_dbc_id: 0,
+            message_id: 0,
+            name_buffer: String::new(),
+            start_bit_buffer: String::new(),
+            size_buffer: String::new(),
+            byte_order_is_little: true,
+            signed: false,
+            factor_buffer: String::from("1.0"),
+            offset_buffer: String::from("0.0"),
+            min_buffer: String::from("0.0"),
+            max_buffer: String::from("0.0"),
+            unit_buffer: String::new(),
+            comment_buffer: String::new(),
+            original_name: String::new(),
+        }
+    }
+
+    pub fn open(&mut self, parent_dbc_id: usize, message_id: u32) {
+        self.show = true;
+        self.parent_dbc_id = parent_dbc_id;
+        self.message_id = message_id;
+        // other fields should be initialized by caller using actual signal data
+    }
+
+    pub fn close(&mut self) {
+        self.show = false;
+    }
+}
+
+impl Default for SignalEditDialog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// 剪贴板状态（用于复制/粘贴）
 pub struct ClipboardState {
     pub copied_message: Option<CustomMessage>,
@@ -462,11 +537,14 @@ pub struct UiState {
     pub error_dialog: ErrorDialog,
     pub message_edit_dialog: MessageEditDialog,
     pub message_create_dialog: MessageCreateDialog,
+    pub signal_edit_dialog: SignalEditDialog,
     pub last_focused_dbc_index: Option<usize>,
     pub dbc_window_focus_request: Option<usize>,
     pub signal_window_focus_request: Option<usize>,
     pub last_focused_signal_window: Option<usize>,
     pub clipboard: ClipboardState,
+    // confirmation dialog state for deletes
+    pub confirm_delete_dialog: ConfirmDeleteDialog,
 }
 
 impl Default for UiState {
@@ -480,11 +558,13 @@ impl Default for UiState {
             error_dialog: ErrorDialog::default(),
             message_edit_dialog: MessageEditDialog::default(),
             message_create_dialog: MessageCreateDialog::default(),
+            signal_edit_dialog: SignalEditDialog::default(),
             last_focused_dbc_index: None,
             dbc_window_focus_request: None,
             signal_window_focus_request: None,
             last_focused_signal_window: None,
             clipboard: ClipboardState::default(),
+            confirm_delete_dialog: ConfirmDeleteDialog::default(),
         }
     }
 }
@@ -498,12 +578,12 @@ impl UiState {
         if let Some(sw) = self
             .signal_windows
             .iter()
-            .find(|w| w.message.message_id().raw() == message_id)
+            .find(|w| w.message.message_id() == message_id)
         {
             self.error_dialog.message = format!(
-                "无法修改或删除消息: '{}' (0x{:03X})，其 Signal 窗口仍然打开。\n请先关闭对应的 Signal 窗口。",
+                "Cannot modify or delete message: '{}' (0x{:03X}) because its Signal window is still open.\nPlease close the corresponding Signal window first.",
                 sw.message.message_name(),
-                sw.message.message_id().raw()
+                sw.message.message_id()
             );
             self.error_dialog.show = true;
             return Err(());
@@ -517,10 +597,7 @@ impl UiState {
         self.dbc_windows.get_mut(idx)
     }
 
-    /// 复制 Message 到剪贴板
-    pub fn copy_message(&mut self, message: &MessageRef) {
-        self.clipboard.copied_message = Some(message.to_custom_message());
-    }
+    // copy_message removed; use handle_copy_message in menu.rs which already performs copy and logs
 
     /// 检查剪贴板是否有内容
     pub fn has_clipboard_message(&self) -> bool {
