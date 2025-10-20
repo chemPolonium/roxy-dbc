@@ -2,6 +2,8 @@
 
 mod app;
 mod dbc;
+mod edit_history;
+mod edit_history_integration;
 mod ui;
 
 use app::AppWindow;

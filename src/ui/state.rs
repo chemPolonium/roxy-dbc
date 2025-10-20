@@ -1,6 +1,7 @@
 //! UI 状态管理模块
 
-use crate::dbc::{CustomMessage, EditableDbcData, MessageRef, OverridesSnapshot};
+use crate::dbc::{CustomMessage, EditableDbcData, MessageRef};
+use crate::edit_history::History;
 use crate::ui::view::MessageView;
 
 /// Confirmation dialog state for delete operations
@@ -30,9 +31,8 @@ pub struct DbcWindowState {
     pub search_query: String,
     pub selected_message_id: Option<u32>,
     pub is_open: bool,
-    // Undo/Redo 支持
-    pub undo_stack: Vec<UndoEntry>,
-    pub redo_stack: Vec<UndoEntry>,
+    // Per-window operation history (new, incremental)
+    pub history: History,
     // 临时存放信号编辑请求 (message_id, signal_name)
     pub pending_signal_edit: Option<(u32, String)>,
     // pending deletion request from per-row context menu
@@ -41,60 +41,8 @@ pub struct DbcWindowState {
     pub pending_confirm_delete_display_name: Option<String>,
 }
 
-/// 可撤销的操作类型
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub enum UndoOperationKind {
-    RenameMessage {
-        message_id: u32,
-        old_name: String,
-        new_name: String,
-    },
-    ModifyMessageComment {
-        message_id: u32,
-        old_comment: String,
-        new_comment: String,
-    },
-    ModifyMessageId {
-        original_message_id: u32,
-        old_id: u32,
-        new_id: u32,
-    },
-    ModifyMessageSize {
-        message_id: u32,
-        old_size: u64,
-        new_size: u64,
-    },
-    ModifyMessageTransmitter {
-        message_id: u32,
-        old_transmitter: String,
-        new_transmitter: String,
-    },
-    ModifySignal {
-        message_id: u32,
-        signal_name: String,
-        // could store before/after minimal fields if desired
-    },
-    AddMessage {
-        message_id: u32,
-    },
-    DeleteMessage {
-        message_id: u32,
-    },
-    // 预留：未来可以添加更多操作类型
-    // ModifySignal { ... },
-}
-
-/// Undo 条目：使用轻量级快照策略
-///
-/// 只保存覆盖层数据的快照，不保存整个 DBC 对象，
-/// 大幅减少内存占用（从 MB 级别降低到 KB 级别）
-#[derive(Clone, Debug)]
-pub struct UndoEntry {
-    pub op: UndoOperationKind,
-    pub before: OverridesSnapshot, // 操作前的覆盖数据快照
-    pub after: OverridesSnapshot,  // 操作后的覆盖数据快照
-}
+// Legacy snapshot-based UndoOperationKind and UndoEntry removed.
+// Per-window `history: History` is now the canonical undo/redo mechanism.
 
 impl DbcWindowState {
     const MAX_UNDO_ENTRIES: usize = 100;
@@ -107,120 +55,48 @@ impl DbcWindowState {
             search_query: String::new(),
             selected_message_id: None,
             is_open: true,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            // legacy undo/redo stacks removed; use `history`
+            history: History::new(Self::MAX_UNDO_ENTRIES),
             pending_signal_edit: None,
             pending_delete_message: None,
             pending_confirm_delete_display_name: None,
         }
     }
-
-    /// 记录一次可撤销操作
-    pub fn push_undo(
-        &mut self,
-        op: UndoOperationKind,
-        before: &OverridesSnapshot,
-        after: &OverridesSnapshot,
-    ) {
-        // 执行新操作时清空重做栈
-        self.redo_stack.clear();
-
-        self.undo_stack.push(UndoEntry {
-            op,
-            before: before.clone(),
-            after: after.clone(),
-        });
-
-        self.limit_undo_stack_size();
-    }
-
-    /// 执行撤销操作
+    /// Proxy: attempt to undo via per-window History. Logs on failure.
     pub fn undo(&mut self) {
-        if let Some(entry) = self.undo_stack.pop() {
-            // 保存当前状态到重做栈
-            let current = OverridesSnapshot::from_editable(&self.editable_data);
-
-            // 应用撤销前的状态
-            entry.before.apply_to(&mut self.editable_data);
-
-            // 推入重做栈
-            self.redo_stack.push(UndoEntry {
-                op: entry.op,
-                before: entry.before,
-                after: current,
-            });
+        if let Err(e) = self.history.undo(&mut self.editable_data) {
+            eprintln!("History undo failed: {}", e);
         }
     }
 
-    /// 执行重做操作
+    /// Proxy: attempt to redo via per-window History. Logs on failure.
     pub fn redo(&mut self) {
-        if let Some(entry) = self.redo_stack.pop() {
-            // 保存当前状态到撤销栈
-            let current = OverridesSnapshot::from_editable(&self.editable_data);
-
-            // 应用重做后的状态
-            entry.after.apply_to(&mut self.editable_data);
-
-            // 推入撤销栈
-            self.undo_stack.push(UndoEntry {
-                op: entry.op,
-                before: current,
-                after: entry.after,
-            });
+        if let Err(e) = self.history.redo(&mut self.editable_data) {
+            eprintln!("History redo failed: {}", e);
         }
     }
 
-    /// 限制 undo 栈的大小
-    fn limit_undo_stack_size(&mut self) {
-        if self.undo_stack.len() > Self::MAX_UNDO_ENTRIES {
-            let overflow = self.undo_stack.len() - Self::MAX_UNDO_ENTRIES;
-            self.undo_stack.drain(0..overflow);
-        }
-    }
-
-    /// 检查是否可以撤销
+    /// Proxy to history can_undo
     pub fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
+        self.history.can_undo()
     }
 
-    /// 检查是否可以重做
+    /// Proxy to history can_redo
     pub fn can_redo(&self) -> bool {
-        !self.redo_stack.is_empty()
+        self.history.can_redo()
     }
 
-    /// 获取最后一次撤销操作的描述
+    /// Proxy to history description
     pub fn last_undo_description(&self) -> Option<String> {
-        self.undo_stack
-            .last()
-            .map(|entry| describe_undo_operation(entry))
+        self.history.last_undo_description()
     }
 
-    /// 获取最后一次重做操作的描述
+    /// Proxy to history description
     pub fn last_redo_description(&self) -> Option<String> {
-        self.redo_stack
-            .last()
-            .map(|entry| describe_undo_operation(entry))
+        self.history.last_redo_description()
     }
 }
-
-/// 描述撤销/重做操作
-pub fn describe_undo_operation(entry: &UndoEntry) -> String {
-    match &entry.op {
-        UndoOperationKind::RenameMessage { .. } => "Rename Message".to_string(),
-        UndoOperationKind::ModifyMessageComment { .. } => "Modify Comment".to_string(),
-        UndoOperationKind::ModifyMessageId { .. } => "Modify ID".to_string(),
-        UndoOperationKind::ModifyMessageSize { .. } => "Modify Size".to_string(),
-        UndoOperationKind::ModifyMessageTransmitter { .. } => "Modify Transmitter".to_string(),
-        UndoOperationKind::AddMessage { .. } => "Add Message".to_string(),
-        UndoOperationKind::DeleteMessage { .. } => "Delete Message".to_string(),
-        UndoOperationKind::ModifySignal {
-            message_id: _,
-            signal_name,
-        } => {
-            format!("Modify Signal '{}'", signal_name)
-        }
-    }
-}
+// describe_undo_operation removed; history provides descriptions now.
 
 /// Signal 详细窗口状态
 #[derive(Clone)]

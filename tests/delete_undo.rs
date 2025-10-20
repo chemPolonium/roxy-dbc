@@ -1,6 +1,6 @@
 use roxy_dbc::dbc::CustomMessage;
-use roxy_dbc::dbc::OverridesSnapshot;
-use roxy_dbc::ui::state::{DbcWindowState, UiState, UndoOperationKind};
+use roxy_dbc::edit_history::{Operation, SimpleMessage};
+use roxy_dbc::ui::state::{DbcWindowState, UiState};
 
 fn setup_state_with_message() -> (UiState, u32) {
     // Create editable data
@@ -40,36 +40,61 @@ fn delete_message_records_undo_and_undo_restores() {
             .any(|m| m.message_id() == message_id)
     );
 
-    // Simulate deletion logic (create snapshots, delete, push undo) without using private menu::handle_delete_message
-    let before_snapshot = OverridesSnapshot::from_editable(&ui_state.dbc_windows[0].editable_data);
-    ui_state.dbc_windows[0]
+    // Simulate deletion via history Operation
+    // Build a SimpleMessage from existing data
+    let cm = ui_state.dbc_windows[0]
         .editable_data
-        .delete_message(message_id);
-    let after_snapshot = OverridesSnapshot::from_editable(&ui_state.dbc_windows[0].editable_data);
-    ui_state.dbc_windows[0].push_undo(
-        UndoOperationKind::DeleteMessage { message_id },
-        &before_snapshot,
-        &after_snapshot,
-    );
+        .get_message_ref_by_id(message_id)
+        .map(|m| m.to_custom_message())
+        .unwrap_or_else(|| CustomMessage {
+            message_id,
+            message_name: "Deleted".to_string(),
+            message_size: 8,
+            transmitter: "".to_string(),
+            comment: "".to_string(),
+            signals: vec![],
+        });
+    let simple = SimpleMessage {
+        id: cm.message_id,
+        name: cm.message_name.clone(),
+        comment: cm.comment.clone(),
+        message_size: cm.message_size,
+        transmitter: cm.transmitter.clone(),
+    };
 
-    // After delete, message should be gone
+    // Apply delete via history
+    let window = &mut ui_state.dbc_windows[0];
+    window
+        .history
+        .apply_new(
+            Operation::DeleteMessage {
+                message: simple.clone(),
+            },
+            &mut window.editable_data,
+        )
+        .expect("apply delete");
+
+    // After delete, message should be gone (use `window` to avoid borrow issues)
     assert!(
-        !ui_state.dbc_windows[0]
+        !window
             .editable_data
             .get_all_messages()
             .iter()
             .any(|m| m.message_id() == message_id)
     );
 
-    // Undo stack should have an entry
-    assert!(ui_state.dbc_windows[0].can_undo());
+    // History should allow undo
+    assert!(window.history.can_undo());
 
-    // Perform undo
-    ui_state.dbc_windows[0].undo();
+    // Perform undo via history
+    window
+        .history
+        .undo(&mut window.editable_data)
+        .expect("undo");
 
     // After undo, message should be present again
     assert!(
-        ui_state.dbc_windows[0]
+        window
             .editable_data
             .get_all_messages()
             .iter()

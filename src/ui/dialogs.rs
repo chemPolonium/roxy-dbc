@@ -1,7 +1,6 @@
 //! 对话框渲染模块
 
-use crate::dbc::OverridesSnapshot;
-use crate::ui::state::{ErrorDialog, UiState, UndoOperationKind};
+use crate::ui::state::{ErrorDialog, UiState};
 use imgui::Ui;
 
 /// 渲染所有对话框
@@ -211,17 +210,45 @@ pub fn render_confirm_delete_dialog(ui: &Ui, ui_state: &mut UiState) {
                         .is_ok()
                     {
                         if let Some(window) = ui_state.dbc_windows.get_mut(idx) {
-                            let before_snapshot =
-                                crate::dbc::OverridesSnapshot::from_editable(&window.editable_data);
-                            window.editable_data.delete_message(message_id);
-                            let after_snapshot =
-                                crate::dbc::OverridesSnapshot::from_editable(&window.editable_data);
-                            window.push_undo(
-                                crate::ui::state::UndoOperationKind::DeleteMessage { message_id },
-                                &before_snapshot,
-                                &after_snapshot,
-                            );
-                            window.selected_message_id = None;
+                            // Attempt to build a SimpleMessage representing the deleted message
+                            let mut simple = crate::edit_history::SimpleMessage {
+                                id: message_id,
+                                name: display_name.clone(),
+                                comment: String::new(),
+                                message_size: 8,
+                                transmitter: String::new(),
+                            };
+
+                            // Try to obtain richer info from the editable data
+                            if let Some(mref) =
+                                window.editable_data.get_message_ref_by_id(message_id)
+                            {
+                                // Use to_custom_message for a canonical set of fields
+                                let cm = mref.to_custom_message();
+                                simple.name = cm.message_name.clone();
+                                simple.comment = cm.comment.clone();
+                                simple.message_size = cm.message_size;
+                                simple.transmitter = cm.transmitter.clone();
+                            } else {
+                                // Fallback: use overrides where available
+                                simple.comment =
+                                    window.editable_data.get_message_comment(message_id);
+                                simple.message_size =
+                                    window.editable_data.get_message_size(message_id, 8);
+                                simple.transmitter =
+                                    window.editable_data.get_message_transmitter(message_id);
+                            }
+
+                            let op =
+                                crate::edit_history::Operation::DeleteMessage { message: simple };
+                            if let Err(e) = window.history.apply_new(op, &mut window.editable_data)
+                            {
+                                ui_state.error_dialog.message =
+                                    format!("Failed to apply delete operation: {}", e);
+                                ui_state.error_dialog.show = true;
+                            } else {
+                                window.selected_message_id = None;
+                            }
                         }
                     }
                 }
@@ -234,10 +261,7 @@ fn apply_signal_changes(ui_state: &mut crate::ui::state::UiState) {
     let parent = ui_state.signal_edit_dialog.parent_dbc_id;
     let message_id = ui_state.signal_edit_dialog.message_id;
 
-    // 准备 snapshot for undo
     if let Some(dbc_window) = ui_state.dbc_windows.iter_mut().find(|w| w.id == parent) {
-        let before = crate::dbc::OverridesSnapshot::from_editable(&dbc_window.editable_data);
-
         // 尝试找到对应 signal（按 name）并修改
         let sig_name = ui_state.signal_edit_dialog.name_buffer.trim().to_string();
 
@@ -343,18 +367,29 @@ fn apply_signal_changes(ui_state: &mut crate::ui::state::UiState) {
                 .to_string(),
         };
 
-        dbc_window
+        // Prepare old override (if any)
+        let old_override = dbc_window
             .editable_data
             .signal_overrides
-            .insert((message_id, sig_name.clone()), override_entry);
+            .get(&(message_id, sig_name.clone()))
+            .cloned();
 
-        let after = crate::dbc::OverridesSnapshot::from_editable(&dbc_window.editable_data);
-        let undo_op = crate::ui::state::UndoOperationKind::ModifySignal {
+        // Use History operation to record this change
+        use crate::edit_history::Operation;
+        let op = Operation::ModifySignal {
             message_id,
             signal_name: sig_name.clone(),
+            old: old_override,
+            new: override_entry.clone(),
         };
-        // record undo
-        dbc_window.push_undo(undo_op, &before, &after);
+        if let Err(e) = dbc_window
+            .history
+            .apply_new(op, &mut dbc_window.editable_data)
+        {
+            ui_state.error_dialog.message = format!("Failed to apply signal edit: {}", e);
+            ui_state.error_dialog.show = true;
+            return;
+        }
 
         // Update any open Signal windows showing this message so they reflect the new overrides
         if let Some(message_ref) = dbc_window.editable_data.get_message_ref_by_id(message_id) {
@@ -619,82 +654,71 @@ fn apply_changes(ui_state: &mut UiState) {
         .iter_mut()
         .find(|w| w.id == parent_dbc_id)
     {
-        // 记录 undo（在修改之前创建快照）
-        let before = OverridesSnapshot::from_editable(&dbc_window.editable_data);
+        // (old snapshot-based undo disabled) -- before snapshot omitted
 
-        // 应用名称修改
+        // Build Operation(s) for the changed fields
+        use crate::edit_history::Operation;
+
+        let mut ops: Vec<Operation> = Vec::new();
+
         if name_changed {
-            dbc_window
-                .editable_data
-                .set_message_name(message_id, new_name.clone());
+            ops.push(Operation::RenameMessage {
+                message_id,
+                old: old_name.clone(),
+                new: new_name.clone(),
+            });
         }
 
-        // 应用注释修改
         if comment_changed {
-            dbc_window
-                .editable_data
-                .set_message_comment(message_id, new_comment.clone());
+            ops.push(Operation::ModifyMessageComment {
+                message_id,
+                old: old_comment.clone(),
+                new: new_comment.clone(),
+            });
         }
 
-        // 应用 ID 修改
         if id_changed {
-            let new_id_value = new_id.unwrap();
-            dbc_window
-                .editable_data
-                .set_message_id(message_id, new_id_value);
-        }
-
-        // 应用 Size 修改
-        if size_changed {
-            let new_size_value = new_size.unwrap();
-            dbc_window
-                .editable_data
-                .set_message_size(message_id, new_size_value);
-        }
-
-        // 应用 Transmitter 修改
-        if transmitter_changed {
-            dbc_window
-                .editable_data
-                .set_message_transmitter(message_id, new_transmitter.clone());
-        }
-
-        let after = OverridesSnapshot::from_editable(&dbc_window.editable_data);
-
-        // 根据修改类型选择 Undo 操作类型（简化：使用第一个修改的类型）
-        let undo_op = if name_changed {
-            UndoOperationKind::RenameMessage {
-                message_id,
-                old_name: old_name.clone(),
-                new_name: new_name.clone(),
-            }
-        } else if comment_changed {
-            UndoOperationKind::ModifyMessageComment {
-                message_id,
-                old_comment: old_comment.clone(),
-                new_comment: new_comment.clone(),
-            }
-        } else if id_changed {
-            UndoOperationKind::ModifyMessageId {
+            ops.push(Operation::ModifyMessageId {
                 original_message_id: message_id,
                 old_id,
                 new_id: new_id.unwrap(),
-            }
-        } else if size_changed {
-            UndoOperationKind::ModifyMessageSize {
+            });
+        }
+
+        if size_changed {
+            ops.push(Operation::ModifyMessageSize {
                 message_id,
-                old_size,
-                new_size: new_size.unwrap(),
-            }
+                old: old_size,
+                new: new_size.unwrap(),
+            });
+        }
+
+        if transmitter_changed {
+            ops.push(Operation::ModifyMessageTransmitter {
+                message_id,
+                old: old_transmitter.clone(),
+                new: new_transmitter.clone(),
+            });
+        }
+
+        // Compose single or multiple ops
+        let op_to_apply = if ops.len() == 1 {
+            ops.into_iter().next().unwrap()
         } else {
-            UndoOperationKind::ModifyMessageTransmitter {
-                message_id,
-                old_transmitter: old_transmitter.clone(),
-                new_transmitter: new_transmitter.clone(),
-            }
+            Operation::Composite(ops)
         };
 
-        dbc_window.push_undo(undo_op, &before, &after);
+        // Apply via per-window history
+        if let Err(e) = dbc_window
+            .history
+            .apply_new(op_to_apply, &mut dbc_window.editable_data)
+        {
+            ui_state.error_dialog.message = format!("Failed to apply edit operation: {}", e);
+            ui_state.error_dialog.show = true;
+            return;
+        }
+
+        // (old snapshot-based undo push has been disabled; history should handle this)
     }
 
     // 更新对话框的原始值，以便继续编辑（在窗口查找之外）
@@ -907,7 +931,8 @@ pub fn render_message_create_dialog(ui: &Ui, ui_state: &mut UiState) {
 
 /// 处理创建新消息
 fn handle_create_message(ui_state: &mut UiState) {
-    use crate::dbc::CustomMessage;
+    use crate::edit_history::Operation;
+    use crate::edit_history::SimpleMessage;
 
     let parent_dbc_id = ui_state.message_create_dialog.parent_dbc_id;
 
@@ -963,31 +988,34 @@ fn handle_create_message(ui_state: &mut UiState) {
             return;
         }
 
-        // 创建操作前快照
-        let before_snapshot = OverridesSnapshot::from_editable(&dbc_window.editable_data);
+        // Create an operation and apply via per-window history
+        let simple = SimpleMessage {
+            id: message_id,
+            name: name.clone(),
+            comment: comment.clone(),
+            message_size: size,
+            transmitter: transmitter.clone(),
+        };
 
-        // 创建新消息（使用 CustomMessage::new 并设置字段）
-        let mut new_message = CustomMessage::new(message_id);
-        new_message.message_name = name.clone();
-        new_message.message_size = size;
-        new_message.transmitter = transmitter;
-        new_message.comment = comment;
-        new_message.signals = Vec::new();
+        let op = Operation::AddMessage { message: simple };
 
-        // 添加消息
-        dbc_window.editable_data.add_message(new_message);
+        if let Err(e) = dbc_window
+            .history
+            .apply_new(op, &mut dbc_window.editable_data)
+        {
+            ui_state.error_dialog.message = format!("Failed to apply operation: {}", e);
+            ui_state.error_dialog.show = true;
+            return;
+        }
 
-        // 创建操作后快照
-        let after_snapshot = OverridesSnapshot::from_editable(&dbc_window.editable_data);
+        // Temporarily disabled old snapshot-based undo push: history is primary
+        // dbc_window.push_undo(
+        //     UndoOperationKind::AddMessage { message_id },
+        //     &before_snapshot,
+        //     &after_snapshot,
+        // );
 
-        // 记录撤销操作
-        dbc_window.push_undo(
-            UndoOperationKind::AddMessage { message_id },
-            &before_snapshot,
-            &after_snapshot,
-        );
-
-        // 选中新创建的消息
+        // Select the newly created message
         dbc_window.selected_message_id = Some(message_id);
 
         println!("Created new message: {} (0x{:03X})", name, message_id);

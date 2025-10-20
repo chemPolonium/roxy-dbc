@@ -501,46 +501,10 @@ impl Default for EditableDbcData {
     }
 }
 
-/// 用于 Undo/Redo 的覆盖数据快照
-///
-/// 这个结构只包含覆盖层的数据，不包含完整的 DBC 数据，
-/// 从而大幅减少内存占用。
-#[derive(Debug, Clone)]
-pub struct OverridesSnapshot {
-    pub message_name_overrides: HashMap<u32, String>,
-    pub message_comment_overrides: HashMap<u32, String>,
-    pub message_id_overrides: HashMap<u32, u32>,
-    pub message_size_overrides: HashMap<u32, u64>,
-    pub message_transmitter_overrides: HashMap<u32, String>,
-    pub added_messages: HashMap<u32, CustomMessage>,
-    pub signal_overrides: HashMap<(u32, String), SignalOverride>,
-    pub deleted_message_ids: HashSet<u32>,
-}
+// ApplyOp implementation moved to dedicated integration module to avoid
+// circular module resolution issues. See `src/edit_history_integration.rs`.
 
-impl OverridesSnapshot {
-    /// 从 EditableDbcData 创建快照
-    pub fn from_editable(data: &EditableDbcData) -> Self {
-        Self {
-            message_name_overrides: data.message_name_overrides.clone(),
-            message_comment_overrides: data.message_comment_overrides.clone(),
-            message_id_overrides: data.message_id_overrides.clone(),
-            message_size_overrides: data.message_size_overrides.clone(),
-            message_transmitter_overrides: data.message_transmitter_overrides.clone(),
-            added_messages: data.added_messages.clone(),
-            signal_overrides: data.signal_overrides.clone(),
-            deleted_message_ids: data.deleted_message_ids.clone(),
-        }
-    }
-
-    /// 应用快照到 EditableDbcData
-    pub fn apply_to(&self, data: &mut EditableDbcData) {
-        data.message_name_overrides = self.message_name_overrides.clone();
-        data.message_comment_overrides = self.message_comment_overrides.clone();
-        data.message_id_overrides = self.message_id_overrides.clone();
-        data.message_size_overrides = self.message_size_overrides.clone();
-        data.message_transmitter_overrides = self.message_transmitter_overrides.clone();
-        data.added_messages = self.added_messages.clone();
-        data.signal_overrides = self.signal_overrides.clone();
-        data.deleted_message_ids = self.deleted_message_ids.clone();
-    }
-}
+// NOTE: OverridesSnapshot and snapshot-based undo were removed in favor of
+// operation-based per-window History. If you need to reintroduce a
+// snapshot-based mechanism, reintroduce a small OverridesSnapshot type that
+// clones only the override maps from `EditableDbcData`.

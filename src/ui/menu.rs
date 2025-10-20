@@ -1,7 +1,7 @@
 //! 菜单栏渲染模块
 
-use crate::dbc::{DbcData, EditableDbcData, OverridesSnapshot};
-use crate::ui::state::{DbcWindowState, UiState, UndoOperationKind};
+use crate::dbc::{DbcData, EditableDbcData};
+use crate::ui::state::{DbcWindowState, UiState};
 use imgui::{Key, Ui};
 
 /// 渲染主菜单栏
@@ -212,26 +212,35 @@ pub(crate) fn handle_delete_message(ui_state: &mut UiState, message_id: u32) {
             })
             .unwrap_or_else(|| format!("Message 0x{:03X}", message_id));
 
-        // 创建快照用于撤销
-        let before_snapshot = OverridesSnapshot::from_editable(&window.editable_data);
+        // Build SimpleMessage payload for delete operation
+        let mut simple = crate::edit_history::SimpleMessage {
+            id: message_id,
+            name: message_name.clone(),
+            comment: String::new(),
+            message_size: 8,
+            transmitter: String::new(),
+        };
 
-        // 执行删除
-        window.editable_data.delete_message(message_id);
+        if let Some(mref) = window.editable_data.get_message_ref_by_id(message_id) {
+            let cm = mref.to_custom_message();
+            simple.name = cm.message_name.clone();
+            simple.comment = cm.comment.clone();
+            simple.message_size = cm.message_size;
+            simple.transmitter = cm.transmitter.clone();
+        } else {
+            simple.comment = window.editable_data.get_message_comment(message_id);
+            simple.message_size = window.editable_data.get_message_size(message_id, 8);
+            simple.transmitter = window.editable_data.get_message_transmitter(message_id);
+        }
 
-        // 创建删除后快照
-        let after_snapshot = OverridesSnapshot::from_editable(&window.editable_data);
-
-        // 记录撤销操作
-        window.push_undo(
-            UndoOperationKind::DeleteMessage { message_id },
-            &before_snapshot,
-            &after_snapshot,
-        );
-
-        // 清除选择
-        window.selected_message_id = None;
-
-        println!("Deleted message: {} (0x{:03X})", message_name, message_id);
+        let op = crate::edit_history::Operation::DeleteMessage { message: simple };
+        if let Err(e) = window.history.apply_new(op, &mut window.editable_data) {
+            ui_state.error_dialog.message = format!("Failed to apply delete operation: {}", e);
+            ui_state.error_dialog.show = true;
+        } else {
+            window.selected_message_id = None;
+            println!("Deleted message: {} (0x{:03X})", message_name, message_id);
+        }
     }
 }
 
@@ -289,8 +298,6 @@ fn handle_copy_message(ui_state: &mut UiState, message_id: u32) {
 
 /// 处理粘贴消息
 fn handle_paste_message(ui_state: &mut UiState) {
-    use crate::dbc::OverridesSnapshot;
-
     let Some(clipboard_message) = ui_state.clipboard.copied_message.clone() else {
         return;
     };
@@ -302,9 +309,6 @@ fn handle_paste_message(ui_state: &mut UiState) {
     // 生成新的ID（避免冲突）
     let new_id = generate_suggested_message_id(window);
 
-    // 创建操作前快照
-    let before_snapshot = OverridesSnapshot::from_editable(&window.editable_data);
-
     // 创建新消息（使用剪贴板的内容但ID不同）
     let mut new_message = clipboard_message.clone();
     new_message.message_id = new_id;
@@ -313,15 +317,23 @@ fn handle_paste_message(ui_state: &mut UiState) {
     // 添加消息
     window.editable_data.add_message(new_message.clone());
 
-    // 创建操作后快照
-    let after_snapshot = OverridesSnapshot::from_editable(&window.editable_data);
+    // History is primary undo/redo source; no snapshots needed here
 
-    // 记录撤销操作
-    window.push_undo(
-        UndoOperationKind::AddMessage { message_id: new_id },
-        &before_snapshot,
-        &after_snapshot,
-    );
+    // 使用 History 记录操作（首选）
+    use crate::edit_history::{Operation, SimpleMessage};
+    let simple = SimpleMessage {
+        id: new_id,
+        name: new_message.message_name.clone(),
+        comment: new_message.comment.clone(),
+        message_size: new_message.message_size,
+        transmitter: new_message.transmitter.clone(),
+    };
+    let op = Operation::AddMessage { message: simple };
+    if let Err(e) = window.history.apply_new(op, &mut window.editable_data) {
+        ui_state.error_dialog.message = format!("Failed to apply operation: {}", e);
+        ui_state.error_dialog.show = true;
+        return;
+    }
 
     // 选中新粘贴的消息
     window.selected_message_id = Some(new_id);
@@ -379,32 +391,56 @@ fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
 
 /// 渲染撤销/重做菜单项
 fn render_undo_redo_menu_items(ui: &Ui, window: &mut DbcWindowState) {
-    let undo_label = if let Some(desc) = window.last_undo_description() {
+    // Prefer History descriptions and actions, fallback to snapshot-based stacks
+    let undo_label = if let Some(desc) = window.history.last_undo_description() {
+        format!("Undo {}\tCtrl+Z", desc)
+    } else if let Some(desc) = window.last_undo_description() {
         format!("Undo {}\tCtrl+Z", desc)
     } else {
         "Undo\tCtrl+Z".to_string()
     };
 
-    let redo_label = if let Some(desc) = window.last_redo_description() {
+    let redo_label = if let Some(desc) = window.history.last_redo_description() {
+        format!("Redo {}\tCtrl+Y", desc)
+    } else if let Some(desc) = window.last_redo_description() {
         format!("Redo {}\tCtrl+Y", desc)
     } else {
         "Redo\tCtrl+Y".to_string()
     };
 
+    let undo_enabled = window.history.can_undo() || window.can_undo();
+    let redo_enabled = window.history.can_redo() || window.can_redo();
+
     if ui
         .menu_item_config(&undo_label)
-        .enabled(window.can_undo())
+        .enabled(undo_enabled)
         .build()
     {
-        window.undo();
+        // Try history first
+        if window.history.can_undo() {
+            if let Err(e) = window.history.undo(&mut window.editable_data) {
+                // fallback
+                eprintln!("History undo failed: {}. Falling back.", e);
+                window.undo();
+            }
+        } else {
+            window.undo();
+        }
     }
 
     if ui
         .menu_item_config(&redo_label)
-        .enabled(window.can_redo())
+        .enabled(redo_enabled)
         .build()
     {
-        window.redo();
+        if window.history.can_redo() {
+            if let Err(e) = window.history.redo(&mut window.editable_data) {
+                eprintln!("History redo failed: {}. Falling back.", e);
+                window.redo();
+            }
+        } else {
+            window.redo();
+        }
     }
 }
 
@@ -470,13 +506,27 @@ pub fn handle_global_shortcuts(ui: &Ui, ui_state: &mut UiState) {
 
         // 优先 Undo: Ctrl+Z
         if ui.is_key_pressed(Key::Z) && !shift {
-            win.undo();
+            if win.history.can_undo() {
+                if let Err(e) = win.history.undo(&mut win.editable_data) {
+                    eprintln!("History undo failed: {}. Falling back.", e);
+                    win.undo();
+                }
+            } else {
+                win.undo();
+            }
             return;
         }
 
         // Redo: Ctrl+Shift+Z 或 Ctrl+Y
         if (ui.is_key_pressed(Key::Z) && shift) || ui.is_key_pressed(Key::Y) {
-            win.redo();
+            if win.history.can_redo() {
+                if let Err(e) = win.history.redo(&mut win.editable_data) {
+                    eprintln!("History redo failed: {}. Falling back.", e);
+                    win.redo();
+                }
+            } else {
+                win.redo();
+            }
         }
     }
 }
