@@ -1,6 +1,6 @@
 //! UI 状态管理模块
 
-use crate::dbc::{CustomMessage, EditableDbcData, MessageRef};
+use crate::dbc::{EditableDbcData, MessageOverride, MessageRef};
 use crate::edit_history::History;
 use crate::ui::view::MessageView;
 
@@ -195,7 +195,8 @@ impl MessageEditDialog {
         self.original_id = display_id;
 
         // 初始化 Size 缓冲区（考虑覆盖）
-        let display_size = editable_data.get_message_size(self.message_id, message.message_size());
+        let display_size =
+            editable_data.get_message_size(self.message_id, message.message_size()) as u64;
         self.size_buffer = display_size.to_string();
         self.original_size = display_size;
 
@@ -392,7 +393,7 @@ impl Default for SignalEditDialog {
 
 /// 剪贴板状态（用于复制/粘贴）
 pub struct ClipboardState {
-    pub copied_message: Option<CustomMessage>,
+    pub copied_message: Option<MessageOverride>,
 }
 
 impl Default for ClipboardState {

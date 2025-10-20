@@ -1,5 +1,5 @@
-use roxy_dbc::dbc::CustomMessage;
-use roxy_dbc::edit_history::{Operation, SimpleMessage};
+use roxy_dbc::dbc::MessageOverride;
+use roxy_dbc::edit_history::Operation;
 use roxy_dbc::ui::state::{DbcWindowState, UiState};
 
 fn setup_state_with_message() -> (UiState, u32) {
@@ -11,12 +11,12 @@ fn setup_state_with_message() -> (UiState, u32) {
     let mut window = DbcWindowState::new(0, editable);
 
     // Construct a simple custom message and add it
-    let msg = CustomMessage {
+    let msg = MessageOverride {
         message_id: 0x100,
         message_name: "TestMsg".to_string(),
         message_size: 8,
-        transmitter: "".to_string(),
-        comment: "".to_string(),
+        transmitter: None,
+        comment: None,
         signals: vec![],
     };
     window.editable_data.add_message(msg.clone());
@@ -41,34 +41,26 @@ fn delete_message_records_undo_and_undo_restores() {
     );
 
     // Simulate deletion via history Operation
-    // Build a SimpleMessage from existing data
+    // Build a MessageOverride from existing data
     let cm = ui_state.dbc_windows[0]
         .editable_data
         .get_message_ref_by_id(message_id)
-        .map(|m| m.to_custom_message())
-        .unwrap_or_else(|| CustomMessage {
+        .map(|m| m.to_message_override())
+        .unwrap_or_else(|| MessageOverride {
             message_id,
             message_name: "Deleted".to_string(),
             message_size: 8,
-            transmitter: "".to_string(),
-            comment: "".to_string(),
+            transmitter: None,
+            comment: None,
             signals: vec![],
         });
-    let simple = SimpleMessage {
-        id: cm.message_id,
-        name: cm.message_name.clone(),
-        comment: cm.comment.clone(),
-        message_size: cm.message_size,
-        transmitter: cm.transmitter.clone(),
-    };
-
-    // Apply delete via history
+    // Apply delete via history using full MessageOverride
     let window = &mut ui_state.dbc_windows[0];
     window
         .history
         .apply_new(
             Operation::DeleteMessage {
-                message: simple.clone(),
+                message: cm.clone(),
             },
             &mut window.editable_data,
         )

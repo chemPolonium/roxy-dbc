@@ -212,25 +212,26 @@ pub(crate) fn handle_delete_message(ui_state: &mut UiState, message_id: u32) {
             })
             .unwrap_or_else(|| format!("Message 0x{:03X}", message_id));
 
-        // Build SimpleMessage payload for delete operation
-        let mut simple = crate::edit_history::SimpleMessage {
-            id: message_id,
-            name: message_name.clone(),
-            comment: String::new(),
+        // Build full MessageOverride payload for delete operation
+        let mut simple = crate::dbc::MessageOverride {
+            message_id: message_id,
+            message_name: message_name.clone(),
+            comment: None,
             message_size: 8,
-            transmitter: String::new(),
+            transmitter: None,
+            signals: Vec::new(),
         };
 
         if let Some(mref) = window.editable_data.get_message_ref_by_id(message_id) {
-            let cm = mref.to_custom_message();
-            simple.name = cm.message_name.clone();
+            let cm = mref.to_message_override();
+            simple.message_name = cm.message_name.clone();
             simple.comment = cm.comment.clone();
             simple.message_size = cm.message_size;
             simple.transmitter = cm.transmitter.clone();
         } else {
-            simple.comment = window.editable_data.get_message_comment(message_id);
-            simple.message_size = window.editable_data.get_message_size(message_id, 8);
-            simple.transmitter = window.editable_data.get_message_transmitter(message_id);
+            simple.comment = Some(window.editable_data.get_message_comment(message_id));
+            simple.message_size = window.editable_data.get_message_size(message_id, 8u64);
+            simple.transmitter = Some(window.editable_data.get_message_transmitter(message_id));
         }
 
         let op = crate::edit_history::Operation::DeleteMessage { message: simple };
@@ -284,7 +285,7 @@ fn handle_copy_message(ui_state: &mut UiState, message_id: u32) {
         all_messages
             .iter()
             .find(|m| m.message_id() == message_id)
-            .map(|m| (m.to_custom_message(), m.message_name().to_string()))
+            .map(|m| (m.to_message_override(), m.message_name().to_string()))
     } else {
         None
     };
@@ -320,15 +321,11 @@ fn handle_paste_message(ui_state: &mut UiState) {
     // History is primary undo/redo source; no snapshots needed here
 
     // 使用 History 记录操作（首选）
-    use crate::edit_history::{Operation, SimpleMessage};
-    let simple = SimpleMessage {
-        id: new_id,
-        name: new_message.message_name.clone(),
-        comment: new_message.comment.clone(),
-        message_size: new_message.message_size,
-        transmitter: new_message.transmitter.clone(),
+    use crate::edit_history::Operation;
+    // new_message is already a `crate::dbc::MessageOverride`, use it directly
+    let op = Operation::AddMessage {
+        message: new_message.clone(),
     };
-    let op = Operation::AddMessage { message: simple };
     if let Err(e) = window.history.apply_new(op, &mut window.editable_data) {
         ui_state.error_dialog.message = format!("Failed to apply operation: {}", e);
         ui_state.error_dialog.show = true;

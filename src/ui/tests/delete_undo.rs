@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::dbc::{CustomMessage, DbcData, EditableDbcData};
+    use crate::dbc::{MessageOverride, DbcData, EditableDbcData};
     use crate::ui::menu;
     use crate::ui::state::{DbcWindowState, UiState, UndoOperationKind};
 
@@ -10,7 +10,7 @@ mod tests {
         let mut dbc = DbcData::new();
 
         // Construct a simple custom message
-        let msg = CustomMessage {
+    let msg = MessageOverride {
             message_id: 0x100,
             message_name: "TestMsg".to_string(),
             message_size: 8,

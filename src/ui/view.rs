@@ -81,7 +81,7 @@ impl MessageView {
             }
         }
 
-        // If this is a CustomMessage (added messages), its signals are already in msg_ref.signals()
+        // If this is a MessageOverride (added messages), its signals are already in msg_ref.signals()
 
         MessageView {
             message_id,

@@ -160,8 +160,8 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
             // 然后获取 MessageRef
             if let Some(window) = ui_state.dbc_windows.get(dbc_index) {
                 if let Some(message_ref) = window.editable_data.get_message_ref_by_id(message_id) {
-                    // 转换为 CustomMessage 并保存到剪贴板
-                    ui_state.clipboard.copied_message = Some(message_ref.to_custom_message());
+                    // 转换为 MessageOverride 并保存到剪贴板
+                    ui_state.clipboard.copied_message = Some(message_ref.to_message_override());
                 }
             }
         }
@@ -363,7 +363,8 @@ fn render_messages_table(
             let display_id = window_state.editable_data.get_message_id(original_id);
             let display_size = window_state
                 .editable_data
-                .get_message_size(original_id, m.message_size());
+                .get_message_size(original_id, m.message_size())
+                as u64;
             let view =
                 crate::ui::view::MessageView::from_message_ref(m, &window_state.editable_data);
             MessageWithDisplayData {

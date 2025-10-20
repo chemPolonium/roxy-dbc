@@ -64,12 +64,12 @@ impl DbcData {
 
 /// 自定义 Message 结构（用于新建的 Message）
 #[derive(Debug, Clone)]
-pub struct CustomMessage {
+pub struct MessageOverride {
     pub message_id: u32,
     pub message_name: String,
-    pub message_size: u64,
-    pub transmitter: String,
-    pub comment: String,
+    pub message_size: u8,
+    pub transmitter: Option<String>,
+    pub comment: Option<String>,
     pub signals: Vec<Signal>,
 }
 
@@ -89,15 +89,19 @@ pub struct SignalOverride {
     pub comment: String,
 }
 
-impl CustomMessage {
-    /// 从 can_dbc::Message 创建 CustomMessage
+impl MessageOverride {
+    /// 从 can_dbc::Message 创建 MessageOverride（保持与以前 MessageOverride 相同语义）
     pub fn from_message(msg: &Message) -> Self {
         Self {
             message_id: msg.message_id().raw(),
             message_name: msg.message_name().to_string(),
-            message_size: *msg.message_size(),
-            transmitter: String::new(), // can_dbc::Message 没有暴露 transmitter
-            comment: String::new(),
+            message_size: (*msg.message_size()).try_into().expect(&format!(
+                "message_size {} for message {} out of u8 range",
+                *msg.message_size(),
+                msg.message_id().raw()
+            )),
+            transmitter: None, // can_dbc::Message 没有暴露 transmitter
+            comment: None,
             signals: msg.signals().to_vec(),
         }
     }
@@ -109,8 +113,8 @@ impl CustomMessage {
             message_id,
             message_name: format!("NewMessage_{:03X}", message_id),
             message_size: 8,
-            transmitter: String::new(),
-            comment: String::new(),
+            transmitter: None,
+            comment: None,
             signals: Vec::new(),
         }
     }
@@ -147,13 +151,13 @@ pub struct EditableDbcData {
     pub message_id_overrides: HashMap<u32, u32>,
 
     /// Message Size 覆盖映射 (original_message_id -> new_size)
-    pub message_size_overrides: HashMap<u32, u64>,
+    pub message_size_overrides: HashMap<u32, u8>,
 
     /// Message Transmitter 覆盖映射 (original_message_id -> transmitter)
     pub message_transmitter_overrides: HashMap<u32, String>,
 
-    /// 新建的 Message 列表 (message_id -> CustomMessage)
-    pub added_messages: HashMap<u32, CustomMessage>,
+    /// 新建的 Message 列表 (message_id -> MessageOverride)
+    pub added_messages: HashMap<u32, MessageOverride>,
 
     /// Signal 级别的覆盖 (message_id, signal_name) -> SignalOverride
     pub signal_overrides: HashMap<(u32, String), SignalOverride>,
@@ -163,10 +167,10 @@ pub struct EditableDbcData {
 }
 
 impl EditableDbcData {
-    /// 从 DbcData 创建可编辑的数据
-    pub fn from_dbc_data(dbc_data: DbcData) -> Self {
+    /// 创建一个新的、空的 EditableDbcData
+    pub fn new() -> Self {
         Self {
-            base: dbc_data,
+            base: DbcData::new(),
             message_name_overrides: HashMap::new(),
             message_comment_overrides: HashMap::new(),
             message_id_overrides: HashMap::new(),
@@ -178,27 +182,17 @@ impl EditableDbcData {
         }
     }
 
-    /// 创建新的空数据
-    pub fn new() -> Self {
-        Self::from_dbc_data(DbcData::new())
+    /// Create EditableDbcData initialized from parsed DbcData
+    pub fn from_dbc_data(dbc: DbcData) -> Self {
+        let mut ed = Self::new();
+        ed.base = dbc;
+        ed
     }
 
-    /// 加载 DBC 文件
-    #[allow(dead_code)]
-    pub fn load_dbc_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), String> {
-        self.base.load_dbc_file(path)?;
-        // 清空所有覆盖数据
-        self.message_name_overrides.clear();
-        self.message_comment_overrides.clear();
-        self.message_id_overrides.clear();
-        self.message_size_overrides.clear();
-        self.message_transmitter_overrides.clear();
-        self.added_messages.clear();
-        self.signal_overrides.clear();
-        self.deleted_message_ids.clear();
-        Ok(())
+    /// Convenience wrapper to load DBC file via inner DbcData
+    pub fn load_dbc_file<P: AsRef<std::path::Path>>(&mut self, path: P) -> Result<(), String> {
+        self.base.load_dbc_file(path)
     }
-
     /// 获取 message 的显示名称（考虑覆盖）
     pub fn get_message_name(&self, message_id: u32, original_name: &str) -> String {
         self.message_name_overrides
@@ -267,15 +261,25 @@ impl EditableDbcData {
     }
 
     /// 获取 message 的显示 Size（考虑覆盖）
-    pub fn get_message_size(&self, message_id: u32, original_size: u64) -> u64 {
+    ///
+    /// NOTE: many callers pass the parser's message_size() which is a u64,
+    /// so we accept u64 here and convert to u8 at the boundary. If the
+    /// original_size cannot fit into a u8 this will panic — caller should
+    /// validate sizes are within 1..=8 in UI paths.
+    pub fn get_message_size(&self, message_id: u32, original_size: u64) -> u8 {
+        let orig_u8: u8 = original_size.try_into().expect(&format!(
+            "message_size {} for message {} out of u8 range",
+            original_size, message_id
+        ));
+
         self.message_size_overrides
             .get(&message_id)
             .copied()
-            .unwrap_or(original_size)
+            .unwrap_or(orig_u8)
     }
 
     /// 设置 message 的 Size 覆盖
-    pub fn set_message_size(&mut self, message_id: u32, new_size: u64) {
+    pub fn set_message_size(&mut self, message_id: u32, new_size: u8) {
         // 注意：这里我们不验证 size 是否合法（1-8），由 UI 层验证
         self.message_size_overrides.insert(message_id, new_size);
     }
@@ -299,7 +303,7 @@ impl EditableDbcData {
     }
 
     /// 添加新 Message
-    pub fn add_message(&mut self, message: CustomMessage) {
+    pub fn add_message(&mut self, message: MessageOverride) {
         let id = message.message_id;
         self.added_messages.insert(id, message);
         // 如果之前被删除了，从删除列表中移除
@@ -417,7 +421,7 @@ impl EditableDbcData {
     }
 
     /// 根据 message_id 获取 Message（用于双击操作）
-    /// 注意：只返回原始 Message，不返回新建的 CustomMessage
+    /// 注意：只返回原始 Message，不返回新建的 MessageOverride
     // Note: direct parser accessors (like get_message_by_id) should be avoided at runtime.
     // Use MessageRef / MessageView conversion helpers during import to provide UI-safe
     // representations. Unused parser-dependent accessors were removed per project policy.
@@ -448,7 +452,7 @@ impl EditableDbcData {
 #[derive(Clone)]
 pub enum MessageRef<'a> {
     Original(&'a Message),
-    Custom(&'a CustomMessage),
+    Custom(&'a MessageOverride),
 }
 
 impl<'a> MessageRef<'a> {
@@ -472,7 +476,7 @@ impl<'a> MessageRef<'a> {
     pub fn message_size(&self) -> u64 {
         match self {
             MessageRef::Original(msg) => *msg.message_size(),
-            MessageRef::Custom(msg) => msg.message_size,
+            MessageRef::Custom(msg) => msg.message_size as u64,
         }
     }
 
@@ -484,10 +488,10 @@ impl<'a> MessageRef<'a> {
         }
     }
 
-    /// 转换为 CustomMessage（用于复制）
-    pub fn to_custom_message(&self) -> CustomMessage {
+    /// 转换为 MessageOverride（用于复制）
+    pub fn to_message_override(&self) -> MessageOverride {
         match self {
-            MessageRef::Original(msg) => CustomMessage::from_message(msg),
+            MessageRef::Original(msg) => MessageOverride::from_message(msg),
             MessageRef::Custom(msg) => (*msg).clone(),
         }
     }
@@ -504,7 +508,8 @@ impl Default for EditableDbcData {
 // ApplyOp implementation moved to dedicated integration module to avoid
 // circular module resolution issues. See `src/edit_history_integration.rs`.
 
-// NOTE: OverridesSnapshot and snapshot-based undo were removed in favor of
-// operation-based per-window History. If you need to reintroduce a
-// snapshot-based mechanism, reintroduce a small OverridesSnapshot type that
-// clones only the override maps from `EditableDbcData`.
+// NOTE: Snapshot-based undo was removed in favor of operation-based per-window
+// History which stores full message payloads for reliable undo/redo. If you
+// need a snapshot-style mechanism later, reintroduce a minimal snapshot type
+// that clones only the override maps from `EditableDbcData` (keeps source code
+// references minimal to avoid confusion with the current History design).

@@ -210,33 +210,34 @@ pub fn render_confirm_delete_dialog(ui: &Ui, ui_state: &mut UiState) {
                         .is_ok()
                     {
                         if let Some(window) = ui_state.dbc_windows.get_mut(idx) {
-                            // Attempt to build a SimpleMessage representing the deleted message
-                            let mut simple = crate::edit_history::SimpleMessage {
-                                id: message_id,
-                                name: display_name.clone(),
-                                comment: String::new(),
+                            // Attempt to build a full MessageOverride representing the deleted message
+                            let mut simple = crate::dbc::MessageOverride {
+                                message_id: message_id,
+                                message_name: display_name.clone(),
+                                comment: None,
                                 message_size: 8,
-                                transmitter: String::new(),
+                                transmitter: None,
+                                signals: Vec::new(),
                             };
 
                             // Try to obtain richer info from the editable data
                             if let Some(mref) =
                                 window.editable_data.get_message_ref_by_id(message_id)
                             {
-                                // Use to_custom_message for a canonical set of fields
-                                let cm = mref.to_custom_message();
-                                simple.name = cm.message_name.clone();
+                                // Use to_message_override for a canonical set of fields
+                                let cm = mref.to_message_override();
+                                simple.message_name = cm.message_name.clone();
                                 simple.comment = cm.comment.clone();
                                 simple.message_size = cm.message_size;
                                 simple.transmitter = cm.transmitter.clone();
                             } else {
                                 // Fallback: use overrides where available
                                 simple.comment =
-                                    window.editable_data.get_message_comment(message_id);
+                                    Some(window.editable_data.get_message_comment(message_id));
                                 simple.message_size =
-                                    window.editable_data.get_message_size(message_id, 8);
+                                    window.editable_data.get_message_size(message_id, 8u64);
                                 simple.transmitter =
-                                    window.editable_data.get_message_transmitter(message_id);
+                                    Some(window.editable_data.get_message_transmitter(message_id));
                             }
 
                             let op =
@@ -257,7 +258,7 @@ pub fn render_confirm_delete_dialog(ui: &Ui, ui_state: &mut UiState) {
         });
 }
 fn apply_signal_changes(ui_state: &mut crate::ui::state::UiState) {
-    // 解析并写回覆盖层或直接修改 CustomMessage
+    // 解析并写回覆盖层或直接修改 MessageOverride
     let parent = ui_state.signal_edit_dialog.parent_dbc_id;
     let message_id = ui_state.signal_edit_dialog.message_id;
 
@@ -309,8 +310,8 @@ fn apply_signal_changes(ui_state: &mut crate::ui::state::UiState) {
 
         // Validate start_bit and size
         // Determine message size in bits (consider overrides)
-        let msg_size_bytes = dbc_window.editable_data.get_message_size(message_id, 8);
-        let msg_size_bits = msg_size_bytes.saturating_mul(8);
+        let msg_size_bytes = dbc_window.editable_data.get_message_size(message_id, 8u64);
+        let msg_size_bits = (msg_size_bytes as u64).saturating_mul(8);
 
         if start_bit_opt.is_none() || size_opt.is_none() {
             ui_state.error_dialog.message =
@@ -688,8 +689,13 @@ fn apply_changes(ui_state: &mut UiState) {
         if size_changed {
             ops.push(Operation::ModifyMessageSize {
                 message_id,
-                old: old_size,
-                new: new_size.unwrap(),
+                old: old_size
+                    .try_into()
+                    .expect("old message size out of u8 range"),
+                new: new_size
+                    .unwrap()
+                    .try_into()
+                    .expect("new message size out of u8 range"),
             });
         }
 
@@ -932,7 +938,6 @@ pub fn render_message_create_dialog(ui: &Ui, ui_state: &mut UiState) {
 /// 处理创建新消息
 fn handle_create_message(ui_state: &mut UiState) {
     use crate::edit_history::Operation;
-    use crate::edit_history::SimpleMessage;
 
     let parent_dbc_id = ui_state.message_create_dialog.parent_dbc_id;
 
@@ -988,16 +993,25 @@ fn handle_create_message(ui_state: &mut UiState) {
             return;
         }
 
-        // Create an operation and apply via per-window history
-        let simple = SimpleMessage {
-            id: message_id,
-            name: name.clone(),
-            comment: comment.clone(),
-            message_size: size,
-            transmitter: transmitter.clone(),
+        // Create a full MessageOverride and apply via per-window history
+        let cm = crate::dbc::MessageOverride {
+            message_id: message_id,
+            message_name: name.clone(),
+            comment: if comment.is_empty() {
+                None
+            } else {
+                Some(comment.clone())
+            },
+            message_size: size.try_into().expect("size out of u8 range"),
+            transmitter: if transmitter.is_empty() {
+                None
+            } else {
+                Some(transmitter.clone())
+            },
+            signals: Vec::new(),
         };
 
-        let op = Operation::AddMessage { message: simple };
+        let op = Operation::AddMessage { message: cm };
 
         if let Err(e) = dbc_window
             .history
@@ -1008,12 +1022,7 @@ fn handle_create_message(ui_state: &mut UiState) {
             return;
         }
 
-        // Temporarily disabled old snapshot-based undo push: history is primary
-        // dbc_window.push_undo(
-        //     UndoOperationKind::AddMessage { message_id },
-        //     &before_snapshot,
-        //     &after_snapshot,
-        // );
+        // Old snapshot-based undo calls intentionally removed; History is primary.
 
         // Select the newly created message
         dbc_window.selected_message_id = Some(message_id);
