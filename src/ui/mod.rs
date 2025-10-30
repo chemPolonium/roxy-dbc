@@ -3,16 +3,18 @@
 //! 这个模块被重构为多个子模块以提高可维护性：
 //! - `state`: UI 状态结构和 Undo/Redo 系统
 //! - `dbc_window`: DBC 浏览器窗口渲染
-//! - `signal_window`: Signal 详细窗口渲染
+//! - `message_window`: Message 详细窗口渲染（包含 Signal 表格）
 //! - `dialogs`: 各种对话框（错误、关于、编辑等）
 //! - `menu`: 菜单栏和文件操作
 
 mod dbc_window;
 mod dialogs;
 mod menu;
-mod signal_window;
+mod message_create_window;
+mod message_edit_window;
+mod message_window;
+mod signal_edit_window;
 pub mod state;
-mod view;
 
 use imgui::Ui;
 use std::time::Duration;
@@ -29,9 +31,9 @@ pub fn render_ui(ui: &Ui, delta_s: Duration, target_frame_time: Duration, ui_sta
 
     menu::render_main_menu_bar(ui, ui_state);
     dbc_window::render_dbc_windows(ui, ui_state);
-    menu::handle_global_shortcuts(ui, ui_state);
-    signal_window::render_signal_windows(ui, ui_state);
-    dialogs::render_dialogs(ui, ui_state);
+    // menu::handle_global_shortcuts(ui, ui_state);
+    // message_window::render_message_windows(ui, ui_state);
+    // dialogs::render_dialogs(ui, ui_state);
 }
 
 /// 设置主dockspace占满整个窗口

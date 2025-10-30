@@ -1,3 +1,5 @@
+use std::default;
+
 use can_dbc::{
     ByteOrder, DBC, Message, MessageId, MultiplexIndicator, Signal, Transmitter, ValueType,
 };
@@ -18,6 +20,10 @@ use can_dbc::{
 // 也不会有文件名的记录等数据
 // 文件的读写交给上层管理
 
+// 这些都是原子化的操作
+// 在外部使用的时候，如一个窗口的更改
+// 需要外部记录每个复合操作有多少次
+// 然后在需要撤销的时候，调用多次 undo 即可
 #[derive(Clone, Debug)]
 pub enum Operation {
     SetMessageId {
@@ -142,7 +148,7 @@ pub enum Operation {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct EditableDbc {
     nodes: Vec<String>,
     messages: Vec<EditableMessage>,
@@ -783,6 +789,18 @@ impl EditableMessage {
             transmitter: "Vector__XXX".to_string(),
             signals: Vec::new(),
             comment: String::new(),
+        }
+    }
+
+    pub fn copy_without_signals(&self) -> Self {
+        Self {
+            message_id: self.message_id,
+            frame_format: self.frame_format,
+            message_name: self.message_name.clone(),
+            message_size: self.message_size,
+            transmitter: self.transmitter.clone(),
+            signals: Vec::new(),
+            comment: self.comment.clone(),
         }
     }
 

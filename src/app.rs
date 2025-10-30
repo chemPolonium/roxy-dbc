@@ -90,7 +90,6 @@ impl AppWindow {
     pub fn setup_imgui(&mut self) {
         let mut context = imgui::Context::create();
 
-        // 启用docking功能，但仅限标签页模式
         context.io_mut().config_flags |= ConfigFlags::DOCKING_ENABLE;
 
         let mut platform = imgui_winit_support::WinitPlatform::new(&mut context);
@@ -156,7 +155,7 @@ impl AppWindow {
         let renderer = Renderer::new(&mut context, &self.device, &self.queue, renderer_config);
         let last_frame = Instant::now();
         let last_cursor = None;
-        let target_frame_time = Duration::from_millis(16); // 约60FPS，平衡响应性和性能
+        let target_frame_time = Duration::from_secs(1) / 60; // 约60FPS，平衡响应性和性能
 
         self.imgui = Some(ImguiState {
             context,
