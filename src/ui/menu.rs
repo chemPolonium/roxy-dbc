@@ -1,11 +1,11 @@
 //! 菜单栏渲染模块
 
-use std::{fs::File, io::Read};
+use std::fs::File;
 
-use crate::editable_dbc::EditableDbc;
-use crate::ui::dbc_window::DbcWindowState;
+// use crate::editable_dbc::EditableDbc;
+use crate::ui::dbc_window::DbcWindow;
 use crate::ui::state::UiState;
-use imgui::{Key, Ui};
+use imgui::Ui;
 
 /// 渲染主菜单栏
 pub fn render_main_menu_bar(ui: &Ui, ui_state: &mut UiState) {
@@ -102,7 +102,7 @@ fn handle_load_dbc_file(ui_state: &mut UiState) {
         .iter()
         .position(|w| w.file_path == path_str)
     {
-        // focus_existing_dbc_window(ui_state, existing_idx);
+        focus_existing_dbc_window(ui_state, existing_idx);
     } else {
         load_new_dbc_file(ui_state, &path);
     }
@@ -354,22 +354,22 @@ fn handle_load_dbc_file(ui_state: &mut UiState) {
 //     // );
 // }
 
-// /// 聚焦已存在的 DBC 窗口
-// fn focus_existing_dbc_window(ui_state: &mut UiState, window_index: usize) {
-//     if let Some(window) = ui_state.dbc_windows.get_mut(window_index) {
-//         window.is_open = true;
-//         ui_state.dbc_window_focus_request = Some(window.id);
-//     }
-//     ui_state.last_focused_dbc_index = Some(window_index);
-//     ui_state.last_focused_message_window = None;
-// }
+/// 聚焦已存在的 DBC 窗口
+fn focus_existing_dbc_window(ui_state: &mut UiState, window_index: usize) {
+    if let Some(window) = ui_state.dbc_windows.get_mut(window_index) {
+        window.is_open = true;
+        ui_state.dbc_window_focus_request = Some(window_index);
+    }
+    ui_state.last_focused_dbc_index = Some(window_index);
+    ui_state.last_focused_message_window = None;
+}
 
 /// 加载新的 DBC 文件
 fn load_new_dbc_file(ui_state: &mut UiState, path: &std::path::Path) {
     if let Ok(mut file) = File::open(path) {
-        ui_state.dbc_windows.push(DbcWindowState::from_file(
-            &path.to_string_lossy().to_string(),
-        ));
+        ui_state
+            .dbc_windows
+            .push(DbcWindow::from_file(&path.to_string_lossy().to_string()));
     } else {
         // ui_state.error_dialog.message = format!("Failed to open file: {}", path.display());
         // ui_state.error_dialog.show = true;

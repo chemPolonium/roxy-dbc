@@ -8,7 +8,6 @@
 //! - `menu`: 菜单栏和文件操作
 
 mod dbc_window;
-mod dialogs;
 mod menu;
 mod message_create_window;
 mod message_edit_window;

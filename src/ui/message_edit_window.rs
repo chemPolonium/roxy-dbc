@@ -1,6 +1,7 @@
 use crate::editable_dbc::EditableMessage;
 use crate::ui::signal_edit_window::SignalEditWindowState;
 
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct MessageEditWindowState {
     // 这里并不需要 is_open 字段
@@ -18,6 +19,7 @@ pub struct MessageEditWindowState {
     pub signal_edit_windows: Vec<SignalEditWindowState>,
 }
 
+#[allow(dead_code)]
 impl MessageEditWindowState {
     pub fn new(msg: EditableMessage) -> Self {
         Self {

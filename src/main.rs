@@ -1,5 +1,3 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
 mod app;
 mod editable_dbc;
 mod ui;
@@ -10,7 +8,6 @@ use winit::{
     application::ApplicationHandler,
     event::{Event, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    keyboard::{Key, NamedKey},
 };
 
 #[derive(Default)]

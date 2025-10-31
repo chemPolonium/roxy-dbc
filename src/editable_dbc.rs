@@ -1,5 +1,3 @@
-use std::default;
-
 use can_dbc::{
     ByteOrder, DBC, Message, MessageId, MultiplexIndicator, Signal, Transmitter, ValueType,
 };
@@ -24,6 +22,8 @@ use can_dbc::{
 // 在外部使用的时候，如一个窗口的更改
 // 需要外部记录每个复合操作有多少次
 // 然后在需要撤销的时候，调用多次 undo 即可
+
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum Operation {
     SetMessageId {
@@ -148,6 +148,7 @@ pub enum Operation {
     },
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct EditableDbc {
     nodes: Vec<String>,
@@ -163,6 +164,7 @@ pub enum FrameFormat {
     Extended,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct EditableMessage {
     message_id: u32,
@@ -174,6 +176,7 @@ pub struct EditableMessage {
     comment: String,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct EditableSignal {
     name: String,
@@ -191,6 +194,7 @@ pub struct EditableSignal {
     comment: String,
 }
 
+#[allow(dead_code)]
 impl EditableDbc {
     pub fn new() -> Self {
         Self {
@@ -779,6 +783,7 @@ impl EditableDbc {
     }
 }
 
+#[allow(dead_code)]
 impl EditableMessage {
     pub fn new() -> Self {
         Self {
@@ -858,6 +863,7 @@ impl EditableMessage {
     }
 }
 
+#[allow(dead_code)]
 impl EditableSignal {
     pub fn new() -> Self {
         Self {
