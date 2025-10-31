@@ -1,9 +1,10 @@
 //! UI 状态管理模块
 
-use crate::editable_dbc::{EditableDbc, EditableMessage, Operation};
+use crate::editable_dbc::EditableMessage;
 use crate::ui::dbc_window::DbcWindow;
-use crate::ui::message_edit_window::MessageEditWindowState;
+use crate::ui::signal_edit_window::SignalEditDialog;
 
+#[allow(dead_code)]
 /// Confirmation dialog state for delete operations
 pub struct ConfirmDeleteDialog {
     pub show: bool,
@@ -23,6 +24,7 @@ impl Default for ConfirmDeleteDialog {
     }
 }
 
+#[allow(dead_code)]
 /// 错误对话框状态
 pub struct ErrorDialog {
     pub show: bool,
@@ -35,68 +37,6 @@ impl Default for ErrorDialog {
             show: false,
             message: String::new(),
         }
-    }
-}
-
-/// Signal 编辑对话框状态
-pub struct SignalEditDialog {
-    pub show: bool,
-    pub parent_dbc_id: usize,
-    pub message_id: u32,
-
-    // 编辑缓冲区
-    pub name_buffer: String,
-    pub start_bit_buffer: String,
-    pub size_buffer: String,
-    pub byte_order_is_little: bool,
-    pub signed: bool,
-    pub factor_buffer: String,
-    pub offset_buffer: String,
-    pub min_buffer: String,
-    pub max_buffer: String,
-    pub unit_buffer: String,
-    pub comment_buffer: String,
-
-    // 原始值（用于取消）
-    pub original_name: String,
-}
-
-impl SignalEditDialog {
-    pub fn new() -> Self {
-        Self {
-            show: false,
-            parent_dbc_id: 0,
-            message_id: 0,
-            name_buffer: String::new(),
-            start_bit_buffer: String::new(),
-            size_buffer: String::new(),
-            byte_order_is_little: true,
-            signed: false,
-            factor_buffer: String::from("1.0"),
-            offset_buffer: String::from("0.0"),
-            min_buffer: String::from("0.0"),
-            max_buffer: String::from("0.0"),
-            unit_buffer: String::new(),
-            comment_buffer: String::new(),
-            original_name: String::new(),
-        }
-    }
-
-    pub fn open(&mut self, parent_dbc_id: usize, message_id: u32) {
-        self.show = true;
-        self.parent_dbc_id = parent_dbc_id;
-        self.message_id = message_id;
-        // other fields should be initialized by caller using actual signal data
-    }
-
-    pub fn close(&mut self) {
-        self.show = false;
-    }
-}
-
-impl Default for SignalEditDialog {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -113,6 +53,7 @@ impl Default for ClipboardState {
     }
 }
 
+#[allow(dead_code)]
 /// 主 UI 状态管理
 pub struct UiState {
     pub show_performance_window: bool,
@@ -149,6 +90,7 @@ impl Default for UiState {
     }
 }
 
+#[allow(dead_code)]
 impl UiState {
     /// 检查指定 message 是否有对应的 Signal 窗口打开
     ///

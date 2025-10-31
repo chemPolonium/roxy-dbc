@@ -1,4 +1,5 @@
 /// Message 新建对话框状态
+#[allow(dead_code)]
 pub struct MessageCreateDialog {
     pub show: bool,
     pub parent_dbc_id: usize,
@@ -11,6 +12,7 @@ pub struct MessageCreateDialog {
     pub transmitter_buffer: String,
 }
 
+#[allow(dead_code)]
 impl MessageCreateDialog {
     pub fn new() -> Self {
         Self {

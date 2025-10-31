@@ -1,8 +1,5 @@
 //! 菜单栏渲染模块
 
-use std::fs::File;
-
-// use crate::editable_dbc::EditableDbc;
 use crate::ui::dbc_window::DbcWindow;
 use crate::ui::state::UiState;
 use imgui::Ui;
@@ -366,29 +363,14 @@ fn focus_existing_dbc_window(ui_state: &mut UiState, window_index: usize) {
 
 /// 加载新的 DBC 文件
 fn load_new_dbc_file(ui_state: &mut UiState, path: &std::path::Path) {
-    if let Ok(mut file) = File::open(path) {
-        ui_state
-            .dbc_windows
-            .push(DbcWindow::from_file(&path.to_string_lossy().to_string()));
-    } else {
-        // ui_state.error_dialog.message = format!("Failed to open file: {}", path.display());
-        // ui_state.error_dialog.show = true;
-        println!("Failed to open file: {}", path.display());
+    match DbcWindow::from_path(&path) {
+        Ok(dbc_window) => {
+            ui_state.dbc_windows.push(dbc_window);
+        }
+        Err(e) => {
+            println!("{}", e.as_str())
+        }
     }
-    // let mut dbc_data = DbcData::new();
-    // match dbc_data.load_dbc_file(path) {
-    //     Ok(_) => {
-    //         let editable_data = EditableDbcData::from_dbc_data(dbc_data);
-    //         ui_state
-    //             .dbc_windows
-    //             .push(DbcWindowState::new(ui_state.next_dbc_id, editable_data));
-    //         ui_state.next_dbc_id += 1;
-    //     }
-    //     Err(e) => {
-    //         ui_state.error_dialog.message = format!("Failed to load DBC file: {}", e);
-    //         ui_state.error_dialog.show = true;
-    //     }
-    // }
 }
 
 // /// 渲染编辑菜单

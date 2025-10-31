@@ -2,6 +2,7 @@
 
 use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 use std::usize;
 
 use crate::editable_dbc::{EditableDbc, EditableMessage};
@@ -44,10 +45,10 @@ pub struct DbcWindow {
 
 impl DbcWindow {
     /// 创建新的 DBC 窗口状态
-    pub fn new(file_path: String, dbc: EditableDbc) -> Self {
+    pub fn new(file_path: &str, dbc: EditableDbc) -> Self {
         Self {
             is_open: true,
-            file_path,
+            file_path: file_path.to_string(),
             dbc,
             message_table: MessageTable::new(),
             search_bar: DbcSearchBar::default(),
@@ -58,28 +59,39 @@ impl DbcWindow {
         }
     }
 
-    pub fn from_file(file_path: &str) -> Self {
+    /// 从文件路径创建新的 DBC 窗口状态
+    pub fn from_path(file_path: &Path) -> Result<Self, String> {
         let mut file = File::open(file_path).unwrap();
         let mut contents = Vec::new();
         if let Ok(_) = file.read_to_end(&mut contents) {
             if let Ok(original_dbc) = can_dbc::DBC::from_slice(&contents) {
                 let editable_dbc = EditableDbc::from_dbc(&original_dbc);
                 println!("{}", original_dbc.version().0);
-                return Self::new(file_path.to_string(), editable_dbc);
+                Ok(Self::new(file_path.to_str().unwrap(), editable_dbc))
             } else {
-                println!("Failed to parse DBC file: {}", file_path);
-                Self::new(file_path.to_string(), EditableDbc::default())
+                Err(format!("Failed to parse DBC: {}", file_path.display()))
             }
         } else {
-            println!("Failed to parse DBC file: {}", file_path);
-            Self::new(file_path.to_string(), EditableDbc::default())
+            Err(format!("Filed to open file: {}", file_path.display()))
+        }
+    }
+
+    /// 渲染DBC文件信息区域
+    fn render_file_info(&self, ui: &Ui) {
+        if !self.file_path.is_empty() {
+            ui.text(format!("Loaded: {}", self.file_path));
+            ui.text(format!("Messages: {}", self.dbc.message_count()));
+        } else {
+            ui.text("No DBC file loaded");
         }
     }
 
     pub fn render(&mut self, ui: &Ui) {
         if self.is_open {
-            render_dbc_file_info(ui, &self);
+            self.render_file_info(ui);
         }
+
+        ui.separator();
 
         let pending_filter = self.search_bar.render(ui);
 
@@ -109,21 +121,6 @@ impl DbcWindow {
             self.message_window_to_close = None;
         }
     }
-}
-
-/// 渲染DBC文件信息区域
-fn render_dbc_file_info(ui: &Ui, window_state: &DbcWindow) {
-    // 显示当前加载的文件
-    if !window_state.file_path.is_empty() {
-        ui.text(format!("Loaded: {}", window_state.file_path));
-
-        let message_count = window_state.dbc.message_count();
-        ui.text(format!("Messages: {}", message_count));
-    } else {
-        ui.text("No DBC file loaded");
-    }
-
-    ui.separator();
 }
 
 /// 此处使用的索引全都是 DBC 数据结构中消息向量的索引
@@ -184,8 +181,11 @@ impl MessageTable {
     }
 
     pub fn init_sort_and_filter(&mut self, query: &str, messages: &[EditableMessage]) {
+        // 初始化排序和筛选
+        // 以后还要改，现在改个消息排序直接没了
         self.update_sort(0, TableSortDirection::Ascending, messages);
         self.update_filter(query, messages);
+        self.selected_indicies.clear();
     }
 
     pub fn filtered_indicies(&self) -> &Vec<usize> {
@@ -409,7 +409,7 @@ enum MessageTableRowsEvent {
     DoubleClick(usize),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct DbcSearchBar {
     query: String,
 }
@@ -427,14 +427,6 @@ impl DbcSearchBar {
 
     pub fn query(&self) -> &str {
         &self.query
-    }
-}
-
-impl Default for DbcSearchBar {
-    fn default() -> Self {
-        Self {
-            query: String::new(),
-        }
     }
 }
 
@@ -486,7 +478,7 @@ struct MessageTableMenuEvent {
 }
 
 fn render_message_table_menu(ui: &Ui, window_state: &DbcWindow) -> MessageTableMenuEvent {
-    let mut response = MessageTableMenuEvent {
+    let mut response: MessageTableMenuEvent = MessageTableMenuEvent {
         action: None,
         menu_shown: false,
     };
