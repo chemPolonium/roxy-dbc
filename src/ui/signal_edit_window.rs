@@ -70,4 +70,3 @@ impl Default for SignalEditDialog {
         Self::new()
     }
 }
-

@@ -29,8 +29,6 @@ pub struct DbcWindow {
     search_bar: DbcSearchBar,
     message_table: MessageTable,
     is_dirty: bool,
-    // 右键会产生 Message 的编辑请求
-    right_clicked_index: Option<usize>,
 
     // 待关闭的 Message 窗口 ID
     // 因为不会一次关闭多个，所以用 Option<usize> 就够了
@@ -53,7 +51,6 @@ impl DbcWindow {
             message_table: MessageTable::new(),
             search_bar: DbcSearchBar::default(),
             is_dirty: true,
-            right_clicked_index: None,
             message_window_to_close: None,
             message_windows: Vec::new(),
         }
@@ -66,7 +63,6 @@ impl DbcWindow {
         if let Ok(_) = file.read_to_end(&mut contents) {
             if let Ok(original_dbc) = can_dbc::DBC::from_slice(&contents) {
                 let editable_dbc = EditableDbc::from_dbc(&original_dbc);
-                println!("{}", original_dbc.version().0);
                 Ok(Self::new(file_path.to_str().unwrap(), editable_dbc))
             } else {
                 Err(format!("Failed to parse DBC: {}", file_path.display()))
@@ -102,14 +98,10 @@ impl DbcWindow {
 
         let message_table_event = self.message_table.render(ui, self.dbc.messages());
 
-        if let Some(right_clicked_idx) = message_table_event.right_clicked_idx {
-            self.right_clicked_index = Some(right_clicked_idx);
-        }
+        let message_table_menu_event =
+            render_message_table_menu(ui, &self, &message_table_event.right_clicked_idx);
 
-        if let Some(idx) = self.right_clicked_index {
-            println!("Right clicked on index {}", idx);
-            self.right_clicked_index = None;
-        }
+        handle_message_table_menu_event(message_table_menu_event, &self);
 
         for message_window in &mut self.message_windows {
             println!("Rendering message window {}", message_window.id);
@@ -473,19 +465,18 @@ enum MessageTableMenuAction {
 }
 
 struct MessageTableMenuEvent {
-    menu_shown: bool,
     action: Option<MessageTableMenuAction>,
 }
 
-fn render_message_table_menu(ui: &Ui, window_state: &DbcWindow) -> MessageTableMenuEvent {
-    let mut response: MessageTableMenuEvent = MessageTableMenuEvent {
-        action: None,
-        menu_shown: false,
-    };
+fn render_message_table_menu(
+    ui: &Ui,
+    window_state: &DbcWindow,
+    right_clicked_idx: &Option<usize>,
+) -> MessageTableMenuEvent {
+    let mut response: MessageTableMenuEvent = MessageTableMenuEvent { action: None };
     let popup_id = format!("message_context_menu");
-    if let Some(_) = window_state.right_clicked_index {
+    if let Some(_) = right_clicked_idx {
         ui.open_popup(&popup_id);
-        response.menu_shown = true;
     }
     // 如果选择了单个项，允许编辑
     // 如果选择了多个项，只允许复制/粘贴/删除
@@ -525,7 +516,7 @@ fn render_message_table_menu(ui: &Ui, window_state: &DbcWindow) -> MessageTableM
     response
 }
 
-fn handle_message_table_menu_event(response: MessageTableMenuEvent, window_state: &mut DbcWindow) {
+fn handle_message_table_menu_event(response: MessageTableMenuEvent, window_state: &DbcWindow) {
     match response.action {
         None => {}
         Some(MessageTableMenuAction::Edit) => {
@@ -550,7 +541,6 @@ fn handle_message_table_menu_event(response: MessageTableMenuEvent, window_state
             );
         }
     }
-    window_state.right_clicked_index = None;
 }
 
 /// 渲染带有信号表格的详细弹出窗口
