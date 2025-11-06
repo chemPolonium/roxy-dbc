@@ -6,7 +6,7 @@ use std::path::Path;
 use std::usize;
 
 use crate::editable_dbc::{EditableDbc, EditableMessage};
-use crate::ui::message_window::MessageWindowState;
+use crate::ui::message_window::MessageWindow;
 use crate::ui::state::UiState;
 use can_dbc::ByteOrder;
 use imgui::{
@@ -38,7 +38,7 @@ pub struct DbcWindow {
     // 一旦关闭了 DBC 窗口，所有相关的 Message 窗口也会被关闭
     // 这个时候就不用管 message_windows_to_close 了
     // 直接干掉整个 Vec 就行
-    pub message_windows: Vec<MessageWindowState>,
+    pub message_windows: Vec<MessageWindow>,
 }
 
 impl DbcWindow {
@@ -98,14 +98,24 @@ impl DbcWindow {
 
         let message_table_event = self.message_table.render(ui, self.dbc.messages());
 
+        // 处理双击事件，打开消息窗口
+        if let Some(idx) = message_table_event.double_clicked_idx {
+            let message = self.dbc.messages()[idx].clone();
+            let message_window = MessageWindow::new(message, idx);
+            self.message_windows.push(message_window);
+        }
+
         let message_table_menu_event =
             render_message_table_menu(ui, &self, &message_table_event.right_clicked_idx);
 
         handle_message_table_menu_event(message_table_menu_event, &self);
 
         for message_window in &mut self.message_windows {
-            println!("Rendering message window {}", message_window.id);
-            // message_window.render(ui);
+            println!(
+                "Rendering message window {}",
+                message_window.message.message_name()
+            );
+            message_window.render(ui);
         }
 
         if let Some(idx) = self.message_window_to_close {
@@ -616,45 +626,6 @@ fn render_signals_table_tooltip(ui: &Ui, message: &EditableMessage) {
         ui.text("Right-click to Edit");
     });
 }
-
-// /// 清理已关闭的 DBC 窗口及其关联的 Signal 窗口
-// fn cleanup_closed_dbc_windows(ui_state: &mut UiState, windows_to_remove: Vec<usize>) {
-//     if windows_to_remove.is_empty() {
-//         return;
-//     }
-
-//     // 收集被关闭窗口的 ID
-//     let closed_parent_ids: std::collections::HashSet<_> = windows_to_remove
-//         .iter()
-//         .filter_map(|&idx| ui_state.dbc_windows.get(idx).map(|w| w.id))
-//         .collect();
-
-//     // 移除关联的 Message 窗口
-//     if !closed_parent_ids.is_empty() {
-//         ui_state
-//             .message_windows
-//             .retain(|sw| !closed_parent_ids.contains(&sw.parent_dbc_id));
-
-//         // 修正焦点索引
-//         if let Some(sig_idx) = ui_state.last_focused_message_window {
-//             if sig_idx >= ui_state.message_windows.len() {
-//                 ui_state.last_focused_message_window = None;
-//             }
-//         }
-//     }
-
-//     // 逆序移除 DBC 窗口
-//     for &idx in windows_to_remove.iter().rev() {
-//         ui_state.dbc_windows.remove(idx);
-//     }
-
-//     // 修正 DBC 焦点索引
-//     if let Some(focused_idx) = ui_state.last_focused_dbc_index {
-//         if focused_idx >= ui_state.dbc_windows.len() {
-//             ui_state.last_focused_dbc_index = None;
-//         }
-//     }
-// }
 
 /// 请求窗口聚焦（如果需要）
 fn request_window_focus() {

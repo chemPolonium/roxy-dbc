@@ -164,8 +164,14 @@ pub enum FrameFormat {
     Extended,
 }
 
+impl Default for FrameFormat {
+    fn default() -> Self {
+        FrameFormat::Standard
+    }
+}
+
 #[allow(dead_code)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct EditableMessage {
     message_id: u32,
     frame_format: FrameFormat,
