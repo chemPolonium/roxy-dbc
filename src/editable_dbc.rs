@@ -1,12 +1,12 @@
 use can_dbc::{
-    ByteOrder, DBC, Message, MessageId, MultiplexIndicator, Signal, Transmitter, ValueType,
+    ByteOrder, Dbc, Message, MessageId, MultiplexIndicator, Signal, Transmitter, ValueType,
 };
 
-// 这个文件实现了一个可编辑的 DBC 数据结构，支持基本的编辑操作和历史记录管理
+// 这个文件实现了一个可编辑的 Dbc 数据结构，支持基本的编辑操作和历史记录管理
 // 外部可以读取里面的属性，但是不可以编辑
 // 所有的编辑都是通过 EditableDbc 提供的方法来进行的，这些方法会记录操作历史以支持撤销和重做功能
-// EditableDbc 直接通过 DBC 进行初始化，转换方式等价于 String -> DBC -> EditableDbc
-// 将来会实现输出 DBC 文件字符串的功能，即 EditableDbc -> String
+// EditableDbc 直接通过 Dbc 进行初始化，转换方式等价于 String -> Dbc -> EditableDbc
+// 将来会实现输出 Dbc 文件字符串的功能，即 EditableDbc -> String
 
 // 整体的操作流程：先使用 can-dbc 库实现 String -> DBC
 // 然后通过 EditableDbc::from_dbc 将 DBC 转换为 EditableDbc
@@ -236,19 +236,16 @@ impl EditableDbc {
         }
     }
 
-    pub fn from_dbc(dbc: &DBC) -> Self {
+    pub fn from_dbc(dbc: &Dbc) -> Self {
         let mut editable_dbc = Self::new();
 
-        editable_dbc.nodes = dbc.nodes().iter().map(|n| n.0.clone()).flatten().collect();
+        editable_dbc.nodes = dbc.nodes.iter().map(|x| x.0.clone()).collect();
 
         editable_dbc.messages = dbc
-            .messages()
+            .messages
             .iter()
             .map(|msg| {
-                EditableMessage::from_message(
-                    msg,
-                    dbc.message_comment(msg.message_id().clone()).unwrap_or(""),
-                )
+                EditableMessage::from_message(msg, dbc.message_comment(msg.id).unwrap_or(""))
             })
             .collect();
 
@@ -817,13 +814,13 @@ impl EditableMessage {
 
     fn from_message(msg: &Message, comment: &str) -> Self {
         let signals = msg
-            .signals()
+            .signals
             .iter()
             .map(|sig| EditableSignal::from_signal(sig))
             .collect();
 
-        let message_id = msg.message_id().raw();
-        let frame_format = match msg.message_id() {
+        let message_id = msg.id.raw();
+        let frame_format = match msg.id {
             MessageId::Standard(_) => FrameFormat::Standard,
             MessageId::Extended(_) => FrameFormat::Extended,
         };
@@ -831,9 +828,9 @@ impl EditableMessage {
         Self {
             message_id: message_id,
             frame_format: frame_format,
-            message_name: msg.message_name().to_string(),
-            message_size: *msg.message_size(),
-            transmitter: match msg.transmitter() {
+            message_name: msg.name.clone(),
+            message_size: msg.size,
+            transmitter: match msg.transmitter.clone() {
                 Transmitter::VectorXXX => "Vector__XXX".to_string(),
                 Transmitter::NodeName(name) => name.clone(),
             },
@@ -891,18 +888,18 @@ impl EditableSignal {
 
     fn from_signal(sig: &Signal) -> Self {
         Self {
-            name: sig.name().to_string(),
-            multiplexer_indicator: *sig.multiplexer_indicator(),
-            start_bit: *sig.start_bit(),
-            signal_size: *sig.signal_size(),
-            byte_order: *sig.byte_order(),
-            value_type: *sig.value_type(),
-            factor: *sig.factor(),
-            offset: *sig.offset(),
-            min: *sig.min(),
-            max: *sig.max(),
-            unit: sig.unit().to_string(),
-            receivers: sig.receivers().to_vec(),
+            name: sig.name.to_string(),
+            multiplexer_indicator: sig.multiplexer_indicator,
+            start_bit: sig.start_bit,
+            signal_size: sig.size,
+            byte_order: sig.byte_order,
+            value_type: sig.value_type,
+            factor: sig.factor,
+            offset: sig.offset,
+            min: sig.min,
+            max: sig.max,
+            unit: sig.unit.clone(),
+            receivers: sig.receivers.clone(),
             comment: String::new(),
         }
     }
@@ -1026,7 +1023,7 @@ SIG_VALTYPE_ 2000 Signal_8 : 1;
 
     #[test]
     fn test_from_dbc() {
-        let dbc = DBC::try_from(SAMPLE_DBC).unwrap();
+        let dbc = Dbc::try_from(SAMPLE_DBC).unwrap();
         let editable_dbc = EditableDbc::from_dbc(&dbc);
 
         // println!("{:#?}", editable_dbc);

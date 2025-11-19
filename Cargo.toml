@@ -4,7 +4,7 @@ version = "0.5.0"
 edition = "2024"
 
 [dependencies]
-can-dbc = "6.0.0"
+can-dbc = "8.0.0"
 imgui-wgpu = "0.25"
 bytemuck = "1"
 imgui = { version = "0.12", features = ["docking", "tables-api"] }

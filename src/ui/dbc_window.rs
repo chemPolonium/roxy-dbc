@@ -61,7 +61,8 @@ impl DbcWindow {
         let mut file = File::open(file_path).unwrap();
         let mut contents = Vec::new();
         if let Ok(_) = file.read_to_end(&mut contents) {
-            if let Ok(original_dbc) = can_dbc::DBC::from_slice(&contents) {
+            let contents_str = String::from_utf8_lossy(&contents).to_string();
+            if let Ok(original_dbc) = can_dbc::Dbc::try_from(contents_str.as_str()) {
                 let editable_dbc = EditableDbc::from_dbc(&original_dbc);
                 Ok(Self::new(file_path.to_str().unwrap(), editable_dbc))
             } else {
