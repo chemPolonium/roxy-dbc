@@ -6,6 +6,7 @@ use std::path::Path;
 use std::usize;
 
 use crate::editable_dbc::{EditableDbc, EditableMessage};
+use crate::ui::message_edit_window::{MessageEditEvent, MessageEditWindowState};
 use crate::ui::message_window::MessageWindow;
 use crate::ui::state::UiState;
 use can_dbc::ByteOrder;
@@ -39,6 +40,7 @@ pub struct DbcWindow {
     // 这个时候就不用管 message_windows_to_close 了
     // 直接干掉整个 Vec 就行
     pub message_windows: Vec<MessageWindow>,
+    edit_windows: Vec<MessageEditWindowState>,
 }
 
 impl DbcWindow {
@@ -53,6 +55,7 @@ impl DbcWindow {
             is_dirty: true,
             message_window_to_close: None,
             message_windows: Vec::new(),
+            edit_windows: Vec::new(),
         }
     }
 
@@ -107,21 +110,51 @@ impl DbcWindow {
         }
 
         let message_table_menu_event =
-            render_message_table_menu(ui, &self, &message_table_event.right_clicked_idx);
+            render_message_table_menu(ui, self, &message_table_event.right_clicked_idx);
 
-        handle_message_table_menu_event(message_table_menu_event, &self);
+        if let Some(msg_id) = handle_message_table_menu_event(message_table_menu_event, self) {
+            let msg = self.dbc.get_message(msg_id).unwrap().clone();
+            self.edit_windows.push(MessageEditWindowState::open(&msg));
+        }
 
         for message_window in &mut self.message_windows {
-            println!(
-                "Rendering message window {}",
-                message_window.message.message_name()
-            );
             message_window.render(ui);
         }
+
+        self.message_windows.retain(|w| w.is_open);
 
         if let Some(idx) = self.message_window_to_close {
             self.message_windows.remove(idx);
             self.message_window_to_close = None;
+        }
+
+        self.render_edit_windows(ui);
+    }
+
+    fn render_edit_windows(&mut self, ui: &Ui) {
+        let mut to_remove = None;
+
+        for (i, edit_win) in self.edit_windows.iter_mut().enumerate() {
+            let event = edit_win.render(ui);
+            match event {
+                MessageEditEvent::Apply => {
+                    edit_win.apply_edit(&mut self.dbc);
+                    self.is_dirty = true;
+                }
+                MessageEditEvent::Ok => {
+                    edit_win.apply_edit(&mut self.dbc);
+                    self.is_dirty = true;
+                    to_remove = Some(i);
+                }
+                MessageEditEvent::Cancel => {
+                    to_remove = Some(i);
+                }
+                MessageEditEvent::None => {}
+            }
+        }
+
+        if let Some(idx) = to_remove {
+            self.edit_windows.remove(idx);
         }
     }
 }
@@ -527,30 +560,36 @@ fn render_message_table_menu(
     response
 }
 
-fn handle_message_table_menu_event(response: MessageTableMenuEvent, window_state: &DbcWindow) {
+fn handle_message_table_menu_event(
+    response: MessageTableMenuEvent,
+    window_state: &DbcWindow,
+) -> Option<u32> {
     match response.action {
-        None => {}
         Some(MessageTableMenuAction::Edit) => {
-            println!(
-                "Handle edit for message : {:?}",
-                window_state.message_table.selected_indicies
-            );
+            if let Some(&idx) = window_state.message_table.selected_indicies.first() {
+                return Some(window_state.dbc.messages()[idx].message_id());
+            }
+            None
         }
         Some(MessageTableMenuAction::Copy) => {
             println!(
                 "Handle copy for message : {:?}",
                 window_state.message_table.selected_indicies
             );
+            None
         }
         Some(MessageTableMenuAction::Paste) => {
             println!("Handle paste");
+            None
         }
         Some(MessageTableMenuAction::Delete) => {
             println!(
                 "Handle delete for message : {:?}",
                 window_state.message_table.selected_indicies
             );
+            None
         }
+        None => None,
     }
 }
 
