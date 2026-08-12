@@ -1,53 +1,66 @@
 use can_dbc::ByteOrder;
 use imgui::{TableFlags, Ui};
 
-use crate::editable_dbc::EditableMessage;
+use crate::editable_dbc::EditableDbc;
+
+pub enum MessageWindowEvent {
+    None,
+    EditSignal(String),
+}
 
 /// Message 详细窗口状态（包含 Signal 表格）
 #[allow(dead_code)]
 #[derive(Clone, Default)]
 pub struct MessageWindow {
-    pub message: EditableMessage,
+    pub message_id: u32,
     pub is_open: bool,
     pub parent_dbc_id: usize,
-    pub pending_signal_edit: Option<String>,
     pub selected_signal_name: Option<String>,
 }
 
 impl MessageWindow {
-    pub fn new(message: EditableMessage, parent_dbc_id: usize) -> Self {
+    pub fn new(message_id: u32, parent_dbc_id: usize) -> Self {
         Self {
-            message,
+            message_id,
             is_open: true,
             parent_dbc_id,
-            pending_signal_edit: None,
             selected_signal_name: None,
         }
     }
 
-    pub fn render(&mut self, ui: &Ui) {
+    pub fn render(&mut self, ui: &Ui, dbc: &EditableDbc) -> MessageWindowEvent {
+        let mut event = MessageWindowEvent::None;
+
+        let Some(message) = dbc.get_message(self.message_id) else {
+            return event;
+        };
+
         let title = format!(
-            "Signals - {} (0x{:03X})",
-            self.message.message_name(),
-            self.message.message_id()
+            "{} (0x{:03X})",
+            message.message_name(),
+            message.message_id()
         );
         let mut is_open = self.is_open;
 
         ui.window(&title)
-            .size([600.0, 400.0], imgui::Condition::FirstUseEver)
+            .size([700.0, 400.0], imgui::Condition::FirstUseEver)
             .opened(&mut is_open)
             .build(|| {
-                ui.text(format!("Size: {} bytes", self.message.message_size()));
-                ui.text(format!("Transmitter: {}", self.message.transmitter()));
+                ui.text(format!(
+                    "ID: 0x{:03X}  |  Size: {} bytes  |  Transmitter: {}",
+                    message.message_id(),
+                    message.message_size(),
+                    message.transmitter()
+                ));
 
-                let comment = self.message.comment();
+                let comment = message.comment();
                 if !comment.is_empty() {
                     ui.text(format!("Comment: {}", comment));
                 }
 
                 ui.separator();
 
-                let signals = self.message.signals();
+                let signals = message.signals();
                 if signals.is_empty() {
                     ui.text("No signals in this message");
                     return;
@@ -74,8 +87,23 @@ impl MessageWindow {
                     for signal in signals.iter() {
                         ui.table_next_row();
 
+                        let sig_name = signal.name();
+                        let is_selected = self.selected_signal_name.as_deref() == Some(sig_name);
+
                         ui.table_set_column_index(0);
-                        ui.text(signal.name());
+                        if ui
+                            .selectable_config(sig_name)
+                            .selected(is_selected)
+                            .span_all_columns(true)
+                            .build()
+                        {
+                            self.selected_signal_name = Some(sig_name.to_string());
+                        }
+                        if ui.is_item_hovered()
+                            && ui.is_mouse_double_clicked(imgui::MouseButton::Left)
+                        {
+                            event = MessageWindowEvent::EditSignal(sig_name.to_string());
+                        }
 
                         ui.table_set_column_index(1);
                         ui.text(format!("{}", signal.start_bit()));
@@ -90,7 +118,10 @@ impl MessageWindow {
                         });
 
                         ui.table_set_column_index(4);
-                        ui.text(format!("{:?}", signal.value_type()));
+                        ui.text(match signal.value_type() {
+                            can_dbc::ValueType::Unsigned => "Unsigned",
+                            can_dbc::ValueType::Signed => "Signed",
+                        });
 
                         ui.table_set_column_index(5);
                         ui.text(format!("{:.4}", signal.factor()));
@@ -105,5 +136,6 @@ impl MessageWindow {
             });
 
         self.is_open = is_open;
+        event
     }
 }

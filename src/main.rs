@@ -32,6 +32,10 @@ impl ApplicationHandler for App {
 
         match &event {
             WindowEvent::Resized(size) => {
+                if size.width == 0 || size.height == 0 {
+                    return;
+                }
+
                 window.surface_desc = wgpu::SurfaceConfiguration {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                     format: wgpu::TextureFormat::Bgra8UnormSrgb,
@@ -60,6 +64,10 @@ impl ApplicationHandler for App {
 
                 // 帧率限制：如果距离上次渲染时间太短，就跳过这次渲染
                 if delta_s < imgui.target_frame_time {
+                    return;
+                }
+
+                if window.surface_desc.width == 0 || window.surface_desc.height == 0 {
                     return;
                 }
 

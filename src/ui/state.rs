@@ -2,7 +2,6 @@
 
 use crate::editable_dbc::EditableMessage;
 use crate::ui::dbc_window::DbcWindow;
-use crate::ui::signal_edit_window::SignalEditDialog;
 
 #[allow(dead_code)]
 /// Confirmation dialog state for delete operations
@@ -61,13 +60,11 @@ pub struct UiState {
     pub dbc_windows: Vec<DbcWindow>,
     pub next_dbc_id: usize,
     pub error_dialog: ErrorDialog,
-    pub signal_edit_dialog: SignalEditDialog,
     pub last_focused_dbc_index: Option<usize>,
     pub dbc_window_focus_request: Option<usize>,
     pub message_window_focus_request: Option<usize>,
     pub last_focused_message_window: Option<usize>,
     pub clipboard: ClipboardState,
-    // confirmation dialog state for deletes
     pub confirm_delete_dialog: ConfirmDeleteDialog,
 }
 
@@ -79,7 +76,6 @@ impl Default for UiState {
             dbc_windows: Vec::new(),
             next_dbc_id: 1,
             error_dialog: ErrorDialog::default(),
-            signal_edit_dialog: SignalEditDialog::default(),
             last_focused_dbc_index: None,
             dbc_window_focus_request: None,
             message_window_focus_request: None,

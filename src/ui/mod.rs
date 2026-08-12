@@ -14,6 +14,7 @@ mod message_edit_window;
 mod message_window;
 mod signal_edit_window;
 pub mod state;
+mod tree_view;
 
 use imgui::Ui;
 use std::time::Duration;
