@@ -14,6 +14,7 @@ pub struct ConfirmDeleteDialog {
     pub show: bool,
     pub target: Option<DeleteTarget>,
     pub display_name: String,
+    pub was_open: bool,
 }
 
 impl Default for ConfirmDeleteDialog {
@@ -22,6 +23,7 @@ impl Default for ConfirmDeleteDialog {
             show: false,
             target: None,
             display_name: String::new(),
+            was_open: false,
         }
     }
 }

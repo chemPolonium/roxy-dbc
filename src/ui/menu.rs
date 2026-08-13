@@ -212,6 +212,17 @@ fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
             }
         }
     }
+
+    // Del 删除选中的消息（无需 Ctrl）；跳过文本输入焦点和待确认的删除对话框
+    if !ui.io().want_capture_keyboard && ui_state.confirm_delete_dialog.target.is_none() {
+        if let Some(idx) = ui_state.last_focused_dbc_index {
+            if ui_state.dbc_windows.get(idx).is_some()
+                && ui.is_key_pressed_no_repeat(imgui::Key::Delete)
+            {
+                edit_delete_message(ui_state, idx);
+            }
+        }
+    }
 }
 
 fn edit_copy_message(ui_state: &mut UiState, idx: usize) {

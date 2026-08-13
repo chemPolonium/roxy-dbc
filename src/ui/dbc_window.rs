@@ -704,7 +704,9 @@ fn render_confirm_delete_dialog(ui: &Ui, ui_state: &mut UiState) {
         ui_state.confirm_delete_dialog.show = false;
     }
 
-    if let Some(_popup) = ui.begin_modal_popup("Confirm Delete") {
+    let popup = ui.begin_modal_popup("Confirm Delete");
+    let is_open_now = popup.is_some();
+    if let Some(_popup) = popup {
         ui.text(format!(
             "Are you sure you want to delete {}?",
             ui_state.confirm_delete_dialog.display_name
@@ -720,6 +722,15 @@ fn render_confirm_delete_dialog(ui: &Ui, ui_state: &mut UiState) {
             ui.close_current_popup();
         }
     }
+
+    // 模态框被按钮以外的方式关闭（如 Esc）时清理残留 target，避免阻塞后续删除操作
+    if ui_state.confirm_delete_dialog.was_open
+        && !is_open_now
+        && ui_state.confirm_delete_dialog.target.is_some()
+    {
+        ui_state.confirm_delete_dialog.target = None;
+    }
+    ui_state.confirm_delete_dialog.was_open = is_open_now;
 }
 
 fn render_close_confirm_dialog(ui: &Ui, ui_state: &mut UiState) {
