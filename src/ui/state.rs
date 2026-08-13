@@ -1,12 +1,12 @@
 //! UI 状态管理模块
 
-use crate::editable_dbc::{EditableMessage, EditableSignal};
+use crate::editable_dbc::{EditableMessage, EditableSignal, ValidationIssue};
 use crate::ui::dbc_window::DbcWindow;
 
 #[allow(dead_code)]
 pub enum DeleteTarget {
-    Message(u32),
-    Signal(u32, String),
+    Messages(Vec<u32>),
+    Signals(u32, Vec<String>),
 }
 
 #[allow(dead_code)]
@@ -56,17 +56,31 @@ impl Default for ErrorDialog {
     }
 }
 
+pub struct ValidationDialog {
+    pub show: bool,
+    pub issues: Vec<ValidationIssue>,
+}
+
+impl Default for ValidationDialog {
+    fn default() -> Self {
+        Self {
+            show: false,
+            issues: Vec::new(),
+        }
+    }
+}
+
 /// 剪贴板状态（用于复制/粘贴）
 pub struct ClipboardState {
-    pub copied_message: Option<EditableMessage>,
-    pub copied_signal: Option<EditableSignal>,
+    pub copied_messages: Vec<EditableMessage>,
+    pub copied_signals: Vec<EditableSignal>,
 }
 
 impl Default for ClipboardState {
     fn default() -> Self {
         Self {
-            copied_message: None,
-            copied_signal: None,
+            copied_messages: Vec::new(),
+            copied_signals: Vec::new(),
         }
     }
 }
@@ -79,6 +93,7 @@ pub struct UiState {
     pub dbc_windows: Vec<DbcWindow>,
     pub next_dbc_id: usize,
     pub error_dialog: ErrorDialog,
+    pub validation_dialog: ValidationDialog,
     pub last_focused_dbc_index: Option<usize>,
     pub dbc_window_focus_request: Option<usize>,
     pub message_window_focus_request: Option<usize>,
@@ -87,6 +102,8 @@ pub struct UiState {
     pub confirm_delete_dialog: ConfirmDeleteDialog,
     pub close_confirm_dialog: CloseConfirmDialog,
     pub recent_files: Vec<String>,
+    pub file_hovering: bool,
+    pub node_dialog: crate::ui::node_window::NodeDialog,
 }
 
 impl Default for UiState {
@@ -97,6 +114,7 @@ impl Default for UiState {
             dbc_windows: Vec::new(),
             next_dbc_id: 1,
             error_dialog: ErrorDialog::default(),
+            validation_dialog: ValidationDialog::default(),
             last_focused_dbc_index: None,
             dbc_window_focus_request: None,
             message_window_focus_request: None,
@@ -105,6 +123,8 @@ impl Default for UiState {
             confirm_delete_dialog: ConfirmDeleteDialog::default(),
             close_confirm_dialog: CloseConfirmDialog::default(),
             recent_files: Vec::new(),
+            file_hovering: false,
+            node_dialog: crate::ui::node_window::NodeDialog::default(),
         }
     }
 }
@@ -144,7 +164,7 @@ impl UiState {
 
     /// 检查剪贴板是否有内容
     pub fn has_clipboard_message(&self) -> bool {
-        self.clipboard.copied_message.is_some()
+        !self.clipboard.copied_messages.is_empty()
     }
 
     /// 生成下一个可用的 Message ID

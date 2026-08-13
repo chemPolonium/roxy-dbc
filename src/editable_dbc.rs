@@ -10,6 +10,18 @@ fn numeric_to_f64(v: &can_dbc::NumericValue) -> f64 {
     }
 }
 
+#[derive(Clone)]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
+#[derive(Clone)]
+pub struct ValidationIssue {
+    pub severity: Severity,
+    pub message: String,
+}
+
 // 这个文件实现了一个可编辑的 Dbc 数据结构，支持基本的编辑操作和历史记录管理
 // 外部可以读取里面的属性，但是不可以编辑
 // 所有的编辑都是通过 EditableDbc 提供的方法来进行的，这些方法会记录操作历史以支持撤销和重做功能
@@ -160,6 +172,16 @@ pub enum Operation {
         message_id: u32,
         signal: EditableSignal,
     },
+    AddNode {
+        name: String,
+    },
+    DeleteNode {
+        name: String,
+    },
+    RenameNode {
+        old_name: String,
+        new_name: String,
+    },
 }
 
 #[allow(dead_code)]
@@ -229,12 +251,49 @@ impl EditableDbc {
         }
     }
 
+    pub fn from_imported(messages: Vec<EditableMessage>, nodes: Vec<String>) -> Self {
+        Self {
+            nodes,
+            messages,
+            history: Vec::new(),
+            compound_counts: Vec::new(),
+            redo_history: Vec::new(),
+            redo_compound_counts: Vec::new(),
+        }
+    }
+
     pub fn message_count(&self) -> usize {
         self.messages.len()
     }
 
     pub fn nodes(&self) -> &Vec<String> {
         &self.nodes
+    }
+
+    pub fn add_node(&mut self, name: &str) {
+        if self.nodes.iter().any(|n| n == name) {
+            return;
+        }
+        self.nodes.push(name.to_string());
+        self.push_compound(Operation::AddNode { name: name.to_string() });
+    }
+
+    pub fn delete_node(&mut self, name: &str) {
+        if !self.nodes.iter().any(|n| n == name) {
+            return;
+        }
+        self.nodes.retain(|n| n != name);
+        self.push_compound(Operation::DeleteNode { name: name.to_string() });
+    }
+
+    pub fn rename_node(&mut self, old_name: &str, new_name: &str) {
+        if let Some(node) = self.nodes.iter_mut().find(|n| *n == old_name) {
+            *node = new_name.to_string();
+            self.push_compound(Operation::RenameNode {
+                old_name: old_name.to_string(),
+                new_name: new_name.to_string(),
+            });
+        }
     }
 
     pub fn messages(&self) -> &Vec<EditableMessage> {
@@ -264,6 +323,93 @@ impl EditableDbc {
 
     pub fn can_redo(&self) -> bool {
         !self.redo_compound_counts.is_empty()
+    }
+
+    pub fn validate(&self) -> Vec<ValidationIssue> {
+        let mut issues = Vec::new();
+
+        let mut seen_ids: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+        let mut seen_names: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+
+        for msg in &self.messages {
+            if msg.message_name.is_empty() {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    message: format!("Message 0x{:03X} has empty name", msg.message_id),
+                });
+            }
+
+            if msg.message_size == 0 {
+                issues.push(ValidationIssue {
+                    severity: Severity::Warning,
+                    message: format!("Message '{}' (0x{:03X}) has zero size", msg.message_name, msg.message_id),
+                });
+            }
+
+            if let Some(prev_name) = seen_names.get(&msg.message_name) {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    message: format!(
+                        "Duplicate message name '{}': 0x{:03X} and 0x{:03X}",
+                        msg.message_name, *prev_name, msg.message_id
+                    ),
+                });
+            } else {
+                seen_names.insert(msg.message_name.clone(), msg.message_id);
+            }
+
+            if let Some(prev_name) = seen_ids.get(&msg.message_id) {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    message: format!(
+                        "Duplicate message ID 0x{:03X}: '{}' and '{}'",
+                        msg.message_id, prev_name, msg.message_name
+                    ),
+                });
+            } else {
+                seen_ids.insert(msg.message_id, msg.message_name.clone());
+            }
+
+            let max_bits = msg.message_size * 8;
+            let mut seen_signals: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+            for (sig_idx, sig) in msg.signals.iter().enumerate() {
+                let end_bit = sig.start_bit + sig.signal_size;
+                if end_bit > max_bits {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Error,
+                        message: format!(
+                            "Signal '{}' in '{}' exceeds message size: bit {}..{} > {} (DLC={} bytes)",
+                            sig.name, msg.message_name, sig.start_bit, end_bit, max_bits, msg.message_size
+                        ),
+                    });
+                }
+
+                if sig.signal_size == 0 {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Warning,
+                        message: format!(
+                            "Signal '{}' in '{}' has zero size",
+                            sig.name, msg.message_name
+                        ),
+                    });
+                }
+
+                if let Some(prev_idx) = seen_signals.get(&sig.name) {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Error,
+                        message: format!(
+                            "Duplicate signal name '{}' in message '{}' (index {} and {})",
+                            sig.name, msg.message_name, prev_idx, sig_idx
+                        ),
+                    });
+                } else {
+                    seen_signals.insert(sig.name.clone(), sig_idx);
+                }
+            }
+        }
+
+        issues
     }
 
     pub fn from_dbc(dbc: &Dbc) -> Self {
@@ -1000,6 +1146,20 @@ impl EditableDbc {
                 }
                 Ok(())
             }
+            Operation::AddNode { name } => {
+                self.nodes.retain(|n| n != name);
+                Ok(())
+            }
+            Operation::DeleteNode { name } => {
+                self.nodes.push(name.clone());
+                Ok(())
+            }
+            Operation::RenameNode { old_name, new_name } => {
+                if let Some(node) = self.nodes.iter_mut().find(|n| n.as_str() == new_name.as_str()) {
+                    *node = old_name.clone();
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1173,6 +1333,20 @@ impl EditableDbc {
                 }
                 Ok(())
             }
+            Operation::AddNode { name } => {
+                self.nodes.push(name.clone());
+                Ok(())
+            }
+            Operation::DeleteNode { name } => {
+                self.nodes.retain(|n| n != name);
+                Ok(())
+            }
+            Operation::RenameNode { old_name, new_name } => {
+                if let Some(node) = self.nodes.iter_mut().find(|n| n.as_str() == old_name.as_str()) {
+                    *node = new_name.clone();
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1253,7 +1427,7 @@ impl EditableDbc {
                 out.push_str(&format!(
                     "CM_ BO_ {} \"{}\";\n",
                     msg.message_id,
-                    msg.comment.replace('"', "\"")
+                    msg.comment.replace('\\', "\\\\").replace('"', "\\\"")
                 ));
             }
             for sig in &msg.signals {
@@ -1262,7 +1436,7 @@ impl EditableDbc {
                         "CM_ SG_ {} {} \"{}\";\n",
                         msg.message_id,
                         sig.name,
-                        sig.comment.replace('"', "\"")
+                        sig.comment.replace('\\', "\\\\").replace('"', "\\\"")
                     ));
                 }
             }
@@ -1278,7 +1452,7 @@ impl EditableDbc {
                     let entries: Vec<String> = sig
                         .value_descriptions
                         .iter()
-                        .map(|(val, desc)| format!("{} \"{}\"", val, desc.replace('"', "\"")))
+                        .map(|(val, desc)| format!("{} \"{}\"", val, desc.replace('\\', "\\\\").replace('"', "\\\"")))
                         .collect();
                     out.push_str(&format!(
                         "VAL_ {} {} {} ;\n",
@@ -1305,6 +1479,26 @@ impl EditableMessage {
             transmitter: "Vector__XXX".to_string(),
             signals: Vec::new(),
             comment: String::new(),
+        }
+    }
+
+    pub fn build(
+        message_id: u32,
+        frame_format: FrameFormat,
+        message_name: String,
+        message_size: u64,
+        transmitter: String,
+        signals: Vec<EditableSignal>,
+        comment: String,
+    ) -> Self {
+        Self {
+            message_id,
+            frame_format,
+            message_name,
+            message_size,
+            transmitter,
+            signals,
+            comment,
         }
     }
 
@@ -1397,6 +1591,39 @@ impl EditableSignal {
             receivers: Vec::new(),
             comment: String::new(),
             value_descriptions: Vec::new(),
+        }
+    }
+
+    pub fn build(
+        name: String,
+        start_bit: u64,
+        signal_size: u64,
+        byte_order: ByteOrder,
+        value_type: ValueType,
+        factor: f64,
+        offset: f64,
+        min: f64,
+        max: f64,
+        unit: String,
+        receivers: Vec<String>,
+        value_descriptions: Vec<(i64, String)>,
+        comment: String,
+    ) -> Self {
+        Self {
+            name,
+            multiplexer_indicator: MultiplexIndicator::Plain,
+            start_bit,
+            signal_size,
+            byte_order,
+            value_type,
+            factor,
+            offset,
+            min,
+            max,
+            unit,
+            receivers,
+            comment,
+            value_descriptions,
         }
     }
 

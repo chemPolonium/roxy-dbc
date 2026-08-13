@@ -1,5 +1,6 @@
 //! 菜单栏渲染模块
 
+use crate::editable_dbc::{EditableDbc, EditableMessage, FrameFormat};
 use crate::ui::dbc_window::DbcWindow;
 use crate::ui::state::{DeleteTarget, UiState};
 use imgui::Ui;
@@ -10,6 +11,7 @@ pub fn render_main_menu_bar(ui: &Ui, ui_state: &mut UiState) {
         render_file_menu(ui, ui_state);
         render_edit_menu(ui, ui_state);
         render_view_menu(ui, ui_state);
+        render_tools_menu(ui, ui_state);
         render_help_menu(ui, ui_state);
     });
 }
@@ -20,8 +22,30 @@ fn render_file_menu(ui: &Ui, ui_state: &mut UiState) {
     let shift = ui.io().key_shift;
 
     ui.menu("File", || {
-        if ui.menu_item("Load DBC File") {
+        if ui
+            .menu_item_config("New DBC")
+            .shortcut("Ctrl+N")
+            .build()
+        {
+            handle_new_dbc(ui_state);
+        }
+        ui.separator();
+        if ui
+            .menu_item_config("Load DBC File")
+            .shortcut("Ctrl+O")
+            .build()
+        {
             handle_load_dbc_file(ui_state);
+        }
+        if ui.menu_item("Import...") {
+            handle_import_file(ui_state);
+        }
+        if ui
+            .menu_item_config("Export ARXML...")
+            .enabled(ui_state.last_focused_dbc_index.is_some())
+            .build()
+        {
+            handle_export_arxml(ui_state);
         }
         if !ui_state.recent_files.is_empty() {
             ui.menu("Recent Files", || {
@@ -67,6 +91,14 @@ fn render_file_menu(ui: &Ui, ui_state: &mut UiState) {
             handle_save_dbc(ui_state, false);
         }
     }
+
+    if ctrl && ui.is_key_pressed_no_repeat(imgui::Key::O) {
+        handle_load_dbc_file(ui_state);
+    }
+
+    if ctrl && ui.is_key_pressed_no_repeat(imgui::Key::N) {
+        handle_new_dbc(ui_state);
+    }
 }
 
 /// 渲染编辑菜单
@@ -103,7 +135,7 @@ fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
 
                 ui.separator();
 
-                let has_selection = win.selected_message_id().is_some();
+                let has_selection = !win.selected_message_ids().is_empty();
                 let has_clipboard = ui_state.has_clipboard_message();
 
                 if ui
@@ -138,6 +170,10 @@ fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
                     .build()
                 {
                     edit_delete_message(ui_state, idx);
+                }
+                ui.separator();
+                if ui.menu_item("Add Message") {
+                    edit_add_message(ui_state, idx);
                 }
             } else {
                 ui.text_disabled("No active DBC window");
@@ -179,57 +215,110 @@ fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
 }
 
 fn edit_copy_message(ui_state: &mut UiState, idx: usize) {
-    if let Some(win) = ui_state.dbc_windows.get(idx) {
-        if let Some(msg_id) = win.selected_message_id() {
-            if let Some(msg) = win.dbc.get_message(msg_id) {
-                ui_state.clipboard.copied_message = Some(msg.clone());
-            }
-        }
+    let ids = ui_state.dbc_windows[idx].selected_message_ids();
+    let msgs: Vec<EditableMessage> = ids
+        .iter()
+        .filter_map(|id| ui_state.dbc_windows[idx].dbc.get_message(*id).cloned())
+        .collect();
+    if !msgs.is_empty() {
+        ui_state.clipboard.copied_messages = msgs;
     }
 }
 
 fn edit_cut_message(ui_state: &mut UiState, idx: usize) {
-    if let Some(win) = ui_state.dbc_windows.get(idx) {
-        if let Some(msg_id) = win.selected_message_id() {
-            if let Some(msg) = win.dbc.get_message(msg_id) {
-                ui_state.clipboard.copied_message = Some(msg.clone());
-                let name = msg.message_name().to_string();
-                ui_state.confirm_delete_dialog.target = Some(DeleteTarget::Message(msg_id));
-                ui_state.confirm_delete_dialog.display_name =
-                    format!("message '{}'", name);
-                ui_state.confirm_delete_dialog.show = true;
-            }
-        }
+    let ids = ui_state.dbc_windows[idx].selected_message_ids();
+    if ids.is_empty() {
+        return;
     }
+    let msgs: Vec<EditableMessage> = ids
+        .iter()
+        .filter_map(|id| ui_state.dbc_windows[idx].dbc.get_message(*id).cloned())
+        .collect();
+    if !msgs.is_empty() {
+        ui_state.clipboard.copied_messages = msgs;
+    }
+    ui_state.confirm_delete_dialog.target = Some(DeleteTarget::Messages(ids.clone()));
+    ui_state.confirm_delete_dialog.display_name = if ids.len() == 1 {
+        let name = ui_state.dbc_windows[idx]
+            .dbc
+            .get_message(ids[0])
+            .map(|m| m.message_name().to_string())
+            .unwrap_or_default();
+        format!("message '{}'", name)
+    } else {
+        format!("{} messages", ids.len())
+    };
+    ui_state.confirm_delete_dialog.show = true;
 }
 
 fn edit_paste_message(ui_state: &mut UiState, idx: usize) {
-    if let Some(copied) = &ui_state.clipboard.copied_message {
-        let mut new_msg = copied.clone();
-        let new_id = ui_state.generate_next_message_id(idx);
-        new_msg.set_message_id(new_id);
+    let copied = ui_state.clipboard.copied_messages.clone();
+    if copied.is_empty() {
+        return;
+    }
+    let win = &mut ui_state.dbc_windows[idx];
+    let mut next_id = win
+        .dbc
+        .messages()
+        .iter()
+        .map(|m| m.message_id())
+        .max()
+        .unwrap_or(0)
+        + 1;
+    for mut new_msg in copied {
+        new_msg.set_message_id(next_id);
         let new_name = format!("{}_copy", new_msg.message_name());
         new_msg.set_message_name(&new_name);
-        if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
-            win.dbc.add_message(&new_msg);
-            win.is_dirty = true;
-        }
+        win.dbc.add_message(&new_msg);
+        next_id += 1;
     }
+    win.is_dirty = true;
 }
 
 fn edit_delete_message(ui_state: &mut UiState, idx: usize) {
-    if let Some(win) = ui_state.dbc_windows.get(idx) {
-        if let Some(msg_id) = win.selected_message_id() {
-            let name = win
-                .dbc
-                .get_message(msg_id)
-                .map(|m| m.message_name().to_string())
-                .unwrap_or_default();
-            ui_state.confirm_delete_dialog.target = Some(DeleteTarget::Message(msg_id));
-            ui_state.confirm_delete_dialog.display_name =
-                format!("message '{}'", name);
-            ui_state.confirm_delete_dialog.show = true;
-        }
+    let ids = ui_state.dbc_windows[idx].selected_message_ids();
+    if ids.is_empty() {
+        return;
+    }
+    ui_state.confirm_delete_dialog.target = Some(DeleteTarget::Messages(ids.clone()));
+    ui_state.confirm_delete_dialog.display_name = if ids.len() == 1 {
+        let name = ui_state.dbc_windows[idx]
+            .dbc
+            .get_message(ids[0])
+            .map(|m| m.message_name().to_string())
+            .unwrap_or_default();
+        format!("message '{}'", name)
+    } else {
+        format!("{} messages", ids.len())
+    };
+    ui_state.confirm_delete_dialog.show = true;
+}
+
+fn edit_add_message(ui_state: &mut UiState, idx: usize) {
+    let next_id = ui_state.generate_next_message_id(idx);
+    let msg_count = if let Some(win) = ui_state.dbc_windows.get(idx) {
+        win.dbc.messages().len()
+    } else {
+        return;
+    };
+    let frame_format = if next_id > 0x7FF {
+        FrameFormat::Extended
+    } else {
+        FrameFormat::Standard
+    };
+    let msg = EditableMessage::build(
+        next_id,
+        frame_format,
+        format!("Message_{}", msg_count),
+        8,
+        "Vector__XXX".to_string(),
+        Vec::new(),
+        String::new(),
+    );
+    if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
+        win.dbc.add_message(&msg);
+        win.set_selected_message_id(Some(next_id));
+        win.is_dirty = true;
     }
 }
 
@@ -240,6 +329,29 @@ fn render_view_menu(ui: &Ui, ui_state: &mut UiState) {
     });
 }
 
+/// 渲染工具菜单
+fn render_tools_menu(ui: &Ui, ui_state: &mut UiState) {
+    let has_dbc = !ui_state.dbc_windows.is_empty();
+
+    ui.menu("Tools", || {
+        if ui.menu_item_config("Validate").enabled(has_dbc).build() {
+            if let Some(idx) = ui_state.last_focused_dbc_index {
+                if let Some(win) = ui_state.dbc_windows.get(idx) {
+                    ui_state.validation_dialog.issues = win.dbc.validate();
+                    ui_state.validation_dialog.show = true;
+                }
+            }
+        }
+        if ui
+            .menu_item_config("Nodes")
+            .enabled(ui_state.last_focused_dbc_index.is_some())
+            .build()
+        {
+            ui_state.node_dialog.show = true;
+        }
+    });
+}
+
 /// 渲染帮助菜单
 fn render_help_menu(ui: &Ui, ui_state: &mut UiState) {
     ui.menu("Help", || {
@@ -247,6 +359,14 @@ fn render_help_menu(ui: &Ui, ui_state: &mut UiState) {
             ui_state.show_about_dialog = true;
         }
     });
+}
+
+/// 处理新建 DBC 文件
+fn handle_new_dbc(ui_state: &mut UiState) {
+    let editable_dbc = EditableDbc::new();
+    let dbc_window = DbcWindow::new("Untitled.dbc", editable_dbc);
+    ui_state.dbc_windows.push(dbc_window);
+    ui_state.last_focused_dbc_index = Some(ui_state.dbc_windows.len() - 1);
 }
 
 /// 处理加载 DBC 文件
@@ -268,6 +388,51 @@ fn handle_load_dbc_file(ui_state: &mut UiState) {
         focus_existing_dbc_window(ui_state, existing_idx);
     } else {
         load_new_dbc_file(ui_state, &path);
+    }
+}
+
+/// 处理导入 ARXML/KCD 文件
+fn handle_import_file(ui_state: &mut UiState) {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("ARXML/KCD files", &["arxml", "kcd"])
+        .pick_file()
+    else {
+        return;
+    };
+
+    let path_str = path.to_string_lossy().to_string();
+    match crate::import::import_file(&path) {
+        Ok(editable_dbc) => {
+            let dbc_window = DbcWindow::new(&path_str, editable_dbc);
+            ui_state.add_recent_file(&path_str);
+            ui_state.dbc_windows.push(dbc_window);
+            ui_state.last_focused_dbc_index = Some(ui_state.dbc_windows.len() - 1);
+        }
+        Err(e) => {
+            ui_state.error_dialog.message = format!("Import failed: {}", e);
+            ui_state.error_dialog.show = true;
+        }
+    }
+}
+
+fn handle_export_arxml(ui_state: &mut UiState) {
+    let idx = match ui_state.last_focused_dbc_index {
+        Some(i) => i,
+        None => return,
+    };
+
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("ARXML files", &["arxml"])
+        .set_file_name("export.arxml")
+        .save_file()
+    else {
+        return;
+    };
+
+    let xml = crate::export::arxml::export_arxml(&ui_state.dbc_windows[idx].dbc);
+    if let Err(e) = std::fs::write(&path, xml) {
+        ui_state.error_dialog.message = format!("Export failed: {}", e);
+        ui_state.error_dialog.show = true;
     }
 }
 
@@ -334,7 +499,10 @@ fn handle_save_dbc(ui_state: &mut UiState, save_as: bool) {
         None => return,
     };
 
-    let save_path = if save_as {
+    let file_path = &ui_state.dbc_windows[idx].file_path;
+    let needs_dialog = save_as || !std::path::Path::new(file_path).exists();
+
+    let save_path = if needs_dialog {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("DBC files", &["dbc"])
             .set_file_name("output.dbc")
@@ -350,9 +518,7 @@ fn handle_save_dbc(ui_state: &mut UiState, save_as: bool) {
     let dbc_string = ui_state.dbc_windows[idx].dbc.to_dbc_string();
     match std::fs::write(&save_path, &dbc_string) {
         Ok(_) => {
-            if save_as {
-                ui_state.dbc_windows[idx].file_path = save_path;
-            }
+            ui_state.dbc_windows[idx].file_path = save_path;
             ui_state.dbc_windows[idx].is_dirty = false;
         }
         Err(e) => {

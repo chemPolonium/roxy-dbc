@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use crate::editable_dbc::EditableDbc;
+use crate::editable_dbc::{EditableDbc, EditableMessage, FrameFormat};
 use crate::ui::message_edit_window::{MessageEditEvent, MessageEditWindowState};
 use crate::ui::message_window::{MessageWindow, MessageWindowEvent};
 use crate::ui::signal_edit_window::SignalEditDialog;
@@ -14,10 +14,11 @@ enum MessageTableEvent {
     None,
     OpenMessage(u32),
     EditMessage(u32),
-    CopyMessage(u32),
-    CutMessage(u32),
-    DeleteMessage(u32),
+    CopyMessage(Vec<u32>),
+    CutMessage(Vec<u32>),
+    DeleteMessage(Vec<u32>),
     PasteMessage,
+    AddMessage,
 }
 
 #[derive(Clone)]
@@ -37,9 +38,9 @@ impl Default for MessageTableState {
 
 #[allow(dead_code)]
 pub enum SignalWindowEvent {
-    CopySignal { msg_id: u32, sig_name: String },
-    CutSignal { msg_id: u32, sig_name: String },
-    DeleteSignal { msg_id: u32, sig_name: String },
+    CopySignal { msg_id: u32, sig_names: Vec<String> },
+    CutSignal { msg_id: u32, sig_names: Vec<String> },
+    DeleteSignal { msg_id: u32, sig_names: Vec<String> },
     PasteSignal { msg_id: u32 },
 }
 
@@ -50,7 +51,9 @@ pub struct DbcWindow {
     pub dbc: EditableDbc,
     pub is_dirty: bool,
 
-    selected_message_id: Option<u32>,
+    selected_message_ids: Vec<u32>,
+    selection_anchor: Option<u32>,
+    selection_cursor: Option<u32>,
     search_query: String,
     message_table: MessageTableState,
     pub message_windows: Vec<MessageWindow>,
@@ -65,7 +68,9 @@ impl Default for DbcWindow {
             file_path: String::new(),
             dbc: EditableDbc::default(),
             is_dirty: false,
-            selected_message_id: None,
+            selected_message_ids: Vec::new(),
+            selection_anchor: None,
+            selection_cursor: None,
             search_query: String::new(),
             message_table: MessageTableState::default(),
             message_windows: Vec::new(),
@@ -82,7 +87,9 @@ impl DbcWindow {
             file_path: file_path.to_string(),
             dbc,
             is_dirty: false,
-            selected_message_id: None,
+            selected_message_ids: Vec::new(),
+            selection_anchor: None,
+            selection_cursor: None,
             search_query: String::new(),
             message_table: MessageTableState::default(),
             message_windows: Vec::new(),
@@ -91,8 +98,25 @@ impl DbcWindow {
         }
     }
 
-    pub fn selected_message_id(&self) -> Option<u32> {
-        self.selected_message_id
+    pub fn selected_message_ids(&self) -> Vec<u32> {
+        self.selected_message_ids.clone()
+    }
+
+    pub fn set_selected_message_id(&mut self, id: Option<u32>) {
+        match id {
+            Some(id) => {
+                self.selected_message_ids = vec![id];
+                self.selection_anchor = Some(id);
+                self.selection_cursor = Some(id);
+            }
+            None => self.clear_selection(),
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selected_message_ids.clear();
+        self.selection_anchor = None;
+        self.selection_cursor = None;
     }
 
     pub fn from_path(file_path: &Path) -> Result<Self, String> {
@@ -114,6 +138,10 @@ impl DbcWindow {
     fn render_message_table(&mut self, ui: &Ui, has_clipboard: bool) -> MessageTableEvent {
         let mut event = MessageTableEvent::None;
 
+        if ui.small_button("+ Add Message") {
+            event = MessageTableEvent::AddMessage;
+        }
+        ui.same_line();
         ui.input_text("##msg_search", &mut self.search_query)
             .hint("Filter messages...")
             .build();
@@ -149,29 +177,50 @@ impl DbcWindow {
 
         // Keyboard navigation
         if ui.is_window_focused() && !filtered.is_empty() {
-            let current_pos = self
-                .selected_message_id
+            let shift = ui.io().key_shift;
+            let cursor_pos = self
+                .selection_cursor
                 .and_then(|id| filtered.iter().position(|&idx| messages[idx].message_id() == id));
 
-            if ui.is_key_pressed(imgui::Key::DownArrow) {
-                let next_pos = match current_pos {
-                    Some(p) => (p + 1).min(filtered.len() - 1),
-                    None => 0,
-                };
-                let next_idx = filtered[next_pos];
-                self.selected_message_id = Some(messages[next_idx].message_id());
-            }
-            if ui.is_key_pressed(imgui::Key::UpArrow) {
-                let prev_pos = match current_pos {
+            let move_cursor = |pos: Option<usize>, down: bool| -> usize {
+                match pos {
+                    Some(p) if down => (p + 1).min(filtered.len() - 1),
                     Some(0) => 0,
                     Some(p) => p - 1,
+                    None if down => 0,
                     None => filtered.len() - 1,
-                };
-                let prev_idx = filtered[prev_pos];
-                self.selected_message_id = Some(messages[prev_idx].message_id());
+                }
+            };
+
+            let mut new_pos: Option<usize> = None;
+            if ui.is_key_pressed(imgui::Key::DownArrow) {
+                new_pos = Some(move_cursor(cursor_pos, true));
+            }
+            if ui.is_key_pressed(imgui::Key::UpArrow) {
+                new_pos = Some(move_cursor(cursor_pos, false));
+            }
+
+            if let Some(pos) = new_pos {
+                let new_id = messages[filtered[pos]].message_id();
+                self.selection_cursor = Some(new_id);
+                if shift {
+                    let anchor = self.selection_anchor.unwrap_or(new_id);
+                    let anchor_pos = filtered
+                        .iter()
+                        .position(|&idx| messages[idx].message_id() == anchor)
+                        .unwrap_or(pos);
+                    let (lo, hi) = if anchor_pos <= pos { (anchor_pos, pos) } else { (pos, anchor_pos) };
+                    self.selected_message_ids = filtered[lo..=hi]
+                        .iter()
+                        .map(|&idx| messages[idx].message_id())
+                        .collect();
+                } else {
+                    self.selected_message_ids = vec![new_id];
+                    self.selection_anchor = Some(new_id);
+                }
             }
             if ui.is_key_pressed(imgui::Key::Enter) {
-                if let Some(msg_id) = self.selected_message_id {
+                if let Some(msg_id) = self.selection_cursor.or(self.selected_message_ids.first().copied()) {
                     event = MessageTableEvent::OpenMessage(msg_id);
                 }
             }
@@ -205,13 +254,13 @@ impl DbcWindow {
                 }
             }
 
-            for &idx in &filtered {
+            for (row_pos, &idx) in filtered.iter().enumerate() {
                 let msg = &messages[idx];
                 let msg_id = msg.message_id();
 
                 ui.table_next_row();
 
-                let is_selected = self.selected_message_id == Some(msg_id);
+                let is_selected = self.selected_message_ids.contains(&msg_id);
 
                 ui.table_set_column_index(0);
                 if ui
@@ -220,7 +269,39 @@ impl DbcWindow {
                     .span_all_columns(true)
                     .build()
                 {
-                    self.selected_message_id = Some(msg_id);
+                    let ctrl = ui.io().key_ctrl;
+                    let shift = ui.io().key_shift;
+                    if ctrl {
+                        if let Some(pos) =
+                            self.selected_message_ids.iter().position(|&id| id == msg_id)
+                        {
+                            self.selected_message_ids.remove(pos);
+                        } else {
+                            self.selected_message_ids.push(msg_id);
+                        }
+                        self.selection_anchor = Some(msg_id);
+                        self.selection_cursor = Some(msg_id);
+                    } else if shift {
+                        let anchor = self.selection_anchor.unwrap_or(msg_id);
+                        let anchor_pos = filtered
+                            .iter()
+                            .position(|&i| messages[i].message_id() == anchor)
+                            .unwrap_or(row_pos);
+                        let (lo, hi) = if anchor_pos <= row_pos {
+                            (anchor_pos, row_pos)
+                        } else {
+                            (row_pos, anchor_pos)
+                        };
+                        self.selected_message_ids = filtered[lo..=hi]
+                            .iter()
+                            .map(|&i| messages[i].message_id())
+                            .collect();
+                        self.selection_cursor = Some(msg_id);
+                    } else {
+                        self.selected_message_ids = vec![msg_id];
+                        self.selection_anchor = Some(msg_id);
+                        self.selection_cursor = Some(msg_id);
+                    }
                 }
                 if ui.is_item_hovered()
                     && ui.is_mouse_double_clicked(imgui::MouseButton::Left)
@@ -231,15 +312,20 @@ impl DbcWindow {
                 if let Some(_popup) =
                     ui.begin_popup_context_with_label(format!("msg_ctx_{}", msg_id))
                 {
-                    self.selected_message_id = Some(msg_id);
+                    if !self.selected_message_ids.contains(&msg_id) {
+                        self.selected_message_ids = vec![msg_id];
+                        self.selection_anchor = Some(msg_id);
+                        self.selection_cursor = Some(msg_id);
+                    }
+                    let selected_ids = self.selected_message_ids.clone();
                     if ui.menu_item("Edit") {
                         event = MessageTableEvent::EditMessage(msg_id);
                     }
                     if ui.menu_item("Copy") {
-                        event = MessageTableEvent::CopyMessage(msg_id);
+                        event = MessageTableEvent::CopyMessage(selected_ids.clone());
                     }
                     if ui.menu_item("Cut") {
-                        event = MessageTableEvent::CutMessage(msg_id);
+                        event = MessageTableEvent::CutMessage(selected_ids.clone());
                     }
                     ui.separator();
                     if ui.menu_item_config("Paste").enabled(has_clipboard).build() {
@@ -247,7 +333,7 @@ impl DbcWindow {
                     }
                     ui.separator();
                     if ui.menu_item("Delete") {
-                        event = MessageTableEvent::DeleteMessage(msg_id);
+                        event = MessageTableEvent::DeleteMessage(selected_ids);
                     }
                 }
 
@@ -285,28 +371,32 @@ impl DbcWindow {
                         }
                     }
                 }
-                MessageWindowEvent::CopySignal(sig_name) => {
+                MessageWindowEvent::CopySignal(sig_names) => {
                     signal_events.push(SignalWindowEvent::CopySignal {
                         msg_id: msg_win.message_id,
-                        sig_name,
+                        sig_names,
                     });
                 }
-                MessageWindowEvent::CutSignal(sig_name) => {
+                MessageWindowEvent::CutSignal(sig_names) => {
                     signal_events.push(SignalWindowEvent::CutSignal {
                         msg_id: msg_win.message_id,
-                        sig_name,
+                        sig_names,
                     });
                 }
-                MessageWindowEvent::DeleteSignal(sig_name) => {
+                MessageWindowEvent::DeleteSignal(sig_names) => {
                     signal_events.push(SignalWindowEvent::DeleteSignal {
                         msg_id: msg_win.message_id,
-                        sig_name,
+                        sig_names,
                     });
                 }
                 MessageWindowEvent::PasteSignal => {
                     signal_events.push(SignalWindowEvent::PasteSignal {
                         msg_id: msg_win.message_id,
                     });
+                }
+                MessageWindowEvent::AddSignal => {
+                    self.dbc.new_signal(msg_win.message_id);
+                    self.is_dirty = true;
                 }
                 MessageWindowEvent::None => {}
             }
@@ -422,7 +512,7 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
 
         let mut is_open = ui_state.dbc_windows[window_idx].is_open;
         let was_open = is_open;
-        let has_clipboard = ui_state.clipboard.copied_message.is_some();
+        let has_clipboard = !ui_state.clipboard.copied_messages.is_empty();
 
         let window_ui = ui
             .window(&window_title)
@@ -430,7 +520,24 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
             .opened(&mut is_open);
 
         let table_event = window_ui.build(|| {
-            ui_state.dbc_windows[window_idx].render_message_table(ui, has_clipboard)
+            let event = ui_state.dbc_windows[window_idx].render_message_table(ui, has_clipboard);
+
+            let msg_count = ui_state.dbc_windows[window_idx].dbc.messages().len();
+            let sig_count: usize = ui_state.dbc_windows[window_idx]
+                .dbc
+                .messages()
+                .iter()
+                .map(|m| m.signals().len())
+                .sum();
+            let file_path = &ui_state.dbc_windows[window_idx].file_path;
+
+            ui.separator();
+            ui.text_disabled(format!(
+                "{}  |  {} message(s)  |  {} signal(s)",
+                file_path, msg_count, sig_count
+            ));
+
+            event
         });
 
         if ui.is_window_focused() {
@@ -474,9 +581,10 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
 
     render_confirm_delete_dialog(ui, ui_state);
     render_close_confirm_dialog(ui, ui_state);
+    render_validation_dialog(ui, ui_state);
 
     for i in 0..ui_state.dbc_windows.len() {
-        let has_clipboard = ui_state.clipboard.copied_signal.is_some();
+        let has_clipboard = !ui_state.clipboard.copied_signals.is_empty();
         let signal_events = ui_state.dbc_windows[i].render_floating_windows(ui, has_clipboard);
         for evt in signal_events {
             handle_signal_window_event(ui_state, evt);
@@ -499,46 +607,94 @@ fn handle_message_table_event(
                 ui_state.dbc_windows[window_idx].edit_windows.push(edit_win);
             }
         }
-        MessageTableEvent::CopyMessage(msg_id) => {
-            if let Some(msg) = ui_state.dbc_windows[window_idx].dbc.get_message(msg_id) {
-                ui_state.clipboard.copied_message = Some(msg.clone());
+        MessageTableEvent::CopyMessage(ids) => {
+            let msgs: Vec<EditableMessage> = ids
+                .iter()
+                .filter_map(|id| ui_state.dbc_windows[window_idx].dbc.get_message(*id).cloned())
+                .collect();
+            if !msgs.is_empty() {
+                ui_state.clipboard.copied_messages = msgs;
             }
         }
-        MessageTableEvent::CutMessage(msg_id) => {
-            if let Some(msg) = ui_state.dbc_windows[window_idx].dbc.get_message(msg_id) {
-                ui_state.clipboard.copied_message = Some(msg.clone());
+        MessageTableEvent::CutMessage(ids) => {
+            let msgs: Vec<EditableMessage> = ids
+                .iter()
+                .filter_map(|id| ui_state.dbc_windows[window_idx].dbc.get_message(*id).cloned())
+                .collect();
+            if !msgs.is_empty() {
+                ui_state.clipboard.copied_messages = msgs;
             }
-            let name = ui_state.dbc_windows[window_idx]
-                .dbc
-                .get_message(msg_id)
-                .map(|m| m.message_name().to_string())
-                .unwrap_or_default();
-            ui_state.confirm_delete_dialog.target = Some(DeleteTarget::Message(msg_id));
-            ui_state.confirm_delete_dialog.display_name = format!("message '{}'", name);
+            ui_state.confirm_delete_dialog.target = Some(DeleteTarget::Messages(ids.clone()));
+            ui_state.confirm_delete_dialog.display_name = messages_display_name(
+                &ui_state.dbc_windows[window_idx].dbc,
+                &ids,
+            );
             ui_state.confirm_delete_dialog.show = true;
         }
-        MessageTableEvent::DeleteMessage(msg_id) => {
-            let name = ui_state.dbc_windows[window_idx]
-                .dbc
-                .get_message(msg_id)
-                .map(|m| m.message_name().to_string())
-                .unwrap_or_default();
-            ui_state.confirm_delete_dialog.target = Some(DeleteTarget::Message(msg_id));
-            ui_state.confirm_delete_dialog.display_name = format!("message '{}'", name);
+        MessageTableEvent::DeleteMessage(ids) => {
+            ui_state.confirm_delete_dialog.target = Some(DeleteTarget::Messages(ids.clone()));
+            ui_state.confirm_delete_dialog.display_name = messages_display_name(
+                &ui_state.dbc_windows[window_idx].dbc,
+                &ids,
+            );
             ui_state.confirm_delete_dialog.show = true;
         }
         MessageTableEvent::PasteMessage => {
-            if let Some(copied) = &ui_state.clipboard.copied_message {
-                let mut new_msg = copied.clone();
-                let new_id = ui_state.generate_next_message_id(window_idx);
-                new_msg.set_message_id(new_id);
-                let new_name = format!("{}_copy", new_msg.message_name());
-                new_msg.set_message_name(&new_name);
-                ui_state.dbc_windows[window_idx].dbc.add_message(&new_msg);
-                ui_state.dbc_windows[window_idx].is_dirty = true;
+            let copied = ui_state.clipboard.copied_messages.clone();
+            if !copied.is_empty() {
+                let win = &mut ui_state.dbc_windows[window_idx];
+                let mut next_id = win
+                    .dbc
+                    .messages()
+                    .iter()
+                    .map(|m| m.message_id())
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
+                for mut new_msg in copied {
+                    new_msg.set_message_id(next_id);
+                    let new_name = format!("{}_copy", new_msg.message_name());
+                    new_msg.set_message_name(&new_name);
+                    win.dbc.add_message(&new_msg);
+                    next_id += 1;
+                }
+                win.is_dirty = true;
             }
         }
+        MessageTableEvent::AddMessage => {
+            let next_id = ui_state.generate_next_message_id(window_idx);
+            let msg_count = ui_state.dbc_windows[window_idx].dbc.messages().len();
+            let frame_format = if next_id > 0x7FF {
+                FrameFormat::Extended
+            } else {
+                FrameFormat::Standard
+            };
+            let msg = EditableMessage::build(
+                next_id,
+                frame_format,
+                format!("Message_{}", msg_count),
+                8,
+                "Vector__XXX".to_string(),
+                Vec::new(),
+                String::new(),
+            );
+            ui_state.dbc_windows[window_idx].dbc.add_message(&msg);
+            ui_state.dbc_windows[window_idx].set_selected_message_id(Some(next_id));
+            ui_state.dbc_windows[window_idx].is_dirty = true;
+        }
         MessageTableEvent::None => {}
+    }
+}
+
+fn messages_display_name(dbc: &EditableDbc, ids: &[u32]) -> String {
+    if ids.len() == 1 {
+        let name = dbc
+            .get_message(ids[0])
+            .map(|m| m.message_name().to_string())
+            .unwrap_or_default();
+        format!("message '{}'", name)
+    } else {
+        format!("{} messages", ids.len())
     }
 }
 
@@ -616,6 +772,70 @@ fn render_close_confirm_dialog(ui: &Ui, ui_state: &mut UiState) {
     }
 }
 
+fn render_validation_dialog(ui: &Ui, ui_state: &mut UiState) {
+    if !ui_state.validation_dialog.show {
+        return;
+    }
+
+    let mut is_open = true;
+    ui.window("Validation Results")
+        .opened(&mut is_open)
+        .always_auto_resize(true)
+        .build(|| {
+            let issues = &ui_state.validation_dialog.issues;
+            let error_count = issues
+                .iter()
+                .filter(|i| matches!(i.severity, crate::editable_dbc::Severity::Error))
+                .count();
+            let warning_count = issues
+                .iter()
+                .filter(|i| matches!(i.severity, crate::editable_dbc::Severity::Warning))
+                .count();
+
+            if issues.is_empty() {
+                ui.text_colored([0.0, 0.8, 0.0, 1.0], "No issues found. DBC is valid.");
+            } else {
+                ui.text(format!(
+                    "Found {} error(s), {} warning(s):",
+                    error_count, warning_count
+                ));
+                ui.separator();
+
+                if let Some(_table) = ui.begin_table_with_flags(
+                    "validation_table",
+                    2,
+                    imgui::TableFlags::RESIZABLE
+                        | imgui::TableFlags::BORDERS
+                        | imgui::TableFlags::SCROLL_Y
+                        | imgui::TableFlags::SIZING_FIXED_FIT,
+                ) {
+                    ui.table_setup_column("Severity");
+                    ui.table_setup_column("Message");
+                    ui.table_headers_row();
+
+                    for issue in issues {
+                        ui.table_next_row();
+                        ui.table_set_column_index(0);
+                        match issue.severity {
+                            crate::editable_dbc::Severity::Error => {
+                                ui.text_colored([1.0, 0.3, 0.3, 1.0], "ERROR");
+                            }
+                            crate::editable_dbc::Severity::Warning => {
+                                ui.text_colored([1.0, 0.8, 0.0, 1.0], "WARN");
+                            }
+                        }
+                        ui.table_set_column_index(1);
+                        ui.text(&issue.message);
+                    }
+                }
+            }
+        });
+
+    if !is_open {
+        ui_state.validation_dialog.show = false;
+    }
+}
+
 pub fn save_dbc_window(ui_state: &mut UiState, idx: usize) {
     let save_path = ui_state.dbc_windows[idx].file_path.clone();
     let dbc_string = ui_state.dbc_windows[idx].dbc.to_dbc_string();
@@ -632,69 +852,110 @@ pub fn save_dbc_window(ui_state: &mut UiState, idx: usize) {
 
 fn handle_signal_window_event(ui_state: &mut UiState, event: SignalWindowEvent) {
     match event {
-        SignalWindowEvent::CopySignal { msg_id, sig_name } => {
+        SignalWindowEvent::CopySignal { msg_id, sig_names } => {
             if let Some(idx) = ui_state.last_focused_dbc_index {
                 if let Some(win) = ui_state.dbc_windows.get(idx) {
                     if let Some(msg) = win.dbc.get_message(msg_id) {
-                        if let Some(sig) = msg.signals().iter().find(|s| s.name() == sig_name) {
-                            ui_state.clipboard.copied_signal = Some(sig.clone());
+                        let sigs: Vec<crate::editable_dbc::EditableSignal> = sig_names
+                            .iter()
+                            .filter_map(|name| {
+                                msg.signals()
+                                    .iter()
+                                    .find(|s| s.name() == name.as_str())
+                                    .cloned()
+                            })
+                            .collect();
+                        if !sigs.is_empty() {
+                            ui_state.clipboard.copied_signals = sigs;
                         }
                     }
                 }
             }
         }
-        SignalWindowEvent::CutSignal { msg_id, sig_name } => {
+        SignalWindowEvent::CutSignal { msg_id, sig_names } => {
             if let Some(idx) = ui_state.last_focused_dbc_index {
                 if let Some(win) = ui_state.dbc_windows.get(idx) {
                     if let Some(msg) = win.dbc.get_message(msg_id) {
-                        if let Some(sig) = msg.signals().iter().find(|s| s.name() == sig_name) {
-                            ui_state.clipboard.copied_signal = Some(sig.clone());
+                        let sigs: Vec<crate::editable_dbc::EditableSignal> = sig_names
+                            .iter()
+                            .filter_map(|name| {
+                                msg.signals()
+                                    .iter()
+                                    .find(|s| s.name() == name.as_str())
+                                    .cloned()
+                            })
+                            .collect();
+                        if !sigs.is_empty() {
+                            ui_state.clipboard.copied_signals = sigs;
                         }
                     }
                 }
             }
             ui_state.confirm_delete_dialog.target =
-                Some(DeleteTarget::Signal(msg_id, sig_name.clone()));
-            ui_state.confirm_delete_dialog.display_name = format!("signal '{}'", sig_name);
+                Some(DeleteTarget::Signals(msg_id, sig_names.clone()));
+            ui_state.confirm_delete_dialog.display_name = signals_display_name(&sig_names);
             ui_state.confirm_delete_dialog.show = true;
         }
-        SignalWindowEvent::DeleteSignal { msg_id, sig_name } => {
+        SignalWindowEvent::DeleteSignal { msg_id, sig_names } => {
             ui_state.confirm_delete_dialog.target =
-                Some(DeleteTarget::Signal(msg_id, sig_name.clone()));
-            ui_state.confirm_delete_dialog.display_name = format!("signal '{}'", sig_name);
+                Some(DeleteTarget::Signals(msg_id, sig_names.clone()));
+            ui_state.confirm_delete_dialog.display_name = signals_display_name(&sig_names);
             ui_state.confirm_delete_dialog.show = true;
         }
         SignalWindowEvent::PasteSignal { msg_id } => {
-            if let Some(copied) = &ui_state.clipboard.copied_signal {
-                let mut new_sig = copied.clone();
-                let new_name = format!("{}_copy", new_sig.name());
-                new_sig.set_name(&new_name);
-                if let Some(idx) = ui_state.last_focused_dbc_index {
-                    if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
+            let copied = ui_state.clipboard.copied_signals.clone();
+            if copied.is_empty() {
+                return;
+            }
+            if let Some(idx) = ui_state.last_focused_dbc_index {
+                if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
+                    for sig in copied {
+                        let mut new_sig = sig.clone();
+                        let new_name = format!("{}_copy", new_sig.name());
+                        new_sig.set_name(&new_name);
                         win.dbc.add_signal(msg_id, &new_sig);
-                        win.is_dirty = true;
                     }
+                    win.is_dirty = true;
                 }
             }
         }
     }
 }
 
+fn signals_display_name(sig_names: &[String]) -> String {
+    if sig_names.len() == 1 {
+        format!("signal '{}'", sig_names[0])
+    } else {
+        format!("{} signals", sig_names.len())
+    }
+}
+
 fn execute_delete(ui_state: &mut UiState) {
     let target = ui_state.confirm_delete_dialog.target.take();
     match target {
-        Some(DeleteTarget::Message(msg_id)) => {
+        Some(DeleteTarget::Messages(ids)) => {
             if let Some(idx) = ui_state.last_focused_dbc_index {
                 if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
-                    win.dbc.delete_message(msg_id);
+                    for id in &ids {
+                        win.dbc.delete_message(*id);
+                    }
+                    if ids.len() > 1 {
+                        win.dbc.merge_last_compounds(ids.len());
+                    }
+                    win.selected_message_ids.retain(|id| !ids.contains(id));
                     win.is_dirty = true;
                 }
             }
         }
-        Some(DeleteTarget::Signal(msg_id, sig_name)) => {
+        Some(DeleteTarget::Signals(msg_id, sig_names)) => {
             if let Some(idx) = ui_state.last_focused_dbc_index {
                 if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
-                    win.dbc.delete_signal(msg_id, &sig_name);
+                    for name in &sig_names {
+                        win.dbc.delete_signal(msg_id, name);
+                    }
+                    if sig_names.len() > 1 {
+                        win.dbc.merge_last_compounds(sig_names.len());
+                    }
                     win.is_dirty = true;
                 }
             }

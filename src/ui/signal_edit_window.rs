@@ -231,13 +231,14 @@ impl SignalEditDialog {
         }
 
         {
-            let new_descs: Vec<(i64, String)> = self
+            let mut new_descs: Vec<(i64, String)> = self
                 .val_desc_buffer
                 .iter()
                 .filter_map(|(v, d)| {
                     v.trim().parse::<i64>().ok().map(|val| (val, d.clone()))
                 })
                 .collect();
+            new_descs.sort_by_key(|(v, _)| *v);
             let current = dbc.get_message(msg_id)
                 .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
                 .map(|s| s.value_descriptions().to_vec());
@@ -305,9 +306,17 @@ impl SignalEditDialog {
                 if ui.button("Add##val_desc") {
                     self.val_desc_buffer.push((String::new(), String::new()));
                 }
+                ui.same_line();
+                if ui.button("Import from clipboard##val_desc") {
+                    if let Some(text) = ui.clipboard_text() {
+                        let parsed = parse_val_desc_text(&text);
+                        self.val_desc_buffer.extend(parsed);
+                    }
+                }
 
                 let mut to_remove = None;
                 for (i, (val, desc)) in self.val_desc_buffer.iter_mut().enumerate() {
+                    let invalid = val.trim().parse::<i64>().is_err();
                     ui.input_text(&format!("Value##val_desc_{}", i), val).build();
                     ui.same_line();
                     ui.input_text(&format!("Description##val_desc_{}", i), desc).build();
@@ -315,9 +324,31 @@ impl SignalEditDialog {
                     if ui.button(&format!("X##val_desc_rm_{}", i)) {
                         to_remove = Some(i);
                     }
+                    if invalid {
+                        ui.same_line();
+                        ui.text_colored([1.0, 0.3, 0.3, 1.0], "invalid integer");
+                    }
                 }
                 if let Some(idx) = to_remove {
                     self.val_desc_buffer.remove(idx);
+                }
+
+                let mut counts = std::collections::HashMap::new();
+                let mut duplicates = Vec::new();
+                for (val, _) in &self.val_desc_buffer {
+                    if let Ok(v) = val.trim().parse::<i64>() {
+                        let entry = counts.entry(v).or_insert(0usize);
+                        *entry += 1;
+                        if *entry == 2 {
+                            duplicates.push(v);
+                        }
+                    }
+                }
+                if !duplicates.is_empty() {
+                    ui.text_colored(
+                        [1.0, 0.8, 0.0, 1.0],
+                        format!("Duplicate values: {:?}", duplicates),
+                    );
                 }
 
                 ui.separator();
@@ -346,5 +377,79 @@ impl SignalEditDialog {
 impl Default for SignalEditDialog {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Parse clipboard text like `0 "Off" 1 "On"` into (value, description) pairs.
+fn parse_val_desc_text(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = text.trim();
+    while !rest.is_empty() {
+        let num_end = rest
+            .find(|c: char| !matches!(c, '0'..='9' | '-' | '+'))
+            .unwrap_or(rest.len());
+        if num_end == 0 {
+            let ch_len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            rest = rest[ch_len..].trim_start();
+            continue;
+        }
+        let num = &rest[..num_end];
+        rest = rest[num_end..].trim_start();
+
+        let Some(stripped) = rest.strip_prefix('"') else {
+            continue;
+        };
+        let desc = match stripped.find('"') {
+            Some(end) => {
+                let d = stripped[..end].to_string();
+                rest = stripped[end + 1..].trim_start();
+                d
+            }
+            None => {
+                let d = stripped.trim_end().to_string();
+                rest = "";
+                d
+            }
+        };
+
+        if num.parse::<i64>().is_ok() {
+            out.push((num.to_string(), desc));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_val_desc_text;
+
+    #[test]
+    fn parses_basic_pairs() {
+        assert_eq!(
+            parse_val_desc_text("0 \"Off\" 1 \"On\""),
+            vec![
+                ("0".to_string(), "Off".to_string()),
+                ("1".to_string(), "On".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_negative_and_multiline() {
+        assert_eq!(
+            parse_val_desc_text("-1 \"Reverse\"\n2 \"High speed\""),
+            vec![
+                ("-1".to_string(), "Reverse".to_string()),
+                ("2".to_string(), "High speed".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn skips_garbage() {
+        assert_eq!(
+            parse_val_desc_text("VAL_ 100 Sig 3 \"X\" ;"),
+            vec![("3".to_string(), "X".to_string())]
+        );
     }
 }

@@ -1695,8 +1695,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "roxmltree"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "roxy-dbc"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bytemuck",
  "can-dbc",
@@ -1707,6 +1716,7 @@ dependencies = [
  "log",
  "pollster 1.0.1",
  "rfd",
+ "roxmltree",
  "wgpu",
  "winit",
 ]

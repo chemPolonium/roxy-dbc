@@ -1,5 +1,7 @@
 mod app;
 mod editable_dbc;
+mod export;
+mod import;
 mod ui;
 
 use app::AppWindow;
@@ -54,20 +56,55 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::DroppedFile(path) => {
-                if path.extension().and_then(|e| e.to_str()) == Some("dbc") {
-                    let path_str = path.to_string_lossy().to_string();
-                    match crate::ui::dbc_window::DbcWindow::from_path(path) {
-                        Ok(dbc_window) => {
-                            self.ui_state.add_recent_file(&path_str);
-                            self.ui_state.dbc_windows.push(dbc_window);
-                            self.ui_state.last_focused_dbc_index =
-                                Some(self.ui_state.dbc_windows.len() - 1);
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to load dropped file: {}", e);
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase())
+                    .unwrap_or_default();
+                let path_str = path.to_string_lossy().to_string();
+
+                match ext.as_str() {
+                    "dbc" => {
+                        match crate::ui::dbc_window::DbcWindow::from_path(path) {
+                            Ok(dbc_window) => {
+                                self.ui_state.add_recent_file(&path_str);
+                                self.ui_state.dbc_windows.push(dbc_window);
+                                self.ui_state.last_focused_dbc_index =
+                                    Some(self.ui_state.dbc_windows.len() - 1);
+                            }
+                            Err(e) => {
+                                self.ui_state.error_dialog.message =
+                                    format!("Failed to load dropped file: {}", e);
+                                self.ui_state.error_dialog.show = true;
+                            }
                         }
                     }
+                    "arxml" | "kcd" => {
+                        match crate::import::import_file(path) {
+                            Ok(editable_dbc) => {
+                                let dbc_window =
+                                    crate::ui::dbc_window::DbcWindow::new(&path_str, editable_dbc);
+                                self.ui_state.add_recent_file(&path_str);
+                                self.ui_state.dbc_windows.push(dbc_window);
+                                self.ui_state.last_focused_dbc_index =
+                                    Some(self.ui_state.dbc_windows.len() - 1);
+                            }
+                            Err(e) => {
+                                self.ui_state.error_dialog.message =
+                                    format!("Import failed: {}", e);
+                                self.ui_state.error_dialog.show = true;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
+                self.ui_state.file_hovering = false;
+            }
+            WindowEvent::HoveredFile(_path) => {
+                self.ui_state.file_hovering = true;
+            }
+            WindowEvent::HoveredFileCancelled => {
+                self.ui_state.file_hovering = false;
             }
             // WindowEvent::KeyboardInput { event, .. } => {
             //     if let Key::Named(NamedKey::Escape) = event.logical_key {
