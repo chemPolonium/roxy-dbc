@@ -153,9 +153,10 @@ impl MessageWindow {
 
                 if let Some(_table) = ui.begin_table_with_flags(
                     "signals_table",
-                    8,
+                    9,
                     TableFlags::RESIZABLE
                         | TableFlags::BORDERS
+                        | TableFlags::NO_BORDERS_IN_BODY
                         | TableFlags::SCROLL_Y
                         | TableFlags::SIZING_FIXED_FIT,
                 ) {
@@ -167,6 +168,7 @@ impl MessageWindow {
                     ui.table_setup_column("Factor");
                     ui.table_setup_column("Offset");
                     ui.table_setup_column("Unit");
+                    ui.table_setup_column("Comment");
                     ui.table_headers_row();
 
                     for (row_pos, signal) in signals.iter().enumerate() {
@@ -283,6 +285,9 @@ impl MessageWindow {
 
                         ui.table_set_column_index(7);
                         ui.text(signal.unit());
+
+                        ui.table_set_column_index(8);
+                        ui.text(signal.comment());
                     }
                 }
             });

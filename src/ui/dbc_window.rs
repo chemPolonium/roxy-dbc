@@ -231,6 +231,7 @@ impl DbcWindow {
             6,
             TableFlags::RESIZABLE
                 | TableFlags::BORDERS
+                | TableFlags::NO_BORDERS_IN_BODY
                 | TableFlags::SCROLL_Y
                 | TableFlags::SORTABLE
                 | TableFlags::SIZING_FIXED_FIT,
@@ -817,6 +818,7 @@ fn render_validation_dialog(ui: &Ui, ui_state: &mut UiState) {
                     2,
                     imgui::TableFlags::RESIZABLE
                         | imgui::TableFlags::BORDERS
+                        | imgui::TableFlags::NO_BORDERS_IN_BODY
                         | imgui::TableFlags::SCROLL_Y
                         | imgui::TableFlags::SIZING_FIXED_FIT,
                 ) {
