@@ -84,20 +84,23 @@ fn render_file_menu(ui: &Ui, ui_state: &mut UiState) {
         }
     });
 
-    if ctrl && !ui_state.dbc_windows.is_empty() {
-        if shift && ui.is_key_pressed_no_repeat(imgui::Key::S) {
-            handle_save_dbc(ui_state, true);
-        } else if ui.is_key_pressed_no_repeat(imgui::Key::S) {
-            handle_save_dbc(ui_state, false);
+    // 文本输入框激活时跳过全局快捷键
+    if ctrl && !ui.io().want_capture_keyboard {
+        if !ui_state.dbc_windows.is_empty() {
+            if shift && ui.is_key_pressed_no_repeat(imgui::Key::S) {
+                handle_save_dbc(ui_state, true);
+            } else if ui.is_key_pressed_no_repeat(imgui::Key::S) {
+                handle_save_dbc(ui_state, false);
+            }
         }
-    }
 
-    if ctrl && ui.is_key_pressed_no_repeat(imgui::Key::O) {
-        handle_load_dbc_file(ui_state);
-    }
+        if ui.is_key_pressed_no_repeat(imgui::Key::O) {
+            handle_load_dbc_file(ui_state);
+        }
 
-    if ctrl && ui.is_key_pressed_no_repeat(imgui::Key::N) {
-        handle_new_dbc(ui_state);
+        if ui.is_key_pressed_no_repeat(imgui::Key::N) {
+            handle_new_dbc(ui_state);
+        }
     }
 }
 
@@ -183,7 +186,8 @@ fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
         }
     });
 
-    if ctrl {
+    // 文本输入框激活时跳过全局快捷键，避免编辑属性时误触发消息级操作
+    if ctrl && !ui.io().want_capture_keyboard {
         if let Some(idx) = ui_state.last_focused_dbc_index {
             if ui_state.dbc_windows.get(idx).is_some() {
                 if ui.is_key_pressed_no_repeat(imgui::Key::Z) {
