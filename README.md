@@ -3,162 +3,117 @@
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-blue.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
-一个现代化的 DBC (Database CAN) 文件查看器和编辑器，使用 Rust 和 ImGui 构建。
+一个现代化的 CAN 数据库编辑器，使用 Rust 和 ImGui 构建。支持 DBC 编辑、ARXML/KCD 导入导出、信号位布局可视化。
 
 ## ✨ 特性
 
-- 🚗 **完整的 DBC 支持** - 解析和显示 CAN 数据库文件
-- ✏️ **消息编辑** - 支持修改消息的 ID、名称、大小、发送节点等属性
-- 📊 **多窗口界面** - 支持同时打开多个 DBC 文件
-- 🔍 **智能搜索** - 快速查找消息和信号
-- 📋 **表格视图** - 清晰的消息和信号列表显示
-- ↕️ **排序功能** - 按任意列对数据进行排序
-- ↩️ **撤销/重做** - 完整的 Undo/Redo 支持 (Ctrl+Z / Ctrl+Y)
-- 🎨 **现代化UI** - 基于 ImGui 的直观用户界面
-- ⚡ **高性能** - 使用 wgpu 进行硬件加速渲染
+- 🚗 **DBC 完整支持** - 打开、编辑、保存 CAN 数据库文件
+- 📄 **多格式支持** - 导入 ARXML / KCD，导出 AUTOSAR ARXML
+- 🖱️ **拖放打开** - 直接把 DBC/ARXML/KCD 文件拖进窗口即可打开
+- ✏️ **消息与信号编辑** - 全部属性可编辑，含值表（VAL_）编辑
+- 🧩 **节点（ECU）管理** - 添加 / 删除 / 重命名网络节点
+- 🗂️ **信号位布局图** - 可视化信号占位，支持 Intel/Motorola 字节序
+- 🎯 **多选批处理** - Ctrl/Shift 多选，批量复制 / 剪切 / 删除
+- 📊 **多窗口 + Docking** - 同时打开多个文件，窗口自由停靠
+- 🔍 **搜索与排序** - 消息过滤、按任意列排序
+- ↩️ **撤销/重做** - 所有操作支持 Undo/Redo，批量操作合并为单步撤销
+- ✅ **DBC 校验** - Tools > Validate 检查错误与警告
+- ⚡ **高性能** - wgpu 硬件加速渲染
 
 ## 🖼️ 界面预览
 
 ![Roxy DBC Screenshot](screenshot.png)
 
-### 主要功能
-- **消息表格**: 显示消息ID、名称、长度和信号数量
-- **信号详情窗口**: 双击消息打开独立的信号详情窗口
-- **消息编辑**: 右键点击消息选择 "Edit..." 编辑属性
-- **悬停预览**: 鼠标悬停在消息上显示信号摘要
-- **Docking 布局**: 灵活的窗口停靠和组织
+## ⌨️ 快捷键
+
+| 快捷键 | 功能 |
+| --- | --- |
+| Ctrl+N | 新建 DBC |
+| Ctrl+O | 打开文件 |
+| Ctrl+S | 保存（新文件弹出另存为对话框） |
+| Ctrl+Z / Ctrl+Y | 撤销 / 重做 |
+| Ctrl+C / X / V | 复制 / 剪切 / 粘贴消息 |
+| Enter | 打开选中消息的信号窗口 |
+| Shift+点击 / 方向键 | 范围多选 |
 
 ## 📝 编辑功能
 
-### 可编辑的消息属性
+### 消息
+可编辑 Message ID（十六进制/十进制）、名称、大小、Frame Format、发送节点、注释。通过右键菜单、Edit 菜单或 "+ Add Message" 按钮新建消息。
 
-- **Message ID** - CAN 消息标识符 (支持 0x123 或 123 格式)
-- **Message Name** - 消息名称
-- **Message Size** - 消息长度 (0-8 字节)
-- **Transmitter** - 发送该消息的 ECU/节点名称
-- **Comment** - 消息注释说明
+### 信号
+可编辑名称、起始位、长度、字节序（Intel/Motorola）、符号类型、系数、偏移、最小/最大值、单位、注释和接收节点。信号窗口中的 "+ Add Signal" 按钮可快速新建。
+
+### 值表（VAL_）
+- 非法整数和重复值实时提示
+- 应用时自动按值排序
+- 支持从剪贴板批量导入（如 `0 "Off" 1 "On"`）
 
 ### 编辑模式
+所有编辑对话框使用三按钮模式：
+- **OK** - 保存并关闭
+- **Cancel** - 放弃修改并关闭
+- **Apply** - 保存但保持打开，支持持续编辑
 
-使用传统的三按钮模式：
-- **OK** - 保存修改并关闭对话框
-- **Cancel** - 放弃修改并关闭对话框
-- **Apply** - 保存修改但保持对话框打开（支持持续编辑）
+## 🔀 导入 / 导出
 
-### 撤销/重做
+- **导入**: ARXML（CAN-FRAME / I-SIGNAL-I-PDU）和 KCD 文件，File > Import 或直接拖放
+- **导出**: AUTOSAR 4.x 风格 ARXML（File > Export ARXML...），包含 CAN-FRAME、CAN-FRAME-TRIGGERING、I-SIGNAL-I-PDU
 
-- 所有编辑操作都支持完整的 Undo/Redo
-- 快捷键：Ctrl+Z (撤销) / Ctrl+Y 或 Ctrl+Shift+Z (重做)
-- 最多保存 100 条历史记录
-- 在 Edit 菜单中显示操作描述
+## 🗺️ 位布局图
+
+打开消息窗口即可看到信号位布局：按字节行显示每个信号的占位，颜色区分不同信号，选中的信号高亮描边。支持 Intel（小端，位号线性递增）与 Motorola（大端，字节内递减后折行至下一字节）两种位序。
 
 ## 🛠️ 技术栈
 
 - **语言**: Rust 2024 Edition
-- **GUI框架**: ImGui + wgpu
+- **GUI**: ImGui (docking) + wgpu
 - **窗口管理**: winit
-- **DBC解析**: can-dbc
+- **DBC 解析**: can-dbc
+- **XML 解析**: roxmltree
 - **文件对话框**: rfd
 
 ## 📦 安装
 
-### 前提条件
-- Rust 1.75+
+### 下载
+从 [Releases](https://github.com/chemPolonium/roxy-dbc/releases) 下载最新版本的 `roxy-dbc.exe`（Windows）。
 
 ### 从源码构建
 ```bash
-# 克隆仓库
 git clone https://github.com/chemPolonium/roxy-dbc.git
 cd roxy-dbc
-
-# 构建项目
 cargo build --release
-
-# 运行
 cargo run --release
 ```
-
-## 🚀 使用方法
-
-### 基本操作
-1. **启动应用** - 运行 `cargo run --release` 或直接执行编译后的程序
-2. **打开DBC文件** - 点击 `File -> Load DBC File`
-3. **浏览消息** - 在消息表格中查看所有CAN消息
-4. **查看信号** - 双击消息打开独立的信号详情窗口
-5. **搜索过滤** - 使用搜索框快速找到特定的消息
-
-### 编辑消息
-1. **右键点击** 消息行
-2. 选择 **"Edit..."**
-3. 在对话框中修改需要的属性
-4. 点击 **OK** 保存并关闭，或 **Apply** 保存但继续编辑
-5. 使用 **Ctrl+Z** 撤销修改
-
-### 表格功能
-- **排序**: 点击列标题对数据进行升序/降序排列
-- **选择**: 点击消息行的任意列都可以选中该消息
-- **高亮**: 选中的行会显示蓝色背景
-- **悬停预览**: 鼠标悬停显示前10个信号的摘要
-
-### 信号详情窗口
-显示完整的信号信息：
-- **信号名称** - 信号的标识名
-- **类型** - Signed/Unsigned
-- **字节序** - Intel (Little Endian) / Motorola (Big Endian)
-- **起始位** - 信号在消息中的起始位置
-- **长度** - 信号的位长度
-- **系数** - 信号的比例因子
-- **偏移量** - 信号的偏移值
-- **最小值** - 信号的最小有效值
-- **最大值** - 信号的最大有效值
-- **单位** - 信号的物理单位
 
 ## 📁 项目结构
 
 ```
 src/
-├── main.rs          # 程序入口点和应用初始化
-├── app.rs           # 窗口和图形上下文管理
-├── dbc.rs           # DBC数据层和编辑覆盖层
-└── ui/              # UI模块
-    ├── mod.rs           # UI模块入口
-    ├── state.rs         # UI状态和Undo/Redo系统
-    ├── dbc_window.rs    # DBC窗口渲染
-    ├── signal_window.rs # Signal窗口渲染
-    ├── dialogs.rs       # 对话框管理
+├── main.rs              # 程序入口，事件循环与拖放处理
+├── lib.rs               # 库入口（供集成测试使用）
+├── app.rs               # 窗口和图形上下文管理
+├── editable_dbc.rs      # 数据模型、编辑操作与 Undo/Redo
+├── import/              # 导入
+│   ├── arxml.rs         # ARXML 解析
+│   └── kcd.rs           # KCD 解析
+├── export/              # 导出
+│   └── arxml.rs         # ARXML 生成
+└── ui/                  # UI 模块
+    ├── state.rs         # UI 状态、剪贴板、对话框状态
+    ├── dbc_window.rs    # DBC 浏览器（消息表格）
+    ├── message_window.rs    # 消息详情窗口（信号表格 + 位布局图）
+    ├── message_edit_window.rs   # 消息编辑对话框
+    ├── signal_edit_window.rs    # 信号编辑对话框（含值表编辑）
+    ├── node_window.rs   # 节点管理对话框
+    ├── bit_layout.rs    # 信号位布局渲染
     └── menu.rs          # 菜单栏和快捷键
 ```
 
-## ⚠️ 重要说明
-
-### 数据持久化
-- ✅ 所有修改在应用运行时保存在内存中
-- ✅ 支持完整的 Undo/Redo
-- ❌ 关闭应用后修改会丢失
-- ❌ 暂不支持导出为 DBC 文件
-
-### 数据覆盖机制
-Roxy DBC 使用**非破坏性覆盖层**：
-- 原始 DBC 文件不会被修改
-- 所有编辑保存在覆盖层中
-- 可以随时清除所有修改
-
 ## 🔮 未来计划
 
-### 短期目标
-- [ ] 实时输入验证和错误提示
-- [ ] Message ID 重复检查
-- [ ] Signal 属性编辑
-- [ ] 批量编辑功能
-
-### 中期目标
-- [ ] DBC 文件导出（保存修改）
-- [ ] JSON/XML 格式导出
-- [ ] 导入外部修改
-
-### 长期目标
-- [ ] CAN FD 支持（最大64字节）
-- [ ] 可视化 Signal 布局编辑器
+- [ ] CAN FD 支持（最大 64 字节）
+- [ ] 位布局图交互式编辑（拖拽调整信号位置）
 - [ ] 网络拓扑图
 - [ ] 实时 CAN 数据监控
 
@@ -172,10 +127,6 @@ Roxy DBC 使用**非破坏性覆盖层**：
 - [Dear ImGui](https://github.com/ocornut/imgui) - 即时模式 GUI 库
 - [imgui-rs](https://github.com/imgui-rs/imgui-rs) - ImGui 的 Rust 绑定
 - [wgpu](https://github.com/gfx-rs/wgpu) - 现代图形 API
-
-## 📝 更新日志
-
-查看 [CHANGELOG.md](CHANGELOG.md) 了解详细的版本历史和更新内容。
 
 ## 🤝 贡献
 
