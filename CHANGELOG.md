@@ -5,93 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0] - 2024-12-XX
+## [0.6.0] - 2026-08-13
 
 ### Added
-- **扩展编辑功能：支持完整的 Message 属性编辑**
-  - 新增 **Message ID** 编辑：支持十六进制（0x123）、十进制（291）等多种格式输入
-  - 新增 **Message Size** 编辑：支持 0-8 字节范围，带实时验证
-  - 新增 **Transmitter** 编辑：可设置发送该消息的 ECU/节点名称
-  - 所有新增字段都支持 Undo/Redo
-  - 编辑对话框扩展为 600×550 像素以容纳新字段
-  - 所有输入框都有工具提示说明格式和用途
+- **节点（ECU）管理**
+  - Tools > Nodes 窗口：添加 / 删除 / 重命名节点
+  - 节点操作支持 Undo/Redo，保存时写入 `BU_` 段
+- **信号位布局图**
+  - 消息窗口中按字节行可视化信号占位，颜色区分不同信号
+  - 支持 Intel（小端）与 Motorola（大端）位序，选中信号高亮描边
+- **多选与批量操作**
+  - 消息表和信号表支持 Ctrl+点击切换、Shift+点击/方向键范围选择
+  - 批量复制 / 剪切 / 删除，批量删除合并为单步撤销
+  - 右键菜单与 Edit 菜单对选区整体生效，剪贴板支持多条目
+- **导入 / 导出**
+  - 导入 ARXML（CAN-FRAME + I-SIGNAL-I-PDU 关联解析）和 KCD 文件（File > Import）
+  - 导出 AUTOSAR 4.x 风格 ARXML（File > Export ARXML...）
+  - 拖放 DBC/ARXML/KCD 文件直接打开，拖拽悬停时显示视觉提示
+- **内容创建**
+  - 新建 DBC（Ctrl+N）、"+ Add Message"、"+ Add Signal"，自动分配 ID 与默认值
+- **值表（VAL_）编辑增强**
+  - 非法整数与重复值实时提示，应用时自动按值排序
+  - 支持从剪贴板批量导入（如 `0 "Off" 1 "On"`）
+- **DBC 校验** - Tools > Validate 以表格列出错误与警告
+- **快捷键** - Ctrl+N / Ctrl+O / Ctrl+S / Ctrl+Z / Ctrl+Y / Ctrl+C / X / V
 
 ### Changed
-- **重大改进：编辑对话框模式重构**
-  - 从实时保存模式改为传统的确认/取消/应用三按钮模式
-  - 新增 **OK** 按钮：应用所有修改并关闭对话框
-  - 新增 **Cancel** 按钮：放弃所有修改并关闭对话框
-  - 新增 **Apply** 按钮：应用修改但保持对话框打开，支持持续编辑工作流
-  - Apply 按钮智能状态管理：仅在有未保存修改时可用
-  - 实时修改状态提示："You have unsaved changes"（橙色）或 "No changes"（灰色）
-  - 修改不再在失去焦点时自动保存，用户完全控制保存时机
-  - 提高编辑安全性：防止误操作，提供后悔机会
-- **数据层扩展**
-  - `EditableDbcData` 新增 3 个覆盖映射：`message_id_overrides`、`message_size_overrides`、`message_transmitter_overrides`
-  - `OverridesSnapshot` 相应扩展以支持新的覆盖类型
-  - 表格显示自动使用覆盖后的值（ID、Size 等）
-  - 排序功能支持按覆盖后的值进行排序
+- UI 重构为 CANdb++ 风格界面：消息表格主窗口 + 独立 Message 窗口（含信号表格）
+- 数据层重构为 `EditableDbc`，所有属性可直接编辑，操作级 Undo/Redo，复合操作合并撤销
+- 编辑对话框采用 OK / Cancel / Apply 三按钮模式
+- 保存：Ctrl+S / File > Save；未保存过的新文件自动弹出另存为对话框；标题栏以 `*` 标记脏状态
+- 依赖升级：can-dbc 10.0、wgpu 28、imgui 0.12（docking + tables）、winit 0.30
 
 ### Fixed
-- **严重 Bug：Message Name 列排序错位问题**
-  - 修复了排序时 Name 列不跟随其他列一起排序的问题
-  - 修复了 popup 中显示的名称与表格不一致的问题
-  - 根本原因：显示名称在排序前提取，导致索引错位
-  - 解决方案：使用 `MessageWithDisplayName` 结构体将 Message 和名称打包，一起排序
-  - 影响：所有使用了名称覆盖功能的用户都会遇到此问题
-
-### Improved
-- 编辑体验更符合传统桌面应用习惯
-- 与 Windows/Linux/macOS 原生应用的编辑模式保持一致
-- 支持分步应用工作流：可以先保存名称修改，再继续编辑其他属性
-- 更好的 Undo/Redo 集成：每次 Apply/OK 产生独立的 Undo 条目
-- Cancel 操作会恢复到原始值或最后一次 Apply 的值
-- 消息排序逻辑重构：确保所有列数据保持一致性
-- Undo 操作描述更详细：包括 "Modify ID"、"Modify Size"、"Modify Transmitter" 等
-- 修改计数统计包含所有类型的覆盖（名称、注释、ID、Size、Transmitter）
+- About 与错误对话框点击后不显示的问题（对话框渲染在重构中丢失）
+- DBC 保存时注释与值表描述的引号转义（原为空操作）
+- 新建 DBC 保存时默认写到程序目录的问题（现强制弹出另存为对话框）
+- 导入 ARXML 时信号与消息 ID 关联丢失的问题（帧-PDU 按引用合并）
+- 信号窗口 z-order 与渲染问题
 
 ### Removed
-- 移除了焦点跟踪逻辑（name_had_focus、comment_had_focus）
-- 移除了自动保存机制
-- 移除了旧的排序函数（sort_messages_owned、render_messages_rows_owned）
+- 悬停信号预览弹窗（由 Message 窗口 + 位布局图替代）
 
-### Technical
-- 新增 `parse_message_id()` 函数：智能解析多种 ID 格式
-- `MessageWithDisplayData` 结构扩展：包含 display_id 和 display_size
-- 所有编辑字段都在 `MessageEditDialog` 中有对应的缓冲区和原始值
-- 数据验证在 Apply/OK 时进行：无效输入采用静默失败策略
-
-## [0.5.0] - 2025-10-15
+## [0.5.0] - 2025-11-19
 
 ### Added
-- 悬停信号预览功能
-  - 鼠标悬停在消息行上时显示信号详情弹出窗口
-  - 显示消息名称、ID和最多10个信号的5列摘要表格（Signal、Start、Length、Factor、Unit）
-  - 超过10个信号时显示"...and X more"提示
-- 双击创建信号详情窗口
-  - 双击消息行可创建专用的信号详情窗口
-  - 新窗口显示完整的10列信号表格
-  - 支持同时打开多个信号窗口进行对比分析
-  - 每个信号窗口都有独特的标题显示消息名称和ID
+- 完整的 Message 属性编辑：Message ID（支持十六进制/十进制输入）、Message Name、Message Size、Transmitter、Comment，全部支持 Undo/Redo
+- 消息编辑对话框采用 OK / Cancel / Apply 三按钮模式，支持持续编辑工作流
+- 主菜单栏与文件操作入口
+- 自定义可编辑 DBC 数据结构（Editable DBC），替代只读解析结果
+- 悬停信号预览：鼠标悬停消息行显示最多 10 个信号的摘要弹窗
+- 双击消息打开独立的信号详情窗口，支持多窗口对比
 
 ### Changed
-- 重大UI布局优化
-  - 移除原有的分割式消息/信号表格布局
-  - 消息表格现在占用全部可用空间
-  - 采用渐进式信息披露模式：悬停预览 → 双击详情
-
-### Removed
-- 移除固定的信号表格面板
-  - 删除 `render_signals_table`、`setup_signals_table_columns`、`sort_signals`、`render_signals_rows` 等函数
-  - 移除相关的表格状态管理代码
-- 清理死代码
-  - 移除未使用的 `DbcData::get_message_by_id` 方法
-
-### Improved
-- 屏幕空间利用率大幅提升
-- 更符合用户交互习惯的操作模式
-- 支持多信号窗口的并行工作流程
-- 代码结构更加清晰，职责分离更明确
+- 数据层从覆盖映射（overrides）重构为单一可编辑结构
+- Undo/Redo 迁移为按窗口的历史记录
+- UI 布局改为 message 与 signal 独立的布局
+- 升级 can-dbc 至 8.0
 
 ## [0.4.0] - 2025-10-14
 
