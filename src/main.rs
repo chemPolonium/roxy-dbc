@@ -19,6 +19,7 @@ struct App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.window = Some(AppWindow::new(event_loop));
+        self.ui_state.load_recent_files();
     }
 
     fn window_event(
@@ -52,6 +53,22 @@ impl ApplicationHandler for App {
                     .configure(&window.device, &window.surface_desc);
             }
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::DroppedFile(path) => {
+                if path.extension().and_then(|e| e.to_str()) == Some("dbc") {
+                    let path_str = path.to_string_lossy().to_string();
+                    match crate::ui::dbc_window::DbcWindow::from_path(path) {
+                        Ok(dbc_window) => {
+                            self.ui_state.add_recent_file(&path_str);
+                            self.ui_state.dbc_windows.push(dbc_window);
+                            self.ui_state.last_focused_dbc_index =
+                                Some(self.ui_state.dbc_windows.len() - 1);
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to load dropped file: {}", e);
+                        }
+                    }
+                }
+            }
             // WindowEvent::KeyboardInput { event, .. } => {
             //     if let Key::Named(NamedKey::Escape) = event.logical_key {
             //         if event.state.is_pressed() {
@@ -111,6 +128,7 @@ impl ApplicationHandler for App {
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &view,
                         resolve_target: None,
+                        depth_slice: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(imgui.clear_color),
                             store: wgpu::StoreOp::Store,
@@ -119,6 +137,7 @@ impl ApplicationHandler for App {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
 
                 imgui

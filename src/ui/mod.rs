@@ -7,14 +7,13 @@
 //! - `dialogs`: 各种对话框（错误、关于、编辑等）
 //! - `menu`: 菜单栏和文件操作
 
-mod dbc_window;
+pub mod dbc_window;
 mod menu;
 mod message_create_window;
 mod message_edit_window;
 mod message_window;
 mod signal_edit_window;
 pub mod state;
-mod tree_view;
 
 use imgui::Ui;
 use std::time::Duration;

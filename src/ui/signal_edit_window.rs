@@ -17,6 +17,7 @@ pub struct SignalEditDialog {
     pub show: bool,
     pub message_id: u32,
     pub original_name: String,
+    pub focus_requested: bool,
 
     pub name_buffer: String,
     pub start_bit_buffer: String,
@@ -29,6 +30,7 @@ pub struct SignalEditDialog {
     pub max_buffer: String,
     pub unit_buffer: String,
     pub comment_buffer: String,
+    pub val_desc_buffer: Vec<(String, String)>,
 }
 
 impl SignalEditDialog {
@@ -37,6 +39,7 @@ impl SignalEditDialog {
             show: false,
             message_id: 0,
             original_name: String::new(),
+            focus_requested: false,
             name_buffer: String::new(),
             start_bit_buffer: String::new(),
             size_buffer: String::new(),
@@ -48,11 +51,13 @@ impl SignalEditDialog {
             max_buffer: String::from("0.0"),
             unit_buffer: String::new(),
             comment_buffer: String::new(),
+            val_desc_buffer: Vec::new(),
         }
     }
 
     pub fn open_from_signal(&mut self, message_id: u32, signal: &EditableSignal) {
         self.show = true;
+        self.focus_requested = true;
         self.message_id = message_id;
         self.original_name = signal.name().to_string();
         self.name_buffer = signal.name().to_string();
@@ -66,6 +71,11 @@ impl SignalEditDialog {
         self.max_buffer = format!("{}", signal.max());
         self.unit_buffer = signal.unit().to_string();
         self.comment_buffer = signal.comment().to_string();
+        self.val_desc_buffer = signal
+            .value_descriptions()
+            .iter()
+            .map(|(v, d)| (v.to_string(), d.clone()))
+            .collect();
     }
 
     pub fn apply_edit(&mut self, dbc: &mut EditableDbc) {
@@ -220,6 +230,26 @@ impl SignalEditDialog {
             }
         }
 
+        {
+            let new_descs: Vec<(i64, String)> = self
+                .val_desc_buffer
+                .iter()
+                .filter_map(|(v, d)| {
+                    v.trim().parse::<i64>().ok().map(|val| (val, d.clone()))
+                })
+                .collect();
+            let current = dbc.get_message(msg_id)
+                .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
+                .map(|s| s.value_descriptions().to_vec());
+            if let Some(current) = current {
+                if new_descs != current {
+                    let name = if change_count > 0 { new_name } else { old_name };
+                    dbc.set_signal_value_descriptions(msg_id, name, new_descs);
+                    change_count += 1;
+                }
+            }
+        }
+
         if change_count > 1 {
             dbc.merge_last_compounds(change_count);
         }
@@ -237,6 +267,11 @@ impl SignalEditDialog {
 
         let title = format!("Edit Signal - {}", self.original_name);
         let mut is_open = true;
+
+        if self.focus_requested {
+            unsafe { imgui::sys::igSetNextWindowFocus() };
+            self.focus_requested = false;
+        }
 
         ui.window(&title)
             .always_auto_resize(true)
@@ -263,6 +298,27 @@ impl SignalEditDialog {
                 ui.input_text("Unit##sig_edit", &mut self.unit_buffer).build();
                 ui.input_text("Comment##sig_edit", &mut self.comment_buffer)
                     .build();
+
+                ui.separator();
+                ui.text("Value Descriptions (VAL_)");
+
+                if ui.button("Add##val_desc") {
+                    self.val_desc_buffer.push((String::new(), String::new()));
+                }
+
+                let mut to_remove = None;
+                for (i, (val, desc)) in self.val_desc_buffer.iter_mut().enumerate() {
+                    ui.input_text(&format!("Value##val_desc_{}", i), val).build();
+                    ui.same_line();
+                    ui.input_text(&format!("Description##val_desc_{}", i), desc).build();
+                    ui.same_line();
+                    if ui.button(&format!("X##val_desc_rm_{}", i)) {
+                        to_remove = Some(i);
+                    }
+                }
+                if let Some(idx) = to_remove {
+                    self.val_desc_buffer.remove(idx);
+                }
 
                 ui.separator();
 

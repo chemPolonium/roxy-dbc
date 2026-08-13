@@ -1,14 +1,18 @@
 //! UI 状态管理模块
 
-use crate::editable_dbc::EditableMessage;
+use crate::editable_dbc::{EditableMessage, EditableSignal};
 use crate::ui::dbc_window::DbcWindow;
 
 #[allow(dead_code)]
-/// Confirmation dialog state for delete operations
+pub enum DeleteTarget {
+    Message(u32),
+    Signal(u32, String),
+}
+
+#[allow(dead_code)]
 pub struct ConfirmDeleteDialog {
     pub show: bool,
-    pub parent_dbc_id: usize,
-    pub message_id: u32,
+    pub target: Option<DeleteTarget>,
     pub display_name: String,
 }
 
@@ -16,9 +20,22 @@ impl Default for ConfirmDeleteDialog {
     fn default() -> Self {
         Self {
             show: false,
-            parent_dbc_id: 0,
-            message_id: 0,
+            target: None,
             display_name: String::new(),
+        }
+    }
+}
+
+pub struct CloseConfirmDialog {
+    pub show: bool,
+    pub dbc_window_index: Option<usize>,
+}
+
+impl Default for CloseConfirmDialog {
+    fn default() -> Self {
+        Self {
+            show: false,
+            dbc_window_index: None,
         }
     }
 }
@@ -42,12 +59,14 @@ impl Default for ErrorDialog {
 /// 剪贴板状态（用于复制/粘贴）
 pub struct ClipboardState {
     pub copied_message: Option<EditableMessage>,
+    pub copied_signal: Option<EditableSignal>,
 }
 
 impl Default for ClipboardState {
     fn default() -> Self {
         Self {
             copied_message: None,
+            copied_signal: None,
         }
     }
 }
@@ -66,6 +85,8 @@ pub struct UiState {
     pub last_focused_message_window: Option<usize>,
     pub clipboard: ClipboardState,
     pub confirm_delete_dialog: ConfirmDeleteDialog,
+    pub close_confirm_dialog: CloseConfirmDialog,
+    pub recent_files: Vec<String>,
 }
 
 impl Default for UiState {
@@ -82,6 +103,8 @@ impl Default for UiState {
             last_focused_message_window: None,
             clipboard: ClipboardState::default(),
             confirm_delete_dialog: ConfirmDeleteDialog::default(),
+            close_confirm_dialog: CloseConfirmDialog::default(),
+            recent_files: Vec::new(),
         }
     }
 }
@@ -139,4 +162,40 @@ impl UiState {
             0x100
         }
     }
+
+    pub fn add_recent_file(&mut self, path: &str) {
+        self.recent_files.retain(|p| p != path);
+        self.recent_files.insert(0, path.to_string());
+        if self.recent_files.len() > 10 {
+            self.recent_files.truncate(10);
+        }
+        self.save_recent_files();
+    }
+
+    pub fn load_recent_files(&mut self) {
+        if let Some(path) = recent_files_path() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                self.recent_files = content
+                    .lines()
+                    .filter(|l| !l.is_empty())
+                    .map(|l| l.to_string())
+                    .take(10)
+                    .collect();
+            }
+        }
+    }
+
+    pub fn save_recent_files(&self) {
+        if let Some(path) = recent_files_path() {
+            let content = self.recent_files.join("\n");
+            let _ = std::fs::write(path, content);
+        }
+    }
+}
+
+fn recent_files_path() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .map(|p| p.join("recent_files.txt"))
 }

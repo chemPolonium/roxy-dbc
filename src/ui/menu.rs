@@ -1,7 +1,7 @@
 //! 菜单栏渲染模块
 
 use crate::ui::dbc_window::DbcWindow;
-use crate::ui::state::UiState;
+use crate::ui::state::{DeleteTarget, UiState};
 use imgui::Ui;
 
 /// 渲染主菜单栏
@@ -16,10 +16,41 @@ pub fn render_main_menu_bar(ui: &Ui, ui_state: &mut UiState) {
 
 /// 渲染文件菜单
 fn render_file_menu(ui: &Ui, ui_state: &mut UiState) {
+    let ctrl = ui.io().key_ctrl;
+    let shift = ui.io().key_shift;
+
     ui.menu("File", || {
         if ui.menu_item("Load DBC File") {
             handle_load_dbc_file(ui_state);
         }
+        if !ui_state.recent_files.is_empty() {
+            ui.menu("Recent Files", || {
+                let recent: Vec<String> = ui_state.recent_files.clone();
+                for path in &recent {
+                    let file_name = std::path::Path::new(path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(path);
+                    if ui.menu_item(file_name) {
+                        handle_open_recent(ui_state, path);
+                    }
+                }
+                ui.separator();
+                if ui.menu_item("Clear Recent") {
+                    ui_state.recent_files.clear();
+                    ui_state.save_recent_files();
+                }
+            });
+        }
+        ui.separator();
+        let has_dbc = !ui_state.dbc_windows.is_empty();
+        if ui.menu_item_config("Save").shortcut("Ctrl+S").enabled(has_dbc).build() {
+            handle_save_dbc(ui_state, false);
+        }
+        if ui.menu_item_config("Save As").shortcut("Ctrl+Shift+S").enabled(has_dbc).build() {
+            handle_save_dbc(ui_state, true);
+        }
+        ui.separator();
         if ui.menu_item("Close DBC") {
             handle_close_dbc(ui_state);
         }
@@ -28,17 +59,29 @@ fn render_file_menu(ui: &Ui, ui_state: &mut UiState) {
             std::process::exit(0);
         }
     });
+
+    if ctrl && !ui_state.dbc_windows.is_empty() {
+        if shift && ui.is_key_pressed_no_repeat(imgui::Key::S) {
+            handle_save_dbc(ui_state, true);
+        } else if ui.is_key_pressed_no_repeat(imgui::Key::S) {
+            handle_save_dbc(ui_state, false);
+        }
+    }
 }
 
 /// 渲染编辑菜单
 fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
+    let ctrl = ui.io().key_ctrl;
+
     ui.menu("Edit", || {
         if let Some(idx) = ui_state.last_focused_dbc_index {
             if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
                 let can_undo = win.dbc.can_undo();
+                let can_redo = win.dbc.can_redo();
 
                 if ui
-                    .menu_item_config("Undo\tCtrl+Z")
+                    .menu_item_config("Undo")
+                    .shortcut("Ctrl+Z")
                     .enabled(can_undo)
                     .build()
                 {
@@ -47,7 +90,55 @@ fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
                     }
                 }
 
-                if ui.menu_item_config("Redo\tCtrl+Y").enabled(false).build() {}
+                if ui
+                    .menu_item_config("Redo")
+                    .shortcut("Ctrl+Y")
+                    .enabled(can_redo)
+                    .build()
+                {
+                    if let Err(e) = win.dbc.redo() {
+                        eprintln!("Redo failed: {}", e);
+                    }
+                }
+
+                ui.separator();
+
+                let has_selection = win.selected_message_id().is_some();
+                let has_clipboard = ui_state.has_clipboard_message();
+
+                if ui
+                    .menu_item_config("Copy")
+                    .shortcut("Ctrl+C")
+                    .enabled(has_selection)
+                    .build()
+                {
+                    edit_copy_message(ui_state, idx);
+                }
+                if ui
+                    .menu_item_config("Cut")
+                    .shortcut("Ctrl+X")
+                    .enabled(has_selection)
+                    .build()
+                {
+                    edit_cut_message(ui_state, idx);
+                }
+                if ui
+                    .menu_item_config("Paste")
+                    .shortcut("Ctrl+V")
+                    .enabled(has_clipboard)
+                    .build()
+                {
+                    edit_paste_message(ui_state, idx);
+                }
+                ui.separator();
+                if ui
+                    .menu_item_config("Delete")
+                    .shortcut("Del")
+                    .enabled(has_selection)
+                    .build()
+                {
+                    edit_delete_message(ui_state, idx);
+                }
             } else {
                 ui.text_disabled("No active DBC window");
             }
@@ -55,6 +146,91 @@ fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
             ui.text_disabled("No active DBC window");
         }
     });
+
+    if ctrl {
+        if let Some(idx) = ui_state.last_focused_dbc_index {
+            if ui_state.dbc_windows.get(idx).is_some() {
+                if ui.is_key_pressed_no_repeat(imgui::Key::Z) {
+                    if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
+                        if let Err(e) = win.dbc.undo() {
+                            eprintln!("Undo failed: {}", e);
+                        }
+                    }
+                }
+                if ui.is_key_pressed_no_repeat(imgui::Key::Y) {
+                    if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
+                        if let Err(e) = win.dbc.redo() {
+                            eprintln!("Redo failed: {}", e);
+                        }
+                    }
+                }
+                if ui.is_key_pressed_no_repeat(imgui::Key::C) {
+                    edit_copy_message(ui_state, idx);
+                }
+                if ui.is_key_pressed_no_repeat(imgui::Key::X) {
+                    edit_cut_message(ui_state, idx);
+                }
+                if ui.is_key_pressed_no_repeat(imgui::Key::V) {
+                    edit_paste_message(ui_state, idx);
+                }
+            }
+        }
+    }
+}
+
+fn edit_copy_message(ui_state: &mut UiState, idx: usize) {
+    if let Some(win) = ui_state.dbc_windows.get(idx) {
+        if let Some(msg_id) = win.selected_message_id() {
+            if let Some(msg) = win.dbc.get_message(msg_id) {
+                ui_state.clipboard.copied_message = Some(msg.clone());
+            }
+        }
+    }
+}
+
+fn edit_cut_message(ui_state: &mut UiState, idx: usize) {
+    if let Some(win) = ui_state.dbc_windows.get(idx) {
+        if let Some(msg_id) = win.selected_message_id() {
+            if let Some(msg) = win.dbc.get_message(msg_id) {
+                ui_state.clipboard.copied_message = Some(msg.clone());
+                let name = msg.message_name().to_string();
+                ui_state.confirm_delete_dialog.target = Some(DeleteTarget::Message(msg_id));
+                ui_state.confirm_delete_dialog.display_name =
+                    format!("message '{}'", name);
+                ui_state.confirm_delete_dialog.show = true;
+            }
+        }
+    }
+}
+
+fn edit_paste_message(ui_state: &mut UiState, idx: usize) {
+    if let Some(copied) = &ui_state.clipboard.copied_message {
+        let mut new_msg = copied.clone();
+        let new_id = ui_state.generate_next_message_id(idx);
+        new_msg.set_message_id(new_id);
+        let new_name = format!("{}_copy", new_msg.message_name());
+        new_msg.set_message_name(&new_name);
+        if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
+            win.dbc.add_message(&new_msg);
+            win.is_dirty = true;
+        }
+    }
+}
+
+fn edit_delete_message(ui_state: &mut UiState, idx: usize) {
+    if let Some(win) = ui_state.dbc_windows.get(idx) {
+        if let Some(msg_id) = win.selected_message_id() {
+            let name = win
+                .dbc
+                .get_message(msg_id)
+                .map(|m| m.message_name().to_string())
+                .unwrap_or_default();
+            ui_state.confirm_delete_dialog.target = Some(DeleteTarget::Message(msg_id));
+            ui_state.confirm_delete_dialog.display_name =
+                format!("message '{}'", name);
+            ui_state.confirm_delete_dialog.show = true;
+        }
+    }
 }
 
 /// 渲染视图菜单
@@ -98,11 +274,13 @@ fn handle_load_dbc_file(ui_state: &mut UiState) {
 /// 处理关闭 DBC
 fn handle_close_dbc(ui_state: &mut UiState) {
     if let Some(idx) = ui_state.last_focused_dbc_index {
-        if let Some(window) = ui_state.dbc_windows.get_mut(idx) {
-            window.is_open = false;
+        if ui_state.dbc_windows[idx].is_dirty {
+            ui_state.close_confirm_dialog.show = true;
+            ui_state.close_confirm_dialog.dbc_window_index = Some(idx);
+        } else {
+            ui_state.dbc_windows.remove(idx);
+            ui_state.last_focused_dbc_index = None;
         }
-        ui_state.dbc_windows.remove(idx);
-        ui_state.last_focused_dbc_index = None;
     }
 }
 
@@ -118,13 +296,68 @@ fn focus_existing_dbc_window(ui_state: &mut UiState, window_index: usize) {
 
 /// 加载新的 DBC 文件
 fn load_new_dbc_file(ui_state: &mut UiState, path: &std::path::Path) {
+    let path_str = path.to_string_lossy().to_string();
     match DbcWindow::from_path(&path) {
         Ok(dbc_window) => {
+            ui_state.add_recent_file(&path_str);
             ui_state.dbc_windows.push(dbc_window);
             ui_state.last_focused_dbc_index = Some(ui_state.dbc_windows.len() - 1);
         }
         Err(e) => {
             println!("{}", e.as_str())
+        }
+    }
+}
+
+fn handle_open_recent(ui_state: &mut UiState, path: &str) {
+    let path_buf = std::path::PathBuf::from(path);
+    if !path_buf.exists() {
+        ui_state.error_dialog.message = format!("File not found: {}", path);
+        ui_state.error_dialog.show = true;
+        return;
+    }
+
+    if let Some(existing_idx) = ui_state
+        .dbc_windows
+        .iter()
+        .position(|w| w.file_path == path)
+    {
+        focus_existing_dbc_window(ui_state, existing_idx);
+    } else {
+        load_new_dbc_file(ui_state, &path_buf);
+    }
+}
+
+fn handle_save_dbc(ui_state: &mut UiState, save_as: bool) {
+    let idx = match ui_state.last_focused_dbc_index {
+        Some(i) => i,
+        None => return,
+    };
+
+    let save_path = if save_as {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("DBC files", &["dbc"])
+            .set_file_name("output.dbc")
+            .save_file()
+        else {
+            return;
+        };
+        path.to_string_lossy().to_string()
+    } else {
+        ui_state.dbc_windows[idx].file_path.clone()
+    };
+
+    let dbc_string = ui_state.dbc_windows[idx].dbc.to_dbc_string();
+    match std::fs::write(&save_path, &dbc_string) {
+        Ok(_) => {
+            if save_as {
+                ui_state.dbc_windows[idx].file_path = save_path;
+            }
+            ui_state.dbc_windows[idx].is_dirty = false;
+        }
+        Err(e) => {
+            ui_state.error_dialog.message = format!("Failed to save: {}", e);
+            ui_state.error_dialog.show = true;
         }
     }
 }
