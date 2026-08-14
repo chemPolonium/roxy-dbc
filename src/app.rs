@@ -91,6 +91,8 @@ impl AppWindow {
         let mut context = imgui::Context::create();
 
         context.io_mut().config_flags |= ConfigFlags::DOCKING_ENABLE;
+        // 仅允许拖动标题栏移动窗口，避免拖动表格等内容时误移动窗口
+        context.io_mut().config_windows_move_from_title_bar_only = true;
 
         let mut platform = imgui_winit_support::WinitPlatform::new(&mut context);
         platform.attach_window(
