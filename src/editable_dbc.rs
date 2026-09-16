@@ -1,5 +1,6 @@
 use can_dbc::{
-    ByteOrder, Dbc, Message, MessageId, MultiplexIndicator, Signal, ValueType,
+    AttributeDefinition, AttributeValueType, ByteOrder, Dbc, Message, MessageId,
+    MultiplexIndicator, Signal, ValueType,
 };
 
 fn numeric_to_f64(v: &can_dbc::NumericValue) -> f64 {
@@ -199,11 +200,74 @@ pub struct EditableDbc {
 pub enum FrameFormat {
     Standard,
     Extended,
+    /// CAN FD 帧，11 位 ID
+    StandardFd,
+    /// CAN FD 帧，29 位扩展 ID
+    ExtendedFd,
 }
 
 impl Default for FrameFormat {
     fn default() -> Self {
         FrameFormat::Standard
+    }
+}
+
+impl FrameFormat {
+    /// 是否为 29 位扩展 ID 寻址
+    pub fn is_extended(&self) -> bool {
+        matches!(self, FrameFormat::Extended | FrameFormat::ExtendedFd)
+    }
+
+    /// 是否为 CAN FD 帧（DLC 可达 64 字节）
+    pub fn is_fd(&self) -> bool {
+        matches!(self, FrameFormat::StandardFd | FrameFormat::ExtendedFd)
+    }
+
+    /// 组合寻址模式与 FD 标志
+    pub fn compose(extended: bool, fd: bool) -> Self {
+        match (extended, fd) {
+            (false, false) => FrameFormat::Standard,
+            (true, false) => FrameFormat::Extended,
+            (false, true) => FrameFormat::StandardFd,
+            (true, true) => FrameFormat::ExtendedFd,
+        }
+    }
+
+    /// raw id（含 0x80000000 扩展标志），用于 BO_/CM_/VAL_ 段
+    pub fn raw_id(&self, id: u32) -> u32 {
+        if self.is_extended() {
+            id | 0x8000_0000
+        } else {
+            id
+        }
+    }
+}
+
+/// Vector 工具链约定的 VFrameFormat 枚举值顺序
+pub const VFRAME_FORMAT_ENUM: [&str; 5] = [
+    "StandardCAN",
+    "ExtendedCAN",
+    "res",
+    "StandardCAN_FD",
+    "ExtendedCAN_FD",
+];
+
+impl FrameFormat {
+    /// 在 VFrameFormat 枚举中的索引
+    pub fn vframe_format_index(&self) -> u64 {
+        match self {
+            FrameFormat::Standard => 0,
+            FrameFormat::Extended => 1,
+            FrameFormat::StandardFd => 3,
+            FrameFormat::ExtendedFd => 4,
+        }
+    }
+
+    /// 从枚举字符串解析（含 "CAN_FD" 即视为 FD）
+    pub fn from_vframe_format(value: &str) -> Option<Self> {
+        let extended = value.starts_with("Extended");
+        let fd = value.contains("CAN_FD") || value.contains("CANFD");
+        Some(FrameFormat::compose(extended, fd))
     }
 }
 
@@ -293,6 +357,46 @@ impl EditableDbc {
                 old_name: old_name.to_string(),
                 new_name: new_name.to_string(),
             });
+        } else {
+            return;
+        }
+
+        // 传播到发送节点与信号接收节点，保持引用一致（撤销时一并恢复）
+        let mut changes = 1;
+        let snapshot: Vec<(u32, String, Vec<(String, Vec<String>)>)> = self
+            .messages
+            .iter()
+            .map(|m| {
+                (
+                    m.message_id,
+                    m.transmitter.clone(),
+                    m.signals
+                        .iter()
+                        .map(|s| (s.name.clone(), s.receivers.clone()))
+                        .collect(),
+                )
+            })
+            .collect();
+
+        for (msg_id, transmitter, signals) in snapshot {
+            if transmitter == old_name {
+                self.set_message_transmitter(msg_id, new_name);
+                changes += 1;
+            }
+            for (sig_name, receivers) in signals {
+                if receivers.iter().any(|r| r == old_name) {
+                    let new_receivers: Vec<String> = receivers
+                        .iter()
+                        .map(|r| if r == old_name { new_name.to_string() } else { r.clone() })
+                        .collect();
+                    self.set_signal_receivers(msg_id, &sig_name, new_receivers);
+                    changes += 1;
+                }
+            }
+        }
+
+        if changes > 1 {
+            self.merge_last_compounds(changes);
         }
     }
 
@@ -331,19 +435,73 @@ impl EditableDbc {
         let mut seen_ids: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
         let mut seen_names: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
 
+        // 节点名须为合法 DBC 标识符
+        for node in &self.nodes {
+            if !is_valid_dbc_identifier(node) {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    message: format!("Node name '{}' is not a valid DBC identifier", node),
+                });
+            }
+        }
+
         for msg in &self.messages {
             if msg.message_name.is_empty() {
                 issues.push(ValidationIssue {
                     severity: Severity::Error,
                     message: format!("Message 0x{:03X} has empty name", msg.message_id),
                 });
+            } else if !is_valid_dbc_identifier(&msg.message_name) {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    message: format!(
+                        "Message name '{}' is not a valid DBC identifier",
+                        msg.message_name
+                    ),
+                });
             }
 
-            if msg.message_size == 0 {
-                issues.push(ValidationIssue {
-                    severity: Severity::Warning,
-                    message: format!("Message '{}' (0x{:03X}) has zero size", msg.message_name, msg.message_id),
-                });
+            // DLC 校验：经典 CAN 最大 8 字节，CAN FD 最大 64 字节
+            if msg.frame_format.is_fd() {
+                if msg.message_size > 64 {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Error,
+                        message: format!(
+                            "Message '{}' (0x{:03X}) DLC {} exceeds CAN FD limit of 64",
+                            msg.message_name, msg.message_id, msg.message_size
+                        ),
+                    });
+                } else if !matches!(
+                    msg.message_size,
+                    0 | 1..=8 | 12 | 16 | 20 | 24 | 32 | 48 | 64
+                ) {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Warning,
+                        message: format!(
+                            "Message '{}' (0x{:03X}) CAN FD DLC {} is not a valid CAN FD length (valid: 1-8, 12, 16, 20, 24, 32, 48, 64)",
+                            msg.message_name, msg.message_id, msg.message_size
+                        ),
+                    });
+                }
+            } else {
+                if msg.message_size > 8 {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Error,
+                        message: format!(
+                            "Message '{}' (0x{:03X}) DLC {} exceeds classic CAN limit of 8 (enable CAN FD for larger DLC)",
+                            msg.message_name, msg.message_id, msg.message_size
+                        ),
+                    });
+                }
+                if msg.message_size == 0 {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Warning,
+                        message: format!(
+                            "Message '{}' (0x{:03X}) has zero size",
+                            msg.message_name, msg.message_id
+                        ),
+                    });
+                }
             }
 
             if let Some(prev_name) = seen_names.get(&msg.message_name) {
@@ -370,17 +528,52 @@ impl EditableDbc {
                 seen_ids.insert(msg.message_id, msg.message_name.clone());
             }
 
+            // ID 范围：标准帧 11 位，扩展帧 29 位
+            let id_limit = if msg.frame_format.is_extended() {
+                0x1FFF_FFFF
+            } else {
+                0x7FF
+            };
+            if msg.message_id > id_limit {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    message: format!(
+                        "Message '{}' ID 0x{:03X} exceeds {} frame limit of 0x{:X}",
+                        msg.message_name,
+                        msg.message_id,
+                        if msg.frame_format.is_extended() { "extended" } else { "standard" },
+                        id_limit
+                    ),
+                });
+            }
+
+            // 发送节点应存在于 BU_ 列表中
+            if !msg.transmitter.is_empty()
+                && msg.transmitter != "Vector__XXX"
+                && !self.nodes.iter().any(|n| *n == msg.transmitter)
+            {
+                issues.push(ValidationIssue {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "Message '{}' transmitter '{}' is not defined in the node list",
+                        msg.message_name, msg.transmitter
+                    ),
+                });
+            }
+
             let max_bits = msg.message_size * 8;
             let mut seen_signals: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
             for (sig_idx, sig) in msg.signals.iter().enumerate() {
-                let end_bit = sig.start_bit + sig.signal_size;
-                if end_bit > max_bits {
+                // 按实际字节序计算占用的位（Motorola 起始位是 MSB，不能简单相加）
+                let positions = get_signal_bit_positions(sig.start_bit, sig.signal_size, &sig.byte_order);
+                let overflow = positions.iter().any(|&b| b >= max_bits as usize);
+                if overflow {
                     issues.push(ValidationIssue {
                         severity: Severity::Error,
                         message: format!(
-                            "Signal '{}' in '{}' exceeds message size: bit {}..{} > {} (DLC={} bytes)",
-                            sig.name, msg.message_name, sig.start_bit, end_bit, max_bits, msg.message_size
+                            "Signal '{}' in '{}' exceeds message size: start bit {} length {} (DLC={} bytes)",
+                            sig.name, msg.message_name, sig.start_bit, sig.signal_size, msg.message_size
                         ),
                     });
                 }
@@ -393,6 +586,59 @@ impl EditableDbc {
                             sig.name, msg.message_name
                         ),
                     });
+                }
+
+                if !is_valid_dbc_identifier(&sig.name) {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Error,
+                        message: format!(
+                            "Signal name '{}' in '{}' is not a valid DBC identifier",
+                            sig.name, msg.message_name
+                        ),
+                    });
+                }
+
+                if sig.factor == 0.0 {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Error,
+                        message: format!(
+                            "Signal '{}' in '{}' has factor 0 (physical values cannot be decoded)",
+                            sig.name, msg.message_name
+                        ),
+                    });
+                }
+
+                if sig.min > sig.max {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Warning,
+                        message: format!(
+                            "Signal '{}' in '{}' has min {} > max {}",
+                            sig.name, msg.message_name, sig.min, sig.max
+                        ),
+                    });
+                }
+
+                for r in &sig.receivers {
+                    if r == "Vector__XXX" {
+                        continue;
+                    }
+                    if !is_valid_dbc_identifier(r) {
+                        issues.push(ValidationIssue {
+                            severity: Severity::Warning,
+                            message: format!(
+                                "Signal '{}' receiver '{}' is not a valid DBC identifier",
+                                sig.name, r
+                            ),
+                        });
+                    } else if !self.nodes.iter().any(|n| n == r) {
+                        issues.push(ValidationIssue {
+                            severity: Severity::Warning,
+                            message: format!(
+                                "Signal '{}' receiver '{}' is not defined in the node list",
+                                sig.name, r
+                            ),
+                        });
+                    }
                 }
 
                 if let Some(prev_idx) = seen_signals.get(&sig.name) {
@@ -421,25 +667,27 @@ impl EditableDbc {
             .messages
             .iter()
             .map(|msg| {
-                EditableMessage::from_message(msg, dbc.message_comment(msg.id).unwrap_or(""))
-            })
-            .collect();
-
-        for msg in &mut editable_dbc.messages {
-            let msg_id = msg.message_id;
-            for sig in &mut msg.signals {
-                if let Ok(message_id) = MessageId::try_from(msg_id) {
-                    if let Some(val_descs) =
-                        dbc.value_descriptions_for_signal(message_id, &sig.name)
-                    {
+                let mut em = EditableMessage::from_message(
+                    msg,
+                    dbc.message_comment(msg.id).unwrap_or(""),
+                    // 从 VFrameFormat 属性解析 CAN FD；DLC > 8 视为 FD 兜底
+                    parse_frame_format(dbc, msg),
+                );
+                for sig in &mut em.signals {
+                    if let Some(val_descs) = dbc.value_descriptions_for_signal(msg.id, &sig.name) {
                         sig.value_descriptions = val_descs
                             .iter()
                             .map(|vd| (vd.id, vd.description.clone()))
                             .collect();
                     }
+                    // 信号注释（CM_ SG_）
+                    if let Some(comment) = dbc.signal_comment(msg.id, &sig.name) {
+                        sig.comment = comment.to_string();
+                    }
                 }
-            }
-        }
+                em
+            })
+            .collect();
 
         editable_dbc
     }
@@ -1368,10 +1616,7 @@ impl EditableDbc {
         out.push('\n');
 
         for msg in &self.messages {
-            let raw_id = match msg.frame_format {
-                FrameFormat::Standard => msg.message_id,
-                FrameFormat::Extended => msg.message_id | 0x80000000,
-            };
+            let raw_id = msg.frame_format.raw_id(msg.message_id);
             out.push_str(&format!(
                 "BO_ {} {}: {} {}\n",
                 raw_id,
@@ -1423,10 +1668,11 @@ impl EditableDbc {
         }
 
         for msg in &self.messages {
+            let raw_id = msg.frame_format.raw_id(msg.message_id);
             if !msg.comment.is_empty() {
                 out.push_str(&format!(
                     "CM_ BO_ {} \"{}\";\n",
-                    msg.message_id,
+                    raw_id,
                     msg.comment.replace('\\', "\\\\").replace('"', "\\\"")
                 ));
             }
@@ -1434,7 +1680,7 @@ impl EditableDbc {
                 if !sig.comment.is_empty() {
                     out.push_str(&format!(
                         "CM_ SG_ {} {} \"{}\";\n",
-                        msg.message_id,
+                        raw_id,
                         sig.name,
                         sig.comment.replace('\\', "\\\\").replace('"', "\\\"")
                     ));
@@ -1443,10 +1689,7 @@ impl EditableDbc {
         }
 
         for msg in &self.messages {
-            let raw_id = match msg.frame_format {
-                FrameFormat::Standard => msg.message_id,
-                FrameFormat::Extended => msg.message_id | 0x80000000,
-            };
+            let raw_id = msg.frame_format.raw_id(msg.message_id);
             for sig in &msg.signals {
                 if !sig.value_descriptions.is_empty() {
                     let entries: Vec<String> = sig
@@ -1464,8 +1707,100 @@ impl EditableDbc {
             }
         }
 
+        // 存在 CAN FD 消息时，写出 Vector 风格的 VFrameFormat / BusType 属性
+        if self.messages.iter().any(|m| m.frame_format.is_fd()) {
+            let enum_values = VFRAME_FORMAT_ENUM
+                .iter()
+                .map(|s| format!("\"{}\"", s))
+                .collect::<Vec<_>>()
+                .join(",");
+            out.push_str(&format!(
+                "BA_DEF_ BO_ \"VFrameFormat\" ENUM {};\n",
+                enum_values
+            ));
+            out.push_str("BA_DEF_DEF_ \"VFrameFormat\" \"StandardCAN\";\n");
+            out.push_str("BA_DEF_ \"BusType\" STRING ;\n");
+            out.push_str("BA_DEF_DEF_ \"BusType\" \"CAN\";\n");
+            out.push_str("BA_ \"BusType\" \"CAN FD\";\n");
+            for msg in &self.messages {
+                out.push_str(&format!(
+                    "BA_ \"VFrameFormat\" BO_ {} {};\n",
+                    msg.frame_format.raw_id(msg.message_id),
+                    msg.frame_format.vframe_format_index()
+                ));
+            }
+        }
+
         out
     }
+}
+
+/// 计算 DBC 信号占用的绝对位号（起始位为字节内位号，bit N = 字节 N/8 的第 N%8 位）。
+/// Intel（小端）位号线性递增；Motorola（大端）字节内递减、跨字节折行。
+pub fn get_signal_bit_positions(
+    start_bit: u64,
+    size: u64,
+    byte_order: &ByteOrder,
+) -> Vec<usize> {
+    match byte_order {
+        ByteOrder::LittleEndian => (start_bit..start_bit + size).map(|b| b as usize).collect(),
+        ByteOrder::BigEndian => {
+            let mut out = Vec::with_capacity(size as usize);
+            let mut bit = start_bit as i64;
+            for _ in 0..size {
+                if bit < 0 {
+                    break;
+                }
+                out.push(bit as usize);
+                if bit % 8 == 0 {
+                    bit += 15;
+                } else {
+                    bit -= 1;
+                }
+            }
+            out
+        }
+    }
+}
+
+/// DBC 标识符规则（C 风格）：字母或下划线开头，仅含字母、数字、下划线
+pub fn is_valid_dbc_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// 从 DBC 属性解析消息的帧格式（含 CAN FD 标志）
+///
+/// 优先读取 VFrameFormat 消息属性（Vector 风格 ENUM）；
+/// 缺失时若 DLC > 8 则视为 CAN FD，否则按 ID 高位判断标准/扩展。
+fn parse_frame_format(dbc: &Dbc, msg: &Message) -> FrameFormat {
+    let vframe = dbc
+        .attribute_definitions
+        .iter()
+        .find_map(|d| match d {
+            AttributeDefinition::Message(name, AttributeValueType::Enum(values))
+                if name == "VFrameFormat" =>
+            {
+                Some(values.clone())
+            }
+            _ => None,
+        })
+        .and_then(|values| {
+            dbc.message_attribute(msg.id, "VFrameFormat").and_then(|v| match v {
+                can_dbc::AttributeValue::Uint(idx) => values.get(*idx as usize).cloned(),
+                _ => None,
+            })
+        })
+        .and_then(|s| FrameFormat::from_vframe_format(&s));
+
+    vframe.unwrap_or_else(|| {
+        let extended = matches!(msg.id, MessageId::Extended(_));
+        FrameFormat::compose(extended, msg.size > 8)
+    })
 }
 
 #[allow(dead_code)]
@@ -1514,22 +1849,16 @@ impl EditableMessage {
         }
     }
 
-    fn from_message(msg: &Message, comment: &str) -> Self {
+    fn from_message(msg: &Message, comment: &str, frame_format: FrameFormat) -> Self {
         let signals = msg
             .signals
             .iter()
             .map(|sig| EditableSignal::from_signal(sig))
             .collect();
 
-        let message_id = msg.id.raw();
-        let frame_format = match msg.id {
-            MessageId::Standard(_) => FrameFormat::Standard,
-            MessageId::Extended(_) => FrameFormat::Extended,
-        };
-
         Self {
-            message_id: message_id,
-            frame_format: frame_format,
+            message_id: msg.id.raw() & 0x1FFF_FFFF,
+            frame_format,
             message_name: msg.name.clone(),
             message_size: msg.size,
             transmitter: msg.transmitter.clone().unwrap_or_else(|| "Vector__XXX".to_string()),
@@ -1547,6 +1876,9 @@ impl EditableMessage {
     }
     pub fn frame_format(&self) -> FrameFormat {
         self.frame_format
+    }
+    pub fn is_extended(&self) -> bool {
+        self.frame_format.is_extended()
     }
     pub fn message_name(&self) -> &str {
         &self.message_name
@@ -1803,5 +2135,263 @@ SIG_VALTYPE_ 2000 Signal_8 : 1;
         assert_eq!(sig_signal_8.max(), 255.0);
         assert_eq!(sig_signal_8.unit(), "");
         assert_eq!(sig_signal_8.receivers(), &Vec::<String>::new());
+    }
+
+    #[test]
+    fn signal_comments_are_imported() {
+        let dbc = Dbc::try_from(SAMPLE_DBC).unwrap();
+        let editable = EditableDbc::from_dbc(&dbc);
+
+        let msg = editable.get_message(1840).unwrap();
+        let sig = msg.signals().iter().find(|s| s.name() == "Signal_4").unwrap();
+        assert!(sig.comment().contains("asaklfjlsdfjlsdfgls"), "signal comment should be imported");
+    }
+
+    /// EditableDbc -> String -> Dbc -> EditableDbc 回环
+    fn round_trip(dbc: &EditableDbc) -> EditableDbc {
+        let text = dbc.to_dbc_string();
+        let parsed = Dbc::try_from(text.as_str())
+            .unwrap_or_else(|e| panic!("to_dbc_string output must re-parse: {e:?}"));
+        EditableDbc::from_dbc(&parsed)
+    }
+
+    #[test]
+    fn extended_frame_comment_survives_round_trip() {
+        let msg = EditableMessage::build(
+            0x1F337,
+            FrameFormat::Extended,
+            "ExtMsg".to_string(),
+            8,
+            "Vector__XXX".to_string(),
+            Vec::new(),
+            "extended comment".to_string(),
+        );
+        let mut dbc = EditableDbc::new();
+        dbc.add_message(&msg);
+
+        let raw_id: u32 = 0x1F337 | 0x8000_0000;
+        let text = dbc.to_dbc_string();
+        assert!(
+            text.contains(&format!("CM_ BO_ {} \"extended comment\"", raw_id)),
+            "CM_ BO_ must use the raw id for extended frames"
+        );
+
+        let re = round_trip(&dbc);
+        let m = re.get_message(0x1F337).unwrap();
+        assert_eq!(m.comment(), "extended comment");
+        assert_eq!(m.frame_format(), FrameFormat::Extended);
+    }
+
+    #[test]
+    fn can_fd_frame_round_trips_with_vframe_format() {
+        let sig = EditableSignal::build(
+            "FdSig".to_string(),
+            0,
+            8,
+            ByteOrder::LittleEndian,
+            ValueType::Unsigned,
+            1.0,
+            0.0,
+            0.0,
+            255.0,
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            String::new(),
+        );
+        let std_fd = EditableMessage::build(
+            0x123,
+            FrameFormat::StandardFd,
+            "FdMsg".to_string(),
+            32,
+            "Vector__XXX".to_string(),
+            vec![sig],
+            "fd comment".to_string(),
+        );
+        let mut dbc = EditableDbc::new();
+        dbc.add_node("ECU1".into());
+        dbc.add_message(&std_fd);
+
+        let text = dbc.to_dbc_string();
+        assert!(text.contains("BA_DEF_ BO_ \"VFrameFormat\" ENUM"), "must emit VFrameFormat enum");
+        assert!(text.contains("BA_ \"BusType\" \"CAN FD\";"));
+
+        let re = round_trip(&dbc);
+        let m = re.get_message(0x123).unwrap();
+        assert_eq!(m.frame_format(), FrameFormat::StandardFd);
+        assert_eq!(m.message_size(), 32);
+        assert_eq!(m.comment(), "fd comment");
+    }
+
+    #[test]
+    fn node_rename_propagates_and_undoes() {
+        let sig = EditableSignal::build(
+            "Sig".to_string(),
+            0,
+            8,
+            ByteOrder::LittleEndian,
+            ValueType::Unsigned,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            String::new(),
+            vec!["OldNode".to_string()],
+            Vec::new(),
+            String::new(),
+        );
+        let msg = EditableMessage::build(
+            0x100,
+            FrameFormat::Standard,
+            "Msg".to_string(),
+            8,
+            "OldNode".to_string(),
+            vec![sig],
+            String::new(),
+        );
+        let mut dbc = EditableDbc::new();
+        dbc.add_node("OldNode".into());
+        dbc.add_message(&msg);
+
+        dbc.rename_node("OldNode", "NewNode");
+        assert_eq!(dbc.nodes()[0], "NewNode");
+        let m = dbc.get_message(0x100).unwrap();
+        assert_eq!(m.transmitter(), "NewNode");
+        assert_eq!(m.signals()[0].receivers(), &vec!["NewNode".to_string()]);
+        // RenameNode + transmitter + receivers 合并为单步撤销
+        assert!(dbc.can_undo());
+
+        dbc.undo().unwrap();
+        assert_eq!(dbc.nodes()[0], "OldNode");
+        let m = dbc.get_message(0x100).unwrap();
+        assert_eq!(m.transmitter(), "OldNode");
+        assert_eq!(m.signals()[0].receivers(), &vec!["OldNode".to_string()]);
+    }
+
+    #[test]
+    fn validation_flags_fd_and_range_issues() {
+        let bad_sig = EditableSignal::build(
+            "BadSig".to_string(),
+            0,
+            8,
+            ByteOrder::LittleEndian,
+            ValueType::Unsigned,
+            0.0, // factor 0 -> error
+            0.0,
+            10.0, // min > max -> warning
+            0.0,
+            String::new(),
+            vec!["Ghost".to_string()], // 未定义节点 -> warning
+            Vec::new(),
+            String::new(),
+        );
+        let classic_oversize = EditableMessage::build(
+            0x200,
+            FrameFormat::Standard,
+            "TooBig".to_string(),
+            12, // 经典 CAN 超过 8 -> error
+            "Vector__XXX".to_string(),
+            vec![bad_sig],
+            String::new(),
+        );
+        let mut dbc = EditableDbc::new();
+        dbc.add_message(&classic_oversize);
+
+        let issues = dbc.validate();
+        let messages: Vec<&str> = issues.iter().map(|i| i.message.as_str()).collect();
+        assert!(messages.iter().any(|m| m.contains("exceeds classic CAN limit")));
+        assert!(messages.iter().any(|m| m.contains("factor 0")));
+        assert!(messages.iter().any(|m| m.contains("min 10 > max 0")));
+        assert!(messages.iter().any(|m| m.contains("not defined in the node list")));
+
+        // 改为 CAN FD 后 DLC 12 合法
+        dbc.set_message_frame_format(0x200, FrameFormat::StandardFd);
+        let issues = dbc.validate();
+        assert!(!issues.iter().any(|i| i.message.contains("exceeds")));
+    }
+
+    #[test]
+    fn gbk_dbc_content_survives_decode_and_round_trip() {
+        // 模拟 CANdb++（ANSI/GBK）导出的 DBC：中文消息注释与值表
+        let utf8_text = r#"VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: PC
+
+BO_ 100 Msg1: 8 PC
+ SG_ Sig1 : 0|8@1+ (1,0) [0|255] "" PC
+
+CM_ BO_ 100 "测试消息1";
+CM_ SG_ 100 Sig1 "测试信号1";
+
+VAL_ 100 Sig1 1 "开启" 0 "关闭";
+"#;
+        let (gbk_bytes, _, _) = encoding_rs::GBK.encode(utf8_text);
+        // 解码后应还原为 UTF-8 文本并标注 GBK
+        let decoded = crate::file_encoding::decode_file_bytes(&gbk_bytes);
+        assert_eq!(decoded.encoding, encoding_rs::GBK);
+        assert!(decoded.text.contains("测试消息1"));
+
+        // can-dbc 语法接受 UTF-8 中文注释
+        let parsed = Dbc::try_from(decoded.text.as_str())
+            .unwrap_or_else(|e| panic!("UTF-8 Chinese DBC must parse: {e:?}"));
+        let editable = EditableDbc::from_dbc(&parsed);
+        let msg = editable.get_message(100).unwrap();
+        assert_eq!(msg.comment(), "测试消息1");
+        let sig = msg.signals()[0].clone();
+        assert_eq!(sig.comment(), "测试信号1");
+        assert_eq!(
+            sig.value_descriptions(),
+            &vec![(1i64, "开启".to_string()), (0i64, "关闭".to_string())]
+        );
+
+        // 保存回 GBK 应能还原为原始字节
+        let out = crate::file_encoding::encode_to_bytes(&editable.to_dbc_string(), encoding_rs::GBK, false);
+        let redecoded = crate::file_encoding::decode_file_bytes(&out);
+        assert!(redecoded.text.contains("测试消息1"));
+        assert_eq!(decoded.encoding, redecoded.encoding);
+    }
+
+    #[test]
+    fn motorola_overflow_is_detected_via_bit_positions() {
+        // Motorola 信号：起始位 7（MSB），长度 16，在 1 字节消息中越界
+        let sig = EditableSignal::build(
+            "MotorolaSig".to_string(),
+            7,
+            16,
+            ByteOrder::BigEndian,
+            ValueType::Unsigned,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            String::new(),
+        );
+        let msg = EditableMessage::build(
+            0x300,
+            FrameFormat::Standard,
+            "MMsg".to_string(),
+            1,
+            "Vector__XXX".to_string(),
+            vec![sig],
+            String::new(),
+        );
+        let mut dbc = EditableDbc::new();
+        dbc.add_message(&msg);
+
+        // start_bit + size = 23 > 8 会误报；按实际位号 7..0 + 15..8 判断同样越界
+        let issues = dbc.validate();
+        assert!(issues.iter().any(|i| i.message.contains("exceeds message size")));
+
+        // 2 字节消息中不越界（即使 start_bit + size = 23 > 16）
+        dbc.set_message_size(0x300, 2);
+        let issues = dbc.validate();
+        assert!(!issues.iter().any(|i| i.message.contains("exceeds message size")));
     }
 }

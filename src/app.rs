@@ -1,7 +1,7 @@
 //! 应用程序窗口和图形上下文管理
-use imgui::*;
-use imgui_wgpu::{Renderer, RendererConfig};
-use imgui_winit_support::WinitPlatform;
+use dear_imgui_rs::Context;
+use dear_imgui_wgpu::{WgpuInitInfo, WgpuRenderer};
+use dear_imgui_winit::{HiDpiMode, WinitPlatform};
 use pollster::block_on;
 use std::{
     sync::Arc,
@@ -10,12 +10,11 @@ use std::{
 use winit::{dpi::LogicalSize, event_loop::ActiveEventLoop, window::Window};
 
 pub struct ImguiState {
-    pub context: imgui::Context,
+    pub context: Context,
     pub platform: WinitPlatform,
-    pub renderer: Renderer,
+    pub renderer: WgpuRenderer,
     pub clear_color: wgpu::Color,
     pub last_frame: Instant,
-    pub last_cursor: Option<MouseCursor>,
     pub target_frame_time: Duration, // 目标帧时间（用于限制帧率）
 }
 
@@ -25,7 +24,6 @@ pub struct AppWindow {
     pub window: Arc<Window>,
     pub surface_desc: wgpu::SurfaceConfiguration,
     pub surface: wgpu::Surface<'static>,
-    pub hidpi_factor: f64,
     pub imgui: Option<ImguiState>,
 }
 
@@ -48,7 +46,6 @@ impl AppWindow {
         };
 
         let size = window.inner_size();
-        let hidpi_factor = window.scale_factor();
         let surface = instance.create_surface(window.clone()).unwrap();
 
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -82,66 +79,66 @@ impl AppWindow {
             window,
             surface_desc,
             surface,
-            hidpi_factor,
             imgui,
         }
     }
 
     pub fn setup_imgui(&mut self) {
-        let mut context = imgui::Context::create();
+        let mut context = Context::create();
 
-        context.io_mut().config_flags |= ConfigFlags::DOCKING_ENABLE;
+        let flags = context.io().config_flags() | dear_imgui_rs::ConfigFlags::DOCKING_ENABLE;
+        context.io_mut().set_config_flags(flags);
         // 仅允许拖动标题栏移动窗口，避免拖动表格等内容时误移动窗口
-        context.io_mut().config_windows_move_from_title_bar_only = true;
+        context
+            .io_mut()
+            .set_config_windows_move_from_title_bar_only(true);
 
-        let mut platform = imgui_winit_support::WinitPlatform::new(&mut context);
-        platform.attach_window(
-            context.io_mut(),
-            &self.window,
-            imgui_winit_support::HiDpiMode::Default,
-        );
-        context.set_ini_filename(None);
+        let mut platform = WinitPlatform::new(&mut context).expect("create winit platform");
+        platform
+            .attach_window(
+                Arc::clone(&self.window),
+                HiDpiMode::Default,
+                &mut context,
+            )
+            .expect("attach winit window");
 
-        let font_size = (13.0 * self.hidpi_factor) as f32;
-        context.io_mut().font_global_scale = (1.0 / self.hidpi_factor) as f32;
+        context
+            .set_ini_filename::<std::path::PathBuf>(None)
+            .expect("set ini filename");
+        context.set_clipboard_backend(crate::win_clipboard::WinClipboardBackend);
 
-        // 加载嵌入的Inconsolata字体
-        let font_config = imgui::FontConfig {
-            oversample_h: 1,
-            pixel_snap_h: true,
-            size_pixels: font_size,
-            ..Default::default()
-        };
-
-        let mut font_loaded = false;
-
-        // 尝试使用嵌入的字体数据
+        // ImGui 1.92 按平台 DPI 动态光栅化字形，字体只需给逻辑参考尺寸。
+        // Inconsolata 为主字体（拉丁），CJK 回退从系统字体合并进同一图集；
+        // TTC 集合取第一个 face（雅黑/宋体），失败则仅剩拉丁字形。
         const INCONSOLATA_FONT: &[u8] = include_bytes!("../fonts/Inconsolata-Regular.ttf");
-
-        if !INCONSOLATA_FONT.is_empty() {
-            context.fonts().add_font(&[FontSource::TtfData {
-                data: INCONSOLATA_FONT,
-                size_pixels: font_size,
-                config: Some(font_config.clone()),
-            }]);
-            font_loaded = true;
-            log::info!(
-                "Successfully loaded embedded Inconsolata font ({} bytes)",
-                INCONSOLATA_FONT.len()
-            );
+        let mut sources = vec![
+            // # Safety: 嵌入字体字节是完整的 TTF。
+            unsafe {
+                dear_imgui_rs::FontSource::ttf_data_with_size(INCONSOLATA_FONT, 13.0).with_config(
+                    dear_imgui_rs::FontConfig::new()
+                        .pixel_snap_h(true)
+                        .oversample_h(1),
+                )
+            },
+        ];
+        for path in [
+            "C:\\Windows\\Fonts\\msyh.ttc",
+            "C:\\Windows\\Fonts\\msyh.ttf",
+            "C:\\Windows\\Fonts\\simhei.ttf",
+            "C:\\Windows\\Fonts\\simsun.ttc",
+        ] {
+            if let Ok(bytes) = std::fs::read(path) {
+                let data: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+                // # Safety: 字体数据与图集同生命周期，且是完整字体。
+                sources.push(unsafe {
+                    dear_imgui_rs::FontSource::ttf_data_with_size(data, 13.0)
+                });
+                break;
+            }
         }
+        // WGPU 渲染器为 managed-texture 模式，字集纹理由渲染器按需构建上传
+        context.font_atlas().add_font(&sources);
 
-        // 如果嵌入字体加载失败，使用默认字体
-        if !font_loaded {
-            context.fonts().add_font(&[FontSource::DefaultFontData {
-                config: Some(font_config),
-            }]);
-            log::info!("Using default font (embedded Inconsolata font not available)");
-        }
-
-        //
-        // Set up dear imgui wgpu renderer
-        //
         let clear_color = wgpu::Color {
             r: 0.1,
             g: 0.2,
@@ -149,14 +146,13 @@ impl AppWindow {
             a: 1.0,
         };
 
-        let renderer_config = RendererConfig {
-            texture_format: self.surface_desc.format,
-            ..Default::default()
-        };
+        let init_info = WgpuInitInfo::new(
+            self.device.clone(),
+            self.queue.clone(),
+            self.surface_desc.format,
+        );
+        let renderer = WgpuRenderer::new(init_info, &mut context).expect("create wgpu renderer");
 
-        let renderer = Renderer::new(&mut context, &self.device, &self.queue, renderer_config);
-        let last_frame = Instant::now();
-        let last_cursor = None;
         let target_frame_time = Duration::from_secs(1) / 60; // 约60FPS，平衡响应性和性能
 
         self.imgui = Some(ImguiState {
@@ -164,8 +160,7 @@ impl AppWindow {
             platform,
             renderer,
             clear_color,
-            last_frame,
-            last_cursor,
+            last_frame: Instant::now(),
             target_frame_time,
         })
     }

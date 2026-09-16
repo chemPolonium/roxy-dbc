@@ -62,8 +62,10 @@ pub fn export_arxml(dbc: &EditableDbc) -> String {
             msg.message_id()
         ));
         let addressing = match msg.frame_format() {
-            crate::editable_dbc::FrameFormat::Standard => "STANDARD",
-            crate::editable_dbc::FrameFormat::Extended => "EXTENDED",
+            crate::editable_dbc::FrameFormat::Standard
+            | crate::editable_dbc::FrameFormat::StandardFd => "STANDARD",
+            crate::editable_dbc::FrameFormat::Extended
+            | crate::editable_dbc::FrameFormat::ExtendedFd => "EXTENDED",
         };
         out.push_str(&format!(
             "          <CAN-ADDRESSING-MODE>{}</CAN-ADDRESSING-MODE>\n",

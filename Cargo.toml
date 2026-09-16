@@ -1,18 +1,19 @@
 [package]
 name = "roxy-dbc"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 
 [dependencies]
 can-dbc = "10.0"
-imgui-wgpu = "0.27"
 bytemuck = "1"
-imgui = { version = "0.12", features = ["docking", "tables-api"] }
 log = "0.4"
 wgpu = "28"
 winit = "0.30"
-imgui-winit-support = "0.13"
 pollster = "1.0"
 env_logger = "0.11"
 rfd = "0.17"
 roxmltree = "0.21"
+encoding_rs = "0.8"
+dear-imgui-rs = "0.18"
+dear-imgui-winit = "0.18"
+dear-imgui-wgpu = { version = "0.18", default-features = false, features = ["wgpu-28"] }

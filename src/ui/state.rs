@@ -105,7 +105,6 @@ pub struct UiState {
     pub close_confirm_dialog: CloseConfirmDialog,
     pub recent_files: Vec<String>,
     pub file_hovering: bool,
-    pub node_dialog: crate::ui::node_window::NodeDialog,
 }
 
 impl Default for UiState {
@@ -126,7 +125,6 @@ impl Default for UiState {
             close_confirm_dialog: CloseConfirmDialog::default(),
             recent_files: Vec::new(),
             file_hovering: false,
-            node_dialog: crate::ui::node_window::NodeDialog::default(),
         }
     }
 }
@@ -209,15 +207,26 @@ impl UiState {
 
     pub fn save_recent_files(&self) {
         if let Some(path) = recent_files_path() {
+            // 确保配置目录存在（如 %APPDATA%\roxy-dbc）
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
             let content = self.recent_files.join("\n");
             let _ = std::fs::write(path, content);
         }
     }
 }
 
+/// 最近文件列表的存放位置：优先 %APPDATA%\roxy-dbc\recent_files.txt，
+/// 避免写入程序目录失败（如安装在 Program Files）；无 APPDATA 时回退到 exe 目录。
 fn recent_files_path() -> Option<std::path::PathBuf> {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .map(|p| p.join("recent_files.txt"))
+    let base = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .map(|p| p.join("roxy-dbc"))
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        })?;
+    Some(base.join("recent_files.txt"))
 }

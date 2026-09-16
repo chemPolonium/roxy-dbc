@@ -3,11 +3,32 @@ use std::io::Read;
 use std::path::Path;
 
 use crate::editable_dbc::{EditableDbc, EditableMessage, FrameFormat};
+use crate::file_encoding::{decode_file_bytes, encode_to_bytes};
+use crate::ui::all_signals_window::{self, AllSignalsEvent, AllSignalsWindow};
+use crate::ui::comm_matrix::render_comm_matrix;
 use crate::ui::message_edit_window::{MessageEditEvent, MessageEditWindowState};
 use crate::ui::message_window::{MessageWindow, MessageWindowEvent};
+use crate::ui::node_window::{render_node_list, NodeListState};
 use crate::ui::signal_edit_window::SignalEditDialog;
 use crate::ui::state::{DeleteTarget, UiState};
-use imgui::{Condition, TableFlags, Ui};
+use dear_imgui_rs::{Condition, MouseButton, SortDirection, TabItemFlags, TableFlags, Ui};
+use encoding_rs::Encoding;
+
+/// DBC 窗口内的标签页（CANdb++ 风格）
+#[derive(Clone, Copy, PartialEq)]
+enum DbcTab {
+    Messages,
+    AllSignals,
+    NodeList,
+    CommMatrix,
+}
+
+/// DBC 窗口标签页向上抛的事件
+enum DbcWindowEvent {
+    None,
+    Msg(MessageTableEvent),
+    AllSignals(AllSignalsEvent),
+}
 
 #[allow(dead_code)]
 enum MessageTableEvent {
@@ -19,6 +40,7 @@ enum MessageTableEvent {
     DeleteMessage(Vec<u32>),
     PasteMessage,
     AddMessage,
+    OpenAllSignals,
 }
 
 #[derive(Clone)]
@@ -50,6 +72,10 @@ pub struct DbcWindow {
     pub file_path: String,
     pub dbc: EditableDbc,
     pub is_dirty: bool,
+    /// 文本编码：打开时检测（UTF-8 / GBK），保存时按原编码写出
+    pub text_encoding: &'static Encoding,
+    /// 打开的文件是否带 UTF-8 BOM（保存时还原）
+    pub had_bom: bool,
 
     selected_message_ids: Vec<u32>,
     selection_anchor: Option<u32>,
@@ -59,6 +85,14 @@ pub struct DbcWindow {
     pub message_windows: Vec<MessageWindow>,
     edit_windows: Vec<MessageEditWindowState>,
     signal_edit_dialog: SignalEditDialog,
+    /// All Signals 标签页状态
+    all_signals_window: AllSignalsWindow,
+    /// 当前选中的标签页
+    active_tab: DbcTab,
+    /// 请求切换到的标签页（下一次渲染生效）
+    pending_tab: Option<DbcTab>,
+    /// Node List 标签页状态
+    node_list: NodeListState,
 }
 
 impl Default for DbcWindow {
@@ -68,6 +102,8 @@ impl Default for DbcWindow {
             file_path: String::new(),
             dbc: EditableDbc::default(),
             is_dirty: false,
+            text_encoding: encoding_rs::UTF_8,
+            had_bom: false,
             selected_message_ids: Vec::new(),
             selection_anchor: None,
             selection_cursor: None,
@@ -76,6 +112,10 @@ impl Default for DbcWindow {
             message_windows: Vec::new(),
             edit_windows: Vec::new(),
             signal_edit_dialog: SignalEditDialog::default(),
+            all_signals_window: AllSignalsWindow::default(),
+            active_tab: DbcTab::Messages,
+            pending_tab: None,
+            node_list: NodeListState::default(),
         }
     }
 }
@@ -87,6 +127,8 @@ impl DbcWindow {
             file_path: file_path.to_string(),
             dbc,
             is_dirty: false,
+            text_encoding: encoding_rs::UTF_8,
+            had_bom: false,
             selected_message_ids: Vec::new(),
             selection_anchor: None,
             selection_cursor: None,
@@ -95,6 +137,10 @@ impl DbcWindow {
             message_windows: Vec::new(),
             edit_windows: Vec::new(),
             signal_edit_dialog: SignalEditDialog::default(),
+            all_signals_window: AllSignalsWindow::default(),
+            active_tab: DbcTab::Messages,
+            pending_tab: None,
+            node_list: NodeListState::default(),
         }
     }
 
@@ -120,18 +166,26 @@ impl DbcWindow {
     }
 
     pub fn from_path(file_path: &Path) -> Result<Self, String> {
-        let mut file = File::open(file_path).unwrap();
+        let mut file = File::open(file_path)
+            .map_err(|e| format!("Failed to open file {}: {}", file_path.display(), e))?;
         let mut contents = Vec::new();
-        if let Ok(_) = file.read_to_end(&mut contents) {
-            let contents_str = String::from_utf8_lossy(&contents).to_string();
-            if let Ok(original_dbc) = can_dbc::Dbc::try_from(contents_str.as_str()) {
+        file.read_to_end(&mut contents)
+            .map_err(|e| format!("Failed to read file {}: {}", file_path.display(), e))?;
+        // 嗅探编码（UTF-8 BOM / 严格 UTF-8 / GBK），GBK 是国内工具链的 ANSI 惯例
+        let decoded = decode_file_bytes(&contents);
+        match can_dbc::Dbc::try_from(decoded.text.as_str()) {
+            Ok(original_dbc) => {
                 let editable_dbc = EditableDbc::from_dbc(&original_dbc);
-                Ok(Self::new(file_path.to_str().unwrap(), editable_dbc))
-            } else {
-                Err(format!("Failed to parse DBC: {}", file_path.display()))
+                let path_str = file_path
+                    .to_str()
+                    .ok_or_else(|| format!("Invalid path: {}", file_path.display()))?
+                    .to_string();
+                let mut window = Self::new(&path_str, editable_dbc);
+                window.text_encoding = decoded.encoding;
+                window.had_bom = decoded.had_bom;
+                Ok(window)
             }
-        } else {
-            Err(format!("Filed to open file: {}", file_path.display()))
+            Err(e) => Err(format!("Failed to parse DBC {}: {:?}", file_path.display(), e)),
         }
     }
 
@@ -140,6 +194,10 @@ impl DbcWindow {
 
         if ui.small_button("+ Add Message") {
             event = MessageTableEvent::AddMessage;
+        }
+        ui.same_line();
+        if ui.small_button("All Signals") {
+            event = MessageTableEvent::OpenAllSignals;
         }
         ui.same_line();
         ui.input_text("##msg_search", &mut self.search_query)
@@ -176,8 +234,8 @@ impl DbcWindow {
         });
 
         // Keyboard navigation
-        if ui.is_window_focused() && !filtered.is_empty() {
-            let shift = ui.io().key_shift;
+        if ui.is_window_focused() && !ui.io().want_capture_keyboard() && !filtered.is_empty() {
+            let shift = ui.io().key_shift();
             let cursor_pos = self
                 .selection_cursor
                 .and_then(|id| filtered.iter().position(|&idx| messages[idx].message_id() == id));
@@ -193,10 +251,10 @@ impl DbcWindow {
             };
 
             let mut new_pos: Option<usize> = None;
-            if ui.is_key_pressed(imgui::Key::DownArrow) {
+            if ui.is_key_pressed(dear_imgui_rs::Key::DownArrow) {
                 new_pos = Some(move_cursor(cursor_pos, true));
             }
-            if ui.is_key_pressed(imgui::Key::UpArrow) {
+            if ui.is_key_pressed(dear_imgui_rs::Key::UpArrow) {
                 new_pos = Some(move_cursor(cursor_pos, false));
             }
 
@@ -219,7 +277,7 @@ impl DbcWindow {
                     self.selection_anchor = Some(new_id);
                 }
             }
-            if ui.is_key_pressed(imgui::Key::Enter) {
+            if ui.is_key_pressed(dear_imgui_rs::Key::Enter) {
                 if let Some(msg_id) = self.selection_cursor.or(self.selected_message_ids.first().copied()) {
                     event = MessageTableEvent::OpenMessage(msg_id);
                 }
@@ -229,29 +287,34 @@ impl DbcWindow {
         if let Some(_table) = ui.begin_table_with_flags(
             "msg_table",
             6,
-            TableFlags::RESIZABLE
-                | TableFlags::BORDERS
-                | TableFlags::NO_BORDERS_IN_BODY
-                | TableFlags::SCROLL_Y
-                | TableFlags::SORTABLE
-                | TableFlags::SIZING_FIXED_FIT,
+            dear_imgui_rs::TableOptions::new()
+                .flags(
+                    TableFlags::RESIZABLE
+                        | TableFlags::BORDERS
+                        | TableFlags::NO_BORDERS_IN_BODY
+                        | TableFlags::SCROLL_Y
+                        | TableFlags::SORTABLE,
+                )
+                .sizing_policy(dear_imgui_rs::TableSizingPolicy::FixedFit),
         ) {
-            ui.table_setup_column("ID");
-            ui.table_setup_column("Name");
-            ui.table_setup_column("DLC");
-            ui.table_setup_column("Transmitter");
-            ui.table_setup_column("Signals");
-            ui.table_setup_column("Comment");
+            ui.table_setup_column("ID", dear_imgui_rs::TableColumnFlags::NONE, None);
+            ui.table_setup_column("Name", dear_imgui_rs::TableColumnFlags::NONE, None);
+            ui.table_setup_column("DLC", dear_imgui_rs::TableColumnFlags::NONE, None);
+            ui.table_setup_column("Transmitter", dear_imgui_rs::TableColumnFlags::NONE, None);
+            ui.table_setup_column("Signals", dear_imgui_rs::TableColumnFlags::NONE, None);
+            ui.table_setup_column("Comment", dear_imgui_rs::TableColumnFlags::NONE, None);
+            // 冻结标题行，滚动时表头保持可见
+            ui.table_setup_scroll_freeze(0, 1);
             ui.table_headers_row();
 
-            if let Some(mut sort_specs) = ui.table_sort_specs_mut() {
-                if sort_specs.should_sort() {
-                    if let Some(spec) = sort_specs.specs().iter().next() {
-                        self.message_table.sort_column_idx = spec.column_idx() as u32;
+            if let Some(mut sort_specs) = ui.table_get_sort_specs() {
+                if sort_specs.is_dirty() {
+                    if let Some(spec) = sort_specs.iter().next() {
+                        self.message_table.sort_column_idx = usize::from(spec.column_index) as u32;
                         self.message_table.sort_ascending =
-                            spec.sort_direction() == Some(imgui::TableSortDirection::Ascending);
+                            spec.sort_direction == SortDirection::Ascending;
                     }
-                    sort_specs.set_sorted();
+                    sort_specs.clear_dirty(ui);
                 }
             }
 
@@ -264,14 +327,15 @@ impl DbcWindow {
                 let is_selected = self.selected_message_ids.contains(&msg_id);
 
                 ui.table_set_column_index(0);
+                let id_label = format!("0x{:03X}{}", msg_id, if msg.is_extended() { "x" } else { "" });
                 if ui
-                    .selectable_config(format!("0x{:03X}", msg_id))
+                    .selectable_config(id_label)
                     .selected(is_selected)
                     .span_all_columns(true)
                     .build()
                 {
-                    let ctrl = ui.io().key_ctrl;
-                    let shift = ui.io().key_shift;
+                    let ctrl = ui.io().key_ctrl();
+                    let shift = ui.io().key_shift();
                     if ctrl {
                         if let Some(pos) =
                             self.selected_message_ids.iter().position(|&id| id == msg_id)
@@ -305,14 +369,14 @@ impl DbcWindow {
                     }
                 }
                 if ui.is_item_hovered()
-                    && ui.is_mouse_double_clicked(imgui::MouseButton::Left)
+                    && ui.is_mouse_double_clicked(MouseButton::Left)
                 {
                     event = MessageTableEvent::OpenMessage(msg_id);
                 }
 
-                if let Some(_popup) =
-                    ui.begin_popup_context_with_label(format!("msg_ctx_{}", msg_id))
-                {
+                if let Some(_popup) = ui.begin_popup_context_item_with_label(Some(
+                    &format!("msg_ctx_{}", msg_id),
+                )) {
                     if !self.selected_message_ids.contains(&msg_id) {
                         self.selected_message_ids = vec![msg_id];
                         self.selection_anchor = Some(msg_id);
@@ -329,7 +393,7 @@ impl DbcWindow {
                         event = MessageTableEvent::CutMessage(selected_ids.clone());
                     }
                     ui.separator();
-                    if ui.menu_item_config("Paste").enabled(has_clipboard).build() {
+                    if ui.menu_item_enabled_selected_no_shortcut("Paste", false, has_clipboard) {
                         event = MessageTableEvent::PasteMessage;
                     }
                     ui.separator();
@@ -402,7 +466,9 @@ impl DbcWindow {
                 MessageWindowEvent::None => {}
             }
         }
-        self.message_windows.retain(|w| w.is_open);
+        self.message_windows.retain(|w| {
+            w.is_open && self.dbc.get_message(w.message_id).is_some()
+        });
 
         self.render_edit_windows(ui);
 
@@ -433,6 +499,68 @@ impl DbcWindow {
         }
     }
 
+    /// 关闭与被删消息关联的 Message 窗口、编辑窗口和信号编辑对话框
+    pub fn close_windows_for_messages(&mut self, ids: &[u32]) {
+        self.message_windows.retain(|w| !ids.contains(&w.message_id));
+        self.edit_windows.retain(|w| !ids.contains(&w.current_id));
+        if ids.contains(&self.signal_edit_dialog.message_id) {
+            self.signal_edit_dialog.show = false;
+        }
+    }
+
+    /// 渲染标签页内容（CANdb++ 风格：Messages & Signals / All Signals / Node List / Communication Matrix）
+    fn render_tabs(&mut self, ui: &Ui, has_clipboard: bool) -> DbcWindowEvent {
+        let mut event = DbcWindowEvent::None;
+
+        if let Some(_bar) = ui.tab_bar("##dbc_tabs") {
+            let pending = self.pending_tab.take();
+            let flags_for = |tab: DbcTab| {
+                if pending == Some(tab) {
+                    TabItemFlags::SET_SELECTED
+                } else {
+                    TabItemFlags::NONE
+                }
+            };
+
+            if let Some(_tab) = ui.tab_item_with_flags("Messages & Signals", None, flags_for(DbcTab::Messages)) {
+                self.active_tab = DbcTab::Messages;
+                match self.render_message_table(ui, has_clipboard) {
+                    MessageTableEvent::OpenAllSignals => {
+                        self.pending_tab = Some(DbcTab::AllSignals);
+                    }
+                    MessageTableEvent::None => {}
+                    ev => event = DbcWindowEvent::Msg(ev),
+                }
+            }
+            if let Some(_tab) = ui.tab_item_with_flags("All Signals", None, flags_for(DbcTab::AllSignals)) {
+                self.active_tab = DbcTab::AllSignals;
+                let ctx = all_signals_window::MatrixContext {
+                    dbc: &mut self.dbc,
+                    signal_edit_dialog: &mut self.signal_edit_dialog,
+                    edit_windows: &mut self.edit_windows,
+                    is_dirty: &mut self.is_dirty,
+                    file_path: &self.file_path,
+                };
+                match all_signals_window::render(&mut self.all_signals_window, ctx, ui) {
+                    AllSignalsEvent::None => {}
+                    ev => event = DbcWindowEvent::AllSignals(ev),
+                }
+            }
+            if let Some(_tab) = ui.tab_item_with_flags("Node List", None, flags_for(DbcTab::NodeList)) {
+                self.active_tab = DbcTab::NodeList;
+                if render_node_list(ui, &mut self.dbc, &mut self.node_list) {
+                    self.is_dirty = true;
+                }
+            }
+            if let Some(_tab) = ui.tab_item_with_flags("Communication Matrix", None, flags_for(DbcTab::CommMatrix)) {
+                self.active_tab = DbcTab::CommMatrix;
+                render_comm_matrix(ui, &self.dbc);
+            }
+        }
+
+        event
+    }
+
     fn render_edit_windows(&mut self, ui: &Ui) {
         let mut to_remove = None;
 
@@ -440,13 +568,41 @@ impl DbcWindow {
             let event = edit_win.render(ui);
             match event {
                 MessageEditEvent::Apply => {
+                    let old_id = edit_win.current_id;
                     edit_win.apply_edit(&mut self.dbc);
-                    self.is_dirty = true;
+                    if edit_win.error_message.is_empty() {
+                        self.is_dirty = true;
+                        let new_id = edit_win.current_id;
+                        if old_id != new_id {
+                            for win in &mut self.message_windows {
+                                if win.message_id == old_id {
+                                    win.message_id = new_id;
+                                }
+                            }
+                            if self.signal_edit_dialog.message_id == old_id {
+                                self.signal_edit_dialog.message_id = new_id;
+                            }
+                        }
+                    }
                 }
                 MessageEditEvent::Ok => {
+                    let old_id = edit_win.current_id;
                     edit_win.apply_edit(&mut self.dbc);
-                    self.is_dirty = true;
-                    to_remove = Some(i);
+                    if edit_win.error_message.is_empty() {
+                        self.is_dirty = true;
+                        let new_id = edit_win.current_id;
+                        if old_id != new_id {
+                            for win in &mut self.message_windows {
+                                if win.message_id == old_id {
+                                    win.message_id = new_id;
+                                }
+                            }
+                            if self.signal_edit_dialog.message_id == old_id {
+                                self.signal_edit_dialog.message_id = new_id;
+                            }
+                        }
+                        to_remove = Some(i);
+                    }
                 }
                 MessageEditEvent::Cancel => {
                     to_remove = Some(i);
@@ -458,6 +614,11 @@ impl DbcWindow {
         if let Some(idx) = to_remove {
             self.edit_windows.remove(idx);
         }
+
+        // 消息已被删除（或撤销导致）时关闭对应的编辑窗口
+        let message_ids: Vec<u32> = self.dbc.messages().iter().map(|m| m.message_id()).collect();
+        self.edit_windows
+            .retain(|w| message_ids.contains(&w.current_id));
     }
 
     fn render_signal_edit_dialog(&mut self, ui: &Ui) {
@@ -485,17 +646,19 @@ impl DbcWindow {
     }
 }
 
-fn request_window_focus() {
-    unsafe {
-        imgui::sys::igSetNextWindowFocus();
-    }
-}
-
 pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
     for window_idx in 0..ui_state.dbc_windows.len() {
         if let Some(request_focus_idx) = ui_state.dbc_window_focus_request {
             if request_focus_idx == window_idx {
-                request_window_focus();
+                let title = format!(
+                    "DBC - {}{}",
+                    if ui_state.dbc_windows[window_idx].is_dirty { "* " } else { "" },
+                    std::path::Path::new(&ui_state.dbc_windows[window_idx].file_path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("Untitled.dbc")
+                );
+                ui.set_window_focus(Some(&title));
                 ui_state.dbc_window_focus_request = None;
             }
         }
@@ -508,7 +671,7 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
             std::path::Path::new(&dbc_window.file_path)
                 .file_name()
                 .and_then(|name| name.to_str())
-                .unwrap_or_else(|| panic!("DBC window has empty file path"))
+                .unwrap_or("Untitled.dbc")
         );
 
         let mut is_open = ui_state.dbc_windows[window_idx].is_open;
@@ -520,8 +683,8 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
             .size([900.0, 600.0], Condition::FirstUseEver)
             .opened(&mut is_open);
 
-        let table_event = window_ui.build(|| {
-            let event = ui_state.dbc_windows[window_idx].render_message_table(ui, has_clipboard);
+        let window_event = window_ui.build(|| {
+            let event = ui_state.dbc_windows[window_idx].render_tabs(ui, has_clipboard);
 
             let msg_count = ui_state.dbc_windows[window_idx].dbc.messages().len();
             let sig_count: usize = ui_state.dbc_windows[window_idx]
@@ -553,10 +716,25 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
 
         ui_state.dbc_windows[window_idx].is_open = is_open;
 
-        if let Some(table_event) = table_event {
-            if !matches!(table_event, MessageTableEvent::None) {
-                handle_message_table_event(ui_state, window_idx, table_event);
+        match window_event {
+            Some(DbcWindowEvent::Msg(table_event)) => {
+                if !matches!(table_event, MessageTableEvent::None) {
+                    handle_message_table_event(ui_state, window_idx, table_event);
+                }
             }
+            Some(DbcWindowEvent::AllSignals(AllSignalsEvent::DeleteSignal { msg_id, sig_name })) => {
+                ui_state.confirm_delete_dialog.target =
+                    Some(DeleteTarget::Signals(msg_id, vec![sig_name.clone()]));
+                ui_state.confirm_delete_dialog.display_name = format!("signal '{}'", sig_name);
+                ui_state.confirm_delete_dialog.show = true;
+            }
+            Some(DbcWindowEvent::AllSignals(AllSignalsEvent::Error(message))) => {
+                ui_state.error_dialog.message = message;
+                ui_state.error_dialog.show = true;
+            }
+            Some(DbcWindowEvent::AllSignals(AllSignalsEvent::None))
+            | Some(DbcWindowEvent::None)
+            | None => {}
         }
     }
 
@@ -683,6 +861,10 @@ fn handle_message_table_event(
             ui_state.dbc_windows[window_idx].set_selected_message_id(Some(next_id));
             ui_state.dbc_windows[window_idx].is_dirty = true;
         }
+        // 正常情况下该事件在 render_tabs 内被拦截；此分支仅作兜底
+        MessageTableEvent::OpenAllSignals => {
+            ui_state.dbc_windows[window_idx].pending_tab = Some(DbcTab::AllSignals);
+        }
         MessageTableEvent::None => {}
     }
 }
@@ -792,7 +974,7 @@ fn render_validation_dialog(ui: &Ui, ui_state: &mut UiState) {
     let mut is_open = true;
     ui.window("Validation Results")
         .opened(&mut is_open)
-        .always_auto_resize(true)
+        .flags(dear_imgui_rs::WindowFlags::ALWAYS_AUTO_RESIZE)
         .build(|| {
             let issues = &ui_state.validation_dialog.issues;
             let error_count = issues
@@ -816,14 +998,18 @@ fn render_validation_dialog(ui: &Ui, ui_state: &mut UiState) {
                 if let Some(_table) = ui.begin_table_with_flags(
                     "validation_table",
                     2,
-                    imgui::TableFlags::RESIZABLE
-                        | imgui::TableFlags::BORDERS
-                        | imgui::TableFlags::NO_BORDERS_IN_BODY
-                        | imgui::TableFlags::SCROLL_Y
-                        | imgui::TableFlags::SIZING_FIXED_FIT,
+                    dear_imgui_rs::TableOptions::new()
+                        .flags(
+                            dear_imgui_rs::TableFlags::RESIZABLE
+                                | dear_imgui_rs::TableFlags::BORDERS
+                                | dear_imgui_rs::TableFlags::NO_BORDERS_IN_BODY
+                                | dear_imgui_rs::TableFlags::SCROLL_Y,
+                        )
+                        .sizing_policy(dear_imgui_rs::TableSizingPolicy::FixedFit),
                 ) {
-                    ui.table_setup_column("Severity");
-                    ui.table_setup_column("Message");
+                    ui.table_setup_column("Severity", dear_imgui_rs::TableColumnFlags::NONE, None);
+                    ui.table_setup_column("Message", dear_imgui_rs::TableColumnFlags::NONE, None);
+                    ui.table_setup_scroll_freeze(0, 1);
                     ui.table_headers_row();
 
                     for issue in issues {
@@ -850,11 +1036,14 @@ fn render_validation_dialog(ui: &Ui, ui_state: &mut UiState) {
 }
 
 pub fn save_dbc_window(ui_state: &mut UiState, idx: usize) {
-    let save_path = ui_state.dbc_windows[idx].file_path.clone();
-    let dbc_string = ui_state.dbc_windows[idx].dbc.to_dbc_string();
-    match std::fs::write(&save_path, &dbc_string) {
+    let win = &mut ui_state.dbc_windows[idx];
+    let save_path = win.file_path.clone();
+    let dbc_string = win.dbc.to_dbc_string();
+    // 按打开时的编码写出（GBK 文件保存后仍是 GBK），保持与其它工具的互换性
+    let bytes = encode_to_bytes(&dbc_string, win.text_encoding, win.had_bom);
+    match std::fs::write(&save_path, &bytes) {
         Ok(_) => {
-            ui_state.dbc_windows[idx].is_dirty = false;
+            win.is_dirty = false;
         }
         Err(e) => {
             ui_state.error_dialog.message = format!("Failed to save: {}", e);
@@ -956,6 +1145,8 @@ fn execute_delete(ui_state: &mut UiState) {
                         win.dbc.merge_last_compounds(ids.len());
                     }
                     win.selected_message_ids.retain(|id| !ids.contains(id));
+                    // 关闭被删消息的所有窗口，避免悬空
+                    win.close_windows_for_messages(&ids);
                     win.is_dirty = true;
                 }
             }
@@ -974,5 +1165,38 @@ fn execute_delete(ui_state: &mut UiState) {
             }
         }
         None => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::file_encoding::encode_to_bytes;
+
+    /// GBK 编码的 DBC 文件打开后中文注释完整，且保存时保持 GBK
+    #[test]
+    fn gbk_file_round_trips_through_from_path() {
+        let text = "VERSION \"\"\n\nBO_ 1 TestMsg: 8 Vector__XXX\n\nCM_ BO_ 1 \"中文注释\";\n";
+        let (bytes, _, _) = encoding_rs::GBK.encode(text);
+
+        let dir = std::env::temp_dir().join(format!("roxy-dbc-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("gbk_sample.dbc");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let window = DbcWindow::from_path(&path).expect("GBK file must load");
+        assert_eq!(window.text_encoding, encoding_rs::GBK);
+        assert!(!window.had_bom);
+        let msg = window.dbc.get_message(1).unwrap();
+        assert_eq!(msg.comment(), "中文注释");
+
+        // 保存：按检测到的 GBK 编码写出，重新打开仍能读到中文
+        let out = encode_to_bytes(&window.dbc.to_dbc_string(), window.text_encoding, window.had_bom);
+        std::fs::write(&path, &out).unwrap();
+        let reopened = DbcWindow::from_path(&path).expect("saved GBK file must load");
+        assert_eq!(reopened.dbc.get_message(1).unwrap().comment(), "中文注释");
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&dir).ok();
     }
 }

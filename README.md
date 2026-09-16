@@ -8,16 +8,19 @@
 ## ✨ 特性
 
 - 🚗 **DBC 完整支持** - 打开、编辑、保存 CAN 数据库文件
+- 🇨🇳 **中文支持** - 中文注释 / 值表显示与编辑，自动识别 UTF-8 / GBK 编码并按原编码保存
+- ⚡ **CAN FD** - 标准/扩展、经典/CAN FD 四种帧格式，DLC 最大 64 字节，`VFrameFormat` 属性读写
+- 📋 **All Signals / 通信矩阵** - 全信号展平视图（DBC messages 窗口入口），任意列排序过滤，值表行内编辑，导出 CSV
 - 📄 **多格式支持** - 导入 ARXML / KCD，导出 AUTOSAR ARXML
 - 🖱️ **拖放打开** - 直接把 DBC/ARXML/KCD 文件拖进窗口即可打开
-- ✏️ **消息与信号编辑** - 全部属性可编辑，含值表（VAL_）编辑
-- 🧩 **节点（ECU）管理** - 添加 / 删除 / 重命名网络节点
+- ✏️ **消息与信号编辑** - 全部属性可编辑（含消息 ID），含值表（VAL_）编辑
+- 🧩 **节点（ECU）管理** - 添加 / 删除 / 重命名网络节点，重命名自动同步收发引用
 - 🗂️ **信号位布局图** - 可视化信号占位，支持 Intel/Motorola 字节序
 - 🎯 **多选批处理** - Ctrl/Shift 多选，批量复制 / 剪切 / 删除
 - 📊 **多窗口 + Docking** - 同时打开多个文件，窗口自由停靠
 - 🔍 **搜索与排序** - 消息过滤、按任意列排序
 - ↩️ **撤销/重做** - 所有操作支持 Undo/Redo，批量操作合并为单步撤销
-- ✅ **DBC 校验** - Tools > Validate 检查错误与警告
+- ✅ **DBC 校验** - Tools > Validate 检查错误与警告（DLC、位越界、命名、引用等）
 - ⚡ **高性能** - wgpu 硬件加速渲染
 
 ## 🖼️ 界面预览
@@ -40,7 +43,7 @@
 ## 📝 编辑功能
 
 ### 消息
-可编辑 Message ID（十六进制/十进制）、名称、大小、Frame Format、发送节点、注释。通过右键菜单、Edit 菜单或 "+ Add Message" 按钮新建消息。
+可编辑 Message ID（十六进制/十进制输入，带范围与重复校验）、名称、大小、帧格式（Standard/Extended × 经典/CAN FD）、发送节点、注释。通过右键菜单、Edit 菜单或 "+ Add Message" 按钮新建消息。
 
 ### 信号
 可编辑名称、起始位、长度、字节序（Intel/Motorola）、符号类型、系数、偏移、最小/最大值、单位、注释和接收节点。信号窗口中的 "+ Add Signal" 按钮可快速新建。
@@ -68,7 +71,7 @@
 ## 🛠️ 技术栈
 
 - **语言**: Rust 2024 Edition
-- **GUI**: ImGui (docking) + wgpu
+- **GUI**: [dear-imgui-rs](https://github.com/Latias94/dear-imgui-rs) 0.18（Dear ImGui 1.92.9b docking）+ wgpu
 - **窗口管理**: winit
 - **DBC 解析**: can-dbc
 - **XML 解析**: roxmltree
@@ -78,6 +81,14 @@
 
 ### 下载
 从 [Releases](https://github.com/chemPolonium/roxy-dbc/releases) 下载最新版本的 `roxy-dbc.exe`（Windows）。
+
+### 命令行
+```bash
+roxy-dbc.exe                          # 空启动
+roxy-dbc.exe path\to\file.dbc        # 启动时打开文件
+roxy-dbc.exe a.dbc b.arxml c.kcd     # 同时打开多个文件
+```
+支持 `.dbc` / `.arxml` / `.kcd`，也可在资源管理器中通过"打开方式"关联到 roxy-dbc。
 
 ### 从源码构建
 ```bash
@@ -94,7 +105,8 @@ src/
 ├── main.rs              # 程序入口，事件循环与拖放处理
 ├── lib.rs               # 库入口（供集成测试使用）
 ├── app.rs               # 窗口和图形上下文管理
-├── editable_dbc.rs      # 数据模型、编辑操作与 Undo/Redo
+├── win_clipboard.rs     # Win32 系统剪贴板后端
+├── editable_dbc.rs      # 数据模型、编辑操作、CAN FD 与 Undo/Redo
 ├── import/              # 导入
 │   ├── arxml.rs         # ARXML 解析
 │   └── kcd.rs           # KCD 解析
@@ -103,8 +115,9 @@ src/
 └── ui/                  # UI 模块
     ├── state.rs         # UI 状态、剪贴板、对话框状态
     ├── dbc_window.rs    # DBC 浏览器（消息表格）
+    ├── all_signals_window.rs  # All Signals / 通信矩阵（全信号展平 + Values 行内编辑 + CSV 导出）
     ├── message_window.rs    # 消息详情窗口（信号表格 + 位布局图）
-    ├── message_edit_window.rs   # 消息编辑对话框
+    ├── message_edit_window.rs   # 消息编辑对话框（含 ID / CAN FD 编辑）
     ├── signal_edit_window.rs    # 信号编辑对话框（含值表编辑）
     ├── node_window.rs   # 节点管理对话框
     ├── bit_layout.rs    # 信号位布局渲染
@@ -113,7 +126,6 @@ src/
 
 ## 🔮 未来计划
 
-- [ ] CAN FD 支持（最大 64 字节）
 - [ ] 位布局图交互式编辑（拖拽调整信号位置）
 - [ ] 网络拓扑图
 - [ ] 实时 CAN 数据监控

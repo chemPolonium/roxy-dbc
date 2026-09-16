@@ -5,6 +5,69 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-17
+
+### Added
+- **命令行打开文件**
+  - 启动时可通过命令行参数直接打开文件：`roxy-dbc.exe <file.dbc> [more.dbc ...]`
+  - 支持 .dbc / .arxml / .kcd，可传多个文件（按顺序打开，聚焦最后一个）
+  - 传入的文件计入最近文件列表；解析失败弹出错误对话框而不会崩溃
+  - 支持注册 Windows"打开方式"关联
+- **DBC 窗口标签页重构**（CANdb++ 风格）
+  - DBC 窗口顶部改为四个标签页：Messages & Signals / All Signals / Node List / Communication Matrix
+  - Messages & Signals 标签页的 "All Signals" 按钮直接切换到 All Signals 标签页
+  - Node List 从独立对话框移入标签页（Tools 菜单原入口移除），节点增删改现在会正确标记脏状态
+- **Communication Matrix 标签页**（CANdb++ 风格 TX/RX 关系矩阵）
+  - 行 = 消息（可展开为信号），列 = 网络节点
+  - 发送节点列显示 TX，接收该消息任一信号的节点显示 RX；展开后显示每个信号各自的 RX
+  - 首列与表头冻结，支持纵向 / 横向滚动
+- **All Signals / 通信矩阵窗口**（现位于 All Signals 标签页）
+  - 将 DBC 中所有消息的信号展平为一张通信矩阵：ID、Message、DLC、Transmitter + 信号全部属性共 17 列
+  - 任意列排序、按信号名 / 消息名 / 发送节点过滤
+  - 双击信号打开信号编辑对话框；右键 Edit Signal / Edit Message / Delete Signal
+  - "+ Add Signal" 添加到选中行所在的消息，自动命名（NewSignal_0001 风格，跳过重名）
+  - 表格标题行冻结，滚动时保持可见（所有表格均已应用）
+- **信号 Values（值表）编辑**
+  - 通信矩阵 Values 列双击进入行内编辑，格式 `0=Off; 1=On`，非法输入红字提示并阻断应用
+  - 应用时按值排序并合并重复检查，走统一的 Undo/Redo；悬停显示完整值表
+  - 结构化的值表编辑仍保留在信号编辑对话框中（含剪贴板批量导入）
+- **通信矩阵导出** - "Export CSV..." 一键导出当前过滤后的矩阵（UTF-8 BOM，Excel 打开中文不乱码）
+- **中文支持**
+  - 中文显示：UI 字体从系统加载 CJK 回退字体（微软雅黑 / 黑体 / 宋体，按序探测），与 Inconsolata 合并为同一图集，拉丁保持 Inconsolata、中文走系统字体（与 roxy-can 方案一致）
+  - GBK 编码：打开 DBC/ARXML/KCD 时嗅探编码（UTF-8 BOM → 严格 UTF-8 → GBK），国内工具链（CANdb++ ANSI）导出的 GBK 文件不再乱码
+  - 保存保持原编码：GBK 文件保存后仍是 GBK，与其它工具互换无障碍；另存为新路径默认 UTF-8
+- **CAN FD 支持**
+  - 消息帧格式扩展为 Standard / Extended / Standard FD / Extended FD，编辑对话框新增 CAN FD 开关
+  - DLC 上限按帧类型区分：经典 CAN 8 字节、CAN FD 64 字节（含合法 FD 长度提示）
+  - 保存时写出 Vector 风格的 `VFrameFormat` / `BusType` 属性，打开时自动解析 CAN FD 标志（DLC > 8 兜底识别）
+- **消息 ID 可编辑**
+  - 编辑对话框支持十六进制（0x 前缀）与十进制输入，带 ID 范围与重复校验，错误时阻断保存
+  - ID 修改后已打开的 Message 窗口 / 信号编辑对话框自动跟随新 ID
+- **信号接收节点（Receivers）编辑** - 信号编辑对话框新增逗号分隔的 Receivers 输入框
+- **信号表格补充列** - Message 窗口信号表新增 Min、Max、Receivers 列（对齐 CANdb++ 风格）
+- **校验规则增强**（Tools > Validate）
+  - 经典 CAN 超过 8 字节报错、CAN FD 非法 DLC 警告、ID 超出标准/扩展范围报错
+  - factor 为 0 报错、min > max 警告
+  - 消息 / 信号 / 节点名称不符合 DBC 标识符规则时报错
+  - 发送节点与接收节点未在节点列表中定义时警告
+  - Motorola 信号按实际位号判断越界（原先按起始位 + 长度线性相加会误报）
+- **节点重命名自动传播** - 重命名节点时同步更新消息发送节点与信号接收节点，并合并为单步撤销
+- **自研 Win32 剪贴板后端** - 输入框 Ctrl+C/V 与值表"从剪贴板导入"在迁移后依然可用
+
+### Changed
+- **UI 框架迁移**：从已停止维护的 imgui-rs 0.12（imgui / imgui-wgpu / imgui-winit-support）迁移至
+  [dear-imgui-rs](https://github.com/Latias94/dear-imgui-rs) 0.18（dear-imgui-rs + dear-imgui-wgpu + dear-imgui-winit），
+  升级至 Dear ImGui 1.92.9b（docking 分支），动态字体系统按 DPI 自动光栅化
+- 消息表 ID 列对扩展帧显示 `x` 后缀（CANdb++ 风格）
+- 最近文件列表改存 `%APPDATA%\roxy-dbc\recent_files.txt`，避免安装到 Program Files 时写入失败
+- 键盘导航（方向键 / Enter / Del）在文本输入框激活时不再误触发
+
+### Fixed
+- 打开 DBC 时信号注释（`CM_ SG_`）丢失的问题
+- 扩展帧消息注释（`CM_ BO_`）保存时未使用 raw ID，导致重新打开后注释丢失的问题
+- 消息被删除后仍打开的编辑窗口中点击 Apply 会崩溃的问题；被删消息的 Message / 编辑窗口现在会自动关闭
+- 从错误路径打开 DBC 时直接 panic 的问题，解析失败的错误详情现在会完整显示
+
 ## [0.6.0] - 2026-08-13
 
 ### Added

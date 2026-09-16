@@ -1,30 +1,12 @@
 use can_dbc::ByteOrder;
-use imgui::Ui;
+use dear_imgui_rs::Ui;
 
-use crate::editable_dbc::EditableMessage;
+use crate::editable_dbc::{get_signal_bit_positions, EditableMessage};
 
 /// Compute the absolute bit indices occupied by a signal.
 /// Bit index N means byte N/8, bit N%8 within that byte.
 pub fn get_bit_positions(start_bit: u64, size: u64, byte_order: &ByteOrder) -> Vec<usize> {
-    match byte_order {
-        ByteOrder::LittleEndian => (start_bit..start_bit + size).map(|b| b as usize).collect(),
-        ByteOrder::BigEndian => {
-            let mut out = Vec::with_capacity(size as usize);
-            let mut bit = start_bit as i64;
-            for _ in 0..size {
-                if bit < 0 {
-                    break;
-                }
-                out.push(bit as usize);
-                if bit % 8 == 0 {
-                    bit += 15;
-                } else {
-                    bit -= 1;
-                }
-            }
-            out
-        }
-    }
+    get_signal_bit_positions(start_bit, size, byte_order)
 }
 
 const PALETTE: [[f32; 4]; 8] = [

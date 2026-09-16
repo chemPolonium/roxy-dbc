@@ -1,5 +1,5 @@
 use can_dbc::{ByteOrder, ValueType};
-use imgui::Ui;
+use dear_imgui_rs::{Ui, WindowFlags};
 
 use crate::editable_dbc::{EditableDbc, EditableSignal};
 
@@ -29,6 +29,7 @@ pub struct SignalEditDialog {
     pub min_buffer: String,
     pub max_buffer: String,
     pub unit_buffer: String,
+    pub receivers_buffer: String,
     pub comment_buffer: String,
     pub val_desc_buffer: Vec<(String, String)>,
 }
@@ -50,6 +51,7 @@ impl SignalEditDialog {
             min_buffer: String::from("0.0"),
             max_buffer: String::from("0.0"),
             unit_buffer: String::new(),
+            receivers_buffer: String::new(),
             comment_buffer: String::new(),
             val_desc_buffer: Vec::new(),
         }
@@ -70,6 +72,7 @@ impl SignalEditDialog {
         self.min_buffer = format!("{}", signal.min());
         self.max_buffer = format!("{}", signal.max());
         self.unit_buffer = signal.unit().to_string();
+        self.receivers_buffer = signal.receivers().join(",");
         self.comment_buffer = signal.comment().to_string();
         self.val_desc_buffer = signal
             .value_descriptions()
@@ -217,6 +220,26 @@ impl SignalEditDialog {
             }
         }
 
+        // 接收节点：逗号分隔
+        {
+            let new_receivers: Vec<String> = self
+                .receivers_buffer
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let current = dbc.get_message(msg_id)
+                .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
+                .map(|s| s.receivers().clone());
+            if let Some(current) = current {
+                if new_receivers != current {
+                    let name = if change_count > 0 { new_name } else { old_name };
+                    dbc.set_signal_receivers(msg_id, name, new_receivers);
+                    change_count += 1;
+                }
+            }
+        }
+
         {
             let current = dbc.get_message(msg_id)
                 .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
@@ -269,102 +292,114 @@ impl SignalEditDialog {
         let title = format!("Edit Signal - {}", self.original_name);
         let mut is_open = true;
 
+        let mut window = ui
+            .window(&title)
+            .flags(WindowFlags::ALWAYS_AUTO_RESIZE)
+            .opened(&mut is_open);
         if self.focus_requested {
-            unsafe { imgui::sys::igSetNextWindowFocus() };
+            window = window.focused(true);
             self.focus_requested = false;
         }
 
-        ui.window(&title)
-            .always_auto_resize(true)
-            .opened(&mut is_open)
-            .build(|| {
-                ui.input_text("Name##sig_edit", &mut self.name_buffer).build();
+        window.build(|| {
+            ui.input_text("Name##sig_edit", &mut self.name_buffer).build();
 
-                ui.input_text("Start Bit##sig_edit", &mut self.start_bit_buffer)
-                    .build();
-                ui.input_text("Length##sig_edit", &mut self.size_buffer).build();
+            ui.input_text("Start Bit##sig_edit", &mut self.start_bit_buffer)
+                .build();
+            ui.input_text("Length##sig_edit", &mut self.size_buffer).build();
 
-                if ui.radio_button("Intel (LE)##bo", &mut self.byte_order_is_little, true) {}
-                ui.same_line();
-                if ui.radio_button("Motorola (BE)##bo", &mut self.byte_order_is_little, false) {}
+            if ui.radio_button("Intel (LE)##bo", self.byte_order_is_little) {
+                self.byte_order_is_little = true;
+            }
+            ui.same_line();
+            if ui.radio_button("Motorola (BE)##bo", !self.byte_order_is_little) {
+                self.byte_order_is_little = false;
+            }
 
-                if ui.radio_button("Unsigned##vt", &mut self.signed, false) {}
-                ui.same_line();
-                if ui.radio_button("Signed##vt", &mut self.signed, true) {}
+            if ui.radio_button("Unsigned##vt", !self.signed) {
+                self.signed = false;
+            }
+            ui.same_line();
+            if ui.radio_button("Signed##vt", self.signed) {
+                self.signed = true;
+            }
 
-                ui.input_text("Factor##sig_edit", &mut self.factor_buffer).build();
-                ui.input_text("Offset##sig_edit", &mut self.offset_buffer).build();
-                ui.input_text("Min##sig_edit", &mut self.min_buffer).build();
-                ui.input_text("Max##sig_edit", &mut self.max_buffer).build();
-                ui.input_text("Unit##sig_edit", &mut self.unit_buffer).build();
-                ui.input_text("Comment##sig_edit", &mut self.comment_buffer)
-                    .build();
+            ui.input_text("Factor##sig_edit", &mut self.factor_buffer).build();
+            ui.input_text("Offset##sig_edit", &mut self.offset_buffer).build();
+            ui.input_text("Min##sig_edit", &mut self.min_buffer).build();
+            ui.input_text("Max##sig_edit", &mut self.max_buffer).build();
+            ui.input_text("Unit##sig_edit", &mut self.unit_buffer).build();
+            ui.input_text("Receivers##sig_edit", &mut self.receivers_buffer)
+                .hint("e.g. ECU1, ECU2")
+                .build();
+            ui.input_text("Comment##sig_edit", &mut self.comment_buffer)
+                .build();
 
-                ui.separator();
-                ui.text("Value Descriptions (VAL_)");
+            ui.separator();
+            ui.text("Value Descriptions (VAL_)");
 
-                if ui.button("Add##val_desc") {
-                    self.val_desc_buffer.push((String::new(), String::new()));
+            if ui.button("Add##val_desc") {
+                self.val_desc_buffer.push((String::new(), String::new()));
+            }
+            ui.same_line();
+            if ui.button("Import from clipboard##val_desc") {
+                if let Some(text) = read_clipboard_text() {
+                    let parsed = parse_val_desc_text(&text);
+                    self.val_desc_buffer.extend(parsed);
                 }
-                ui.same_line();
-                if ui.button("Import from clipboard##val_desc") {
-                    if let Some(text) = ui.clipboard_text() {
-                        let parsed = parse_val_desc_text(&text);
-                        self.val_desc_buffer.extend(parsed);
-                    }
-                }
+            }
 
-                let mut to_remove = None;
-                for (i, (val, desc)) in self.val_desc_buffer.iter_mut().enumerate() {
-                    let invalid = val.trim().parse::<i64>().is_err();
-                    ui.input_text(&format!("Value##val_desc_{}", i), val).build();
+            let mut to_remove = None;
+            for (i, (val, desc)) in self.val_desc_buffer.iter_mut().enumerate() {
+                let invalid = val.trim().parse::<i64>().is_err();
+                ui.input_text(&format!("Value##val_desc_{}", i), val).build();
+                ui.same_line();
+                ui.input_text(&format!("Description##val_desc_{}", i), desc).build();
+                ui.same_line();
+                if ui.button(&format!("X##val_desc_rm_{}", i)) {
+                    to_remove = Some(i);
+                }
+                if invalid {
                     ui.same_line();
-                    ui.input_text(&format!("Description##val_desc_{}", i), desc).build();
-                    ui.same_line();
-                    if ui.button(&format!("X##val_desc_rm_{}", i)) {
-                        to_remove = Some(i);
-                    }
-                    if invalid {
-                        ui.same_line();
-                        ui.text_colored([1.0, 0.3, 0.3, 1.0], "invalid integer");
-                    }
+                    ui.text_colored([1.0, 0.3, 0.3, 1.0], "invalid integer");
                 }
-                if let Some(idx) = to_remove {
-                    self.val_desc_buffer.remove(idx);
-                }
+            }
+            if let Some(idx) = to_remove {
+                self.val_desc_buffer.remove(idx);
+            }
 
-                let mut counts = std::collections::HashMap::new();
-                let mut duplicates = Vec::new();
-                for (val, _) in &self.val_desc_buffer {
-                    if let Ok(v) = val.trim().parse::<i64>() {
-                        let entry = counts.entry(v).or_insert(0usize);
-                        *entry += 1;
-                        if *entry == 2 {
-                            duplicates.push(v);
-                        }
+            let mut counts = std::collections::HashMap::new();
+            let mut duplicates = Vec::new();
+            for (val, _) in &self.val_desc_buffer {
+                if let Ok(v) = val.trim().parse::<i64>() {
+                    let entry = counts.entry(v).or_insert(0usize);
+                    *entry += 1;
+                    if *entry == 2 {
+                        duplicates.push(v);
                     }
                 }
-                if !duplicates.is_empty() {
-                    ui.text_colored(
-                        [1.0, 0.8, 0.0, 1.0],
-                        format!("Duplicate values: {:?}", duplicates),
-                    );
-                }
+            }
+            if !duplicates.is_empty() {
+                ui.text_colored(
+                    [1.0, 0.8, 0.0, 1.0],
+                    format!("Duplicate values: {:?}", duplicates),
+                );
+            }
 
-                ui.separator();
+            ui.separator();
 
-                if ui.button("OK") {
-                    event = SignalEditEvent::Ok;
-                }
-                ui.same_line();
-                if ui.button("Cancel") {
-                    event = SignalEditEvent::Cancel;
-                }
-                ui.same_line();
-                if ui.button("Apply") {
-                    event = SignalEditEvent::Apply;
-                }
-            });
+            if ui.button("OK") {
+                event = SignalEditEvent::Ok;
+            }
+            ui.same_line();
+            if ui.button("Cancel") {
+                event = SignalEditEvent::Cancel;
+            }
+            ui.same_line();
+            if ui.button("Apply") {
+                event = SignalEditEvent::Apply;
+            }
+        });
 
         if !is_open {
             event = SignalEditEvent::Cancel;
@@ -377,6 +412,18 @@ impl SignalEditDialog {
 impl Default for SignalEditDialog {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// 从当前 ImGui 上下文读取系统剪贴板文本
+fn read_clipboard_text() -> Option<String> {
+    unsafe {
+        let ptr = dear_imgui_rs::sys::igGetClipboardText();
+        if ptr.is_null() {
+            None
+        } else {
+            Some(std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned())
+        }
     }
 }
 
