@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **移除 DBC 窗口底部的文件信息行**，消除窗口右侧的滚动条：表格填满标签页全部剩余空间
+  - 文件完整路径（含所在文件夹）移到 DBC 窗口标题栏显示
+  - 消息数显示在 Messages & Signals 标签页过滤框右侧（随过滤实时变化），信号数显示在 All Signals 标签页过滤框右侧
+
+### Fixed / Improved
+- **同名文件窗口重叠**：DBC / Message / 编辑窗口的标题 ID 改为包含完整文件路径——两个不同目录的同名 DBC 不再互相覆盖成重叠窗口；窗口脏标记 `*` 的变化也不再导致布局重置
+- **最近文件去重**：打开文件的路径统一规范化（解析相对 / 绝对、`/` 与 `\`、`..` 等），同一文件的不同写法在最近文件中只保留一条；Recent Files 菜单项 ID 带上完整路径，同名文件不再触发 ImGui ID 冲突警告
+- **ID 冲突警告**：All Signals 中不同消息下的同名信号（如 motbus.dbc 的 WheelSpeedFR）、Message 窗口中的重复信号名，控件 ID 均已唯一化，不再弹出 "conflicting ID" 错误弹窗
+- **Communication Matrix 配色**：RX 改为柔和的珊瑚红，TX 改为醒目的亮绿色，部分接收仍为橙色 R*
+- **表格高度**：所有标签页的表格为底部状态栏预留 20px，既不挤出状态栏也不留大片空白
+- **表格布局**：所有标签页的表格高度为底部文件信息状态栏让位，不再把状态栏挤出窗口；搜索输入框改为固定宽度，不再触发横向滚动
+- **All Signals**：移除多余的行选择提示；无选中行时 "+ Add Signal" 显示为禁用态；工具栏改用标准按钮
+- **Node List**：改为表格布局（Node / TX Messages / RX Signals / Actions），新增每个节点的发送报文数与接收信号数统计，操作按钮对齐
+- **Communication Matrix 可编辑**：点击信号行节点单元格切换该节点的接收状态；点击消息行节点单元格切换发送节点（再次点击当前 TX 恢复 Vector__XXX）
+- **Communication Matrix 部分接收标注**：节点只接收报文中的部分信号时显示橙色 `R*`（悬停提示 `Receives K of N signals (partial)`），全部接收才显示 `RX`
+- **表格样式**：所有表格恢复列边框线并启用 ImGui 自带的奇偶行斑马纹（`ROW_BG`）
+- **Message 窗口位布局图限高**：FD 长报文（最多 64 字节行）的位布局在可滚动的子区域内显示（约窗口 35% 高度），不再把信号表格挤出窗口
+- **Validation Results 窗口**：改为固定默认尺寸 + 结果表格填满窗口
+- **粘贴去重**：粘贴消息 / 信号时名称自动去重（`_copy` / `_copy2` ...），消息 ID 分配跳过已占用 ID 并在超过 29 位上限后回绕查找空闲 ID
+
+### Removed
+- 移除未使用的 `MessageCreateDialog` 模块及 UI 状态中的死字段（`next_dbc_id`、`message_window_focus_request`、`last_focused_message_window`、`MessageWindow::parent_dbc_id`）；合并 Edit 菜单与右键菜单中重复的复制 / 粘贴 / 新建消息实现
+
 ## [0.7.0] - 2026-09-17
 
 ### Added

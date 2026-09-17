@@ -12,7 +12,6 @@ pub mod bit_layout;
 pub mod comm_matrix;
 pub mod dbc_window;
 mod menu;
-mod message_create_window;
 mod message_edit_window;
 mod message_window;
 pub mod node_window;

@@ -696,6 +696,11 @@ impl EditableDbc {
         self.messages.iter().find(|m| m.message_id == message_id)
     }
 
+    /// 按名称查找消息
+    pub fn get_message_by_name(&self, name: &str) -> Option<&EditableMessage> {
+        self.messages.iter().find(|m| m.message_name() == name)
+    }
+
     pub fn find_message_index(&self, message_id: u32) -> Option<usize> {
         self.messages
             .iter()
@@ -1761,6 +1766,24 @@ pub fn get_signal_bit_positions(
             out
         }
     }
+}
+
+/// 从 `start` 起找第一个未占用的消息 ID；超过 29 位扩展上限则从 1 开始找空洞
+pub fn next_free_message_id(dbc: &EditableDbc, start: u32) -> u32 {
+    const MAX_ID: u32 = 0x1FFF_FFFF;
+    let used: std::collections::HashSet<u32> =
+        dbc.messages.iter().map(|m| m.message_id).collect();
+    for cand in start..=MAX_ID {
+        if !used.contains(&cand) {
+            return cand;
+        }
+    }
+    for cand in 1..start.min(MAX_ID) {
+        if !used.contains(&cand) {
+            return cand;
+        }
+    }
+    1
 }
 
 /// DBC 标识符规则（C 风格）：字母或下划线开头，仅含字母、数字、下划线

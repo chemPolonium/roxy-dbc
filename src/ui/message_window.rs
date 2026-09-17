@@ -13,13 +13,12 @@ pub enum MessageWindowEvent {
     AddSignal,
 }
 
-/// Message 璇︾粏绐楀彛鐘舵€侊紙鍖呭惈 Signal 琛ㄦ牸锛?
+/// Message 详细窗口状态（包含 Signal 表格）
 #[allow(dead_code)]
 #[derive(Clone, Default)]
 pub struct MessageWindow {
     pub message_id: u32,
     pub is_open: bool,
-    pub parent_dbc_id: usize,
     pub selected_signal_names: Vec<String>,
     pub signal_anchor: Option<String>,
     pub signal_cursor: Option<String>,
@@ -27,11 +26,10 @@ pub struct MessageWindow {
 }
 
 impl MessageWindow {
-    pub fn new(message_id: u32, parent_dbc_id: usize) -> Self {
+    pub fn new(message_id: u32) -> Self {
         Self {
             message_id,
             is_open: true,
-            parent_dbc_id,
             selected_signal_names: Vec::new(),
             signal_anchor: None,
             signal_cursor: None,
@@ -39,17 +37,25 @@ impl MessageWindow {
         }
     }
 
-    pub fn render(&mut self, ui: &Ui, dbc: &EditableDbc, has_clipboard: bool) -> MessageWindowEvent {
+    pub fn render(
+        &mut self,
+        ui: &Ui,
+        dbc: &EditableDbc,
+        has_clipboard: bool,
+        window_key: &str,
+    ) -> MessageWindowEvent {
         let mut event = MessageWindowEvent::None;
 
         let Some(message) = dbc.get_message(self.message_id) else {
             return event;
         };
 
+        // 标题 ID 用窗口 key（文件路径）收尾：不同 DBC 的同名消息窗口不冲突
         let title = format!(
-            "{} (0x{:03X})",
+            "{} (0x{:03X})##msg_{}",
             message.message_name(),
-            message.message_id()
+            message.message_id(),
+            window_key
         );
         let mut is_open = self.is_open;
 
@@ -90,7 +96,17 @@ impl MessageWindow {
             }
 
             let selected = self.selected_signal_names.clone();
-            crate::ui::bit_layout::render_bit_layout(ui, message, &selected);
+            // 位布局图放在限高的子区域内滚动：FD 长报文（最多 64 字节行）
+            // 不会把下面的信号表格挤出窗口
+            let num_bytes = message.message_size().max(1) as usize;
+            let layout_total_h = 18.0 + num_bytes as f32 * 22.0 + 4.0;
+            let avail_h = ui.content_region_avail()[1];
+            let layout_h = layout_total_h.min((avail_h * 0.35).max(140.0));
+            ui.child_window("##bit_layout_scroll")
+                .size([0.0, layout_h])
+                .build(ui, || {
+                    crate::ui::bit_layout::render_bit_layout(ui, message, &selected);
+                });
             ui.separator();
 
             // Keyboard navigation
@@ -153,17 +169,20 @@ impl MessageWindow {
                 }
             }
 
-            if let Some(_table) = ui.begin_table_with_flags(
+            let avail_h = ui.content_region_avail()[1];
+            if let Some(_table) = ui.begin_table_with_sizing(
                 "signals_table",
                 12,
                 dear_imgui_rs::TableOptions::new()
                     .flags(
                         TableFlags::RESIZABLE
                             | TableFlags::BORDERS
-                            | TableFlags::NO_BORDERS_IN_BODY
+                            | TableFlags::ROW_BG
                             | TableFlags::SCROLL_Y,
                     )
                     .sizing_policy(dear_imgui_rs::TableSizingPolicy::FixedFit),
+                [0.0, avail_h],
+                0.0,
             ) {
                 ui.table_setup_column("Name", dear_imgui_rs::TableColumnFlags::NONE, None);
                 ui.table_setup_column("Start", dear_imgui_rs::TableColumnFlags::NONE, None);
@@ -191,8 +210,10 @@ impl MessageWindow {
                         .any(|n| n == sig_name);
 
                     ui.table_set_column_index(0);
+                    // ID 用行号区分，避免重复信号名导致的 ID 冲突
+                    let selectable_label = format!("{}##sig_{}", sig_name, row_pos);
                     if ui
-                        .selectable_config(sig_name)
+                        .selectable_config(selectable_label)
                         .selected(is_selected)
                         .span_all_columns(true)
                         .build()
@@ -244,7 +265,7 @@ impl MessageWindow {
                     }
 
                     if let Some(_popup) = ui.begin_popup_context_item_with_label(Some(
-                        &format!("sig_ctx_{}", sig_name),
+                        &format!("sig_ctx_{}", row_pos),
                     )) {
                         if !self.selected_signal_names.iter().any(|n| n == sig_name) {
                             let name_owned = sig_name.to_string();

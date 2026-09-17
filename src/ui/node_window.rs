@@ -1,6 +1,6 @@
 //! Node List 标签页：节点的添加 / 重命名 / 删除（内联渲染在 DBC 窗口标签中）
 
-use dear_imgui_rs::Ui;
+use dear_imgui_rs::{TableFlags, Ui};
 
 use crate::editable_dbc::EditableDbc;
 
@@ -16,6 +16,7 @@ pub struct NodeListState {
 pub fn render_node_list(ui: &Ui, dbc: &mut EditableDbc, state: &mut NodeListState) -> bool {
     let mut changed = false;
 
+    ui.set_next_item_width(260.0);
     ui.input_text("##new_node", &mut state.new_node_buffer)
         .hint("New node name...")
         .build();
@@ -31,32 +32,78 @@ pub fn render_node_list(ui: &Ui, dbc: &mut EditableDbc, state: &mut NodeListStat
     let nodes: Vec<String> = dbc.nodes().clone();
     if nodes.is_empty() {
         ui.text_disabled("No nodes defined. Add a node above, or they will be inferred from TX/RX references.");
-        return false;
+        return changed;
     }
 
-    let mut to_delete: Option<String> = None;
-    let mut to_rename: Option<(String, String)> = None;
+    // 统计每个节点的发送报文数与接收信号数，让列表信息更完整
+    let tx_count = |name: &str| -> usize {
+        dbc.messages()
+            .iter()
+            .filter(|m| m.transmitter() == name)
+            .count()
+    };
+    let rx_count = |name: &str| -> usize {
+        dbc.messages()
+            .iter()
+            .flat_map(|m| m.signals())
+            .filter(|s| s.receivers().iter().any(|r| r == name))
+            .count()
+    };
 
-    for node_name in &nodes {
-        if state.rename_target.as_deref() == Some(node_name.as_str()) {
-            ui.input_text("##rename_input", &mut state.rename_buffer).build();
-            ui.same_line();
-            if ui.button("OK") {
-                let new_name = state.rename_buffer.trim().to_string();
-                if !new_name.is_empty() {
-                    to_rename = Some((node_name.clone(), new_name));
+    // 表格填满标签页剩余空间，窗口不出现滚动条
+    let avail_h = ui.content_region_avail()[1];
+    if let Some(_table) = ui.begin_table_with_sizing(
+        "node_list",
+        4,
+        TableFlags::RESIZABLE
+            | TableFlags::BORDERS
+            | TableFlags::ROW_BG
+            | TableFlags::SCROLL_Y,
+        [0.0, avail_h],
+        0.0,
+    ) {
+        ui.table_setup_column("Node", dear_imgui_rs::TableColumnFlags::NONE, None);
+        ui.table_setup_column("TX Messages", dear_imgui_rs::TableColumnFlags::NONE, None);
+        ui.table_setup_column("RX Signals", dear_imgui_rs::TableColumnFlags::NONE, None);
+        ui.table_setup_column("Actions", dear_imgui_rs::TableColumnFlags::NONE, None);
+        ui.table_setup_scroll_freeze(0, 1);
+        ui.table_headers_row();
+
+        let mut to_delete: Option<String> = None;
+        let mut to_rename: Option<(String, String)> = None;
+
+        for node_name in &nodes {
+            ui.table_next_row();
+
+            ui.table_set_column_index(0);
+            if state.rename_target.as_deref() == Some(node_name.as_str()) {
+                ui.set_next_item_width(160.0);
+                ui.input_text("##rename_input", &mut state.rename_buffer).build();
+                ui.same_line();
+                if ui.small_button("OK") {
+                    let new_name = state.rename_buffer.trim().to_string();
+                    if !new_name.is_empty() {
+                        to_rename = Some((node_name.clone(), new_name));
+                    }
+                    state.rename_target = None;
+                    state.rename_buffer.clear();
                 }
-                state.rename_target = None;
-                state.rename_buffer.clear();
+                ui.same_line();
+                if ui.small_button("Cancel") {
+                    state.rename_target = None;
+                    state.rename_buffer.clear();
+                }
+            } else {
+                ui.text(node_name);
             }
-            ui.same_line();
-            if ui.button("Cancel") {
-                state.rename_target = None;
-                state.rename_buffer.clear();
-            }
-        } else {
-            ui.text(node_name);
-            ui.same_line();
+
+            ui.table_set_column_index(1);
+            ui.text(tx_count(node_name).to_string());
+
+            ui.table_set_column_index(2);
+            ui.text(rx_count(node_name).to_string());
+
+            ui.table_set_column_index(3);
             if ui.small_button(format!("Rename##{}", node_name)) {
                 state.rename_target = Some(node_name.clone());
                 state.rename_buffer = node_name.clone();
@@ -66,15 +113,15 @@ pub fn render_node_list(ui: &Ui, dbc: &mut EditableDbc, state: &mut NodeListStat
                 to_delete = Some(node_name.clone());
             }
         }
-    }
 
-    if let Some(name) = to_delete {
-        dbc.delete_node(&name);
-        changed = true;
-    }
-    if let Some((old, new)) = to_rename {
-        dbc.rename_node(&old, &new);
-        changed = true;
+        if let Some(name) = to_delete {
+            dbc.delete_node(&name);
+            changed = true;
+        }
+        if let Some((old, new)) = to_rename {
+            dbc.rename_node(&old, &new);
+            changed = true;
+        }
     }
 
     changed

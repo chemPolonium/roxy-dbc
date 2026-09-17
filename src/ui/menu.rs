@@ -1,6 +1,6 @@
 //! 菜单栏渲染模块
 
-use crate::editable_dbc::{EditableDbc, EditableMessage, FrameFormat};
+use crate::editable_dbc::{EditableDbc, EditableMessage};
 use crate::ui::dbc_window::DbcWindow;
 use crate::ui::state::{DeleteTarget, UiState};
 use dear_imgui_rs::{Key, Ui};
@@ -47,7 +47,8 @@ fn render_file_menu(ui: &Ui, ui_state: &mut UiState) {
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or(path);
-                    if ui.menu_item(file_name) {
+                    // label 里带完整路径做 ID：不同目录的同名文件不冲突
+                    if ui.menu_item(format!("{}##{}", file_name, path)) {
                         handle_open_recent(ui_state, path);
                     }
                 }
@@ -229,27 +230,7 @@ fn edit_cut_message(ui_state: &mut UiState, idx: usize) {
 }
 
 fn edit_paste_message(ui_state: &mut UiState, idx: usize) {
-    let copied = ui_state.clipboard.copied_messages.clone();
-    if copied.is_empty() {
-        return;
-    }
-    let win = &mut ui_state.dbc_windows[idx];
-    let mut next_id = win
-        .dbc
-        .messages()
-        .iter()
-        .map(|m| m.message_id())
-        .max()
-        .unwrap_or(0)
-        + 1;
-    for mut new_msg in copied {
-        new_msg.set_message_id(next_id);
-        let new_name = format!("{}_copy", new_msg.message_name());
-        new_msg.set_message_name(&new_name);
-        win.dbc.add_message(&new_msg);
-        next_id += 1;
-    }
-    win.is_dirty = true;
+    crate::ui::dbc_window::paste_messages(ui_state, idx);
 }
 
 fn edit_delete_message(ui_state: &mut UiState, idx: usize) {
@@ -272,31 +253,7 @@ fn edit_delete_message(ui_state: &mut UiState, idx: usize) {
 }
 
 fn edit_add_message(ui_state: &mut UiState, idx: usize) {
-    let next_id = ui_state.generate_next_message_id(idx);
-    let msg_count = if let Some(win) = ui_state.dbc_windows.get(idx) {
-        win.dbc.messages().len()
-    } else {
-        return;
-    };
-    let frame_format = if next_id > 0x7FF {
-        FrameFormat::Extended
-    } else {
-        FrameFormat::Standard
-    };
-    let msg = EditableMessage::build(
-        next_id,
-        frame_format,
-        format!("Message_{}", msg_count),
-        8,
-        "Vector__XXX".to_string(),
-        Vec::new(),
-        String::new(),
-    );
-    if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
-        win.dbc.add_message(&msg);
-        win.set_selected_message_id(Some(next_id));
-        win.is_dirty = true;
-    }
+    crate::ui::dbc_window::add_new_message(ui_state, idx);
 }
 
 /// 渲染视图菜单
@@ -348,7 +305,7 @@ fn handle_load_dbc_file(ui_state: &mut UiState) {
         return;
     };
 
-    let path_str = path.to_string_lossy().to_string();
+    let path_str = crate::ui::state::normalize_path(&path.to_string_lossy());
 
     if let Some(existing_idx) = ui_state
         .dbc_windows
@@ -357,7 +314,7 @@ fn handle_load_dbc_file(ui_state: &mut UiState) {
     {
         focus_existing_dbc_window(ui_state, existing_idx);
     } else {
-        load_new_dbc_file(ui_state, &path);
+        load_new_dbc_file(ui_state, std::path::Path::new(&path_str));
     }
 }
 
@@ -370,7 +327,7 @@ fn handle_import_file(ui_state: &mut UiState) {
         return;
     };
 
-    let path_str = path.to_string_lossy().to_string();
+    let path_str = crate::ui::state::normalize_path(&path.to_string_lossy());
     match crate::import::import_file(&path) {
         Ok(editable_dbc) => {
             let dbc_window = DbcWindow::new(&path_str, editable_dbc);
@@ -426,7 +383,6 @@ fn focus_existing_dbc_window(ui_state: &mut UiState, window_index: usize) {
         ui_state.dbc_window_focus_request = Some(window_index);
     }
     ui_state.last_focused_dbc_index = Some(window_index);
-    ui_state.last_focused_message_window = None;
 }
 
 /// 加载新的 DBC 文件
@@ -497,7 +453,7 @@ fn handle_save_dbc(ui_state: &mut UiState, save_as: bool) {
     let bytes = crate::file_encoding::encode_to_bytes(&dbc_string, win.text_encoding, win.had_bom);
     match std::fs::write(&save_path, &bytes) {
         Ok(_) => {
-            win.file_path = save_path;
+            win.file_path = crate::ui::state::normalize_path(&save_path);
             win.is_dirty = false;
         }
         Err(e) => {

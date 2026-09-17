@@ -10,7 +10,9 @@
 //! - 导出 CSV（UTF-8 BOM，Excel 友好）
 
 use can_dbc::{ByteOrder, ValueType};
-use dear_imgui_rs::{MouseButton, SortDirection, TableFlags, Ui};
+use dear_imgui_rs::{
+    MouseButton, SortDirection, TableFlags, TableOptions, TableSizingPolicy, Ui,
+};
 
 use crate::editable_dbc::{EditableDbc, EditableSignal};
 use crate::ui::message_edit_window::MessageEditWindowState;
@@ -318,22 +320,22 @@ fn default_signal_named(name: &str) -> EditableSignal {
 pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> AllSignalsEvent {
     let mut event = AllSignalsEvent::None;
 
-    if ui.small_button("+ Add Signal") {
-        if let Some((msg_id, _)) = window.selected.clone() {
-            if ctx.dbc.get_message(msg_id).is_some() {
-                let name = next_signal_name(ctx.dbc);
-                let sig = default_signal_named(&name);
-                ctx.dbc.add_signal(msg_id, &sig);
-                *ctx.is_dirty = true;
+    // 无选中行时禁用添加（目标消息未定），不做多余的文字提示
+    {
+        let _disabled = ui.begin_disabled_with_cond(window.selected.is_none());
+        if ui.button("+ Add Signal") {
+            if let Some((msg_id, _)) = window.selected.clone() {
+                if ctx.dbc.get_message(msg_id).is_some() {
+                    let name = next_signal_name(ctx.dbc);
+                    let sig = default_signal_named(&name);
+                    ctx.dbc.add_signal(msg_id, &sig);
+                    *ctx.is_dirty = true;
+                }
             }
         }
     }
-    if window.selected.is_none() {
-        ui.same_line();
-        ui.text_disabled("(select a row to choose the target message)");
-    }
     ui.same_line();
-    if ui.small_button("Export CSV...") {
+    if ui.button("Export CSV...") {
         let rows = window.sorted_rows(ctx.dbc);
         let csv = build_matrix_csv(&rows);
         let mut bytes = vec![0xEF, 0xBB, 0xBF];
@@ -357,6 +359,7 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
         }
     }
     ui.same_line();
+    ui.set_next_item_width(260.0);
     ui.input_text("##matrix_search", &mut window.search)
         .hint("Filter signal / message / transmitter...")
         .build();
@@ -365,17 +368,22 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
     ui.same_line();
     ui.text_disabled(format!("{} signal(s)", rows.len()));
 
-    let avail = ui.content_region_avail();
+    // 表格填满标签页剩余空间（底部已无状态栏），窗口不出现滚动条
+    let avail_h = ui.content_region_avail()[1];
     if let Some(_table) = ui.begin_table_with_sizing(
         "matrix_table",
         17,
-        TableFlags::RESIZABLE
-            | TableFlags::BORDERS
-            | TableFlags::NO_BORDERS_IN_BODY
-            | TableFlags::SCROLL_X
-            | TableFlags::SCROLL_Y
-            | TableFlags::SORTABLE,
-        [0.0, avail[1]],
+        TableOptions::new()
+            .flags(
+                TableFlags::RESIZABLE
+                    | TableFlags::BORDERS
+                    | TableFlags::ROW_BG
+                    | TableFlags::SCROLL_X
+                    | TableFlags::SCROLL_Y
+                    | TableFlags::SORTABLE,
+            )
+            .sizing_policy(TableSizingPolicy::FixedFit),
+        [0.0, avail_h],
         0.0,
     ) {
                 for header in [
@@ -437,8 +445,13 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
                     ui.text(&row.transmitter);
 
                     ui.table_set_column_index(col::SIGNAL as usize);
+                    // 不同消息下可能存在同名信号，ID 里带上消息 ID 避免冲突
+                    let selectable_label = format!(
+                        "{}##as_{}_{}",
+                        row.sig_name, row.msg_id, row.sig_name
+                    );
                     if ui
-                        .selectable_config(&row.sig_name)
+                        .selectable_config(selectable_label)
                         .selected(is_selected)
                         .span_all_columns(true)
                         .build()
@@ -451,7 +464,7 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
                                 msg.signals().iter().find(|s| s.name() == row.sig_name)
                             {
                                 ctx.signal_edit_dialog
-                                    .open_from_signal(msg.message_id(), sig);
+                                    .open_from_signal(msg.message_id(), sig, ctx.file_path);
                             }
                         }
                     }
@@ -471,7 +484,7 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
                                     msg.signals().iter().find(|s| s.name() == row.sig_name)
                                 {
                                     ctx.signal_edit_dialog
-                                        .open_from_signal(msg.message_id(), sig);
+                                        .open_from_signal(msg.message_id(), sig, ctx.file_path);
                                 }
                             }
                         }
@@ -481,7 +494,7 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
                         }
                         if ui.menu_item("Edit Message...") {
                             if let Some(msg) = ctx.dbc.get_message(row.msg_id) {
-                                ctx.edit_windows.push(MessageEditWindowState::open(msg));
+                                ctx.edit_windows.push(MessageEditWindowState::open(msg, ctx.file_path));
                             }
                         }
                         ui.separator();

@@ -32,10 +32,11 @@ fn open_path(ui_state: &mut ui::UiState, path: &std::path::Path) {
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
-    let path_str = path.to_string_lossy().to_string();
+    // 统一为规范化的绝对路径：相对 / 绝对写法指向同一文件时只算一个
+    let path_str = ui::state::normalize_path(&path.to_string_lossy());
 
     match ext.as_str() {
-        "dbc" => match ui::dbc_window::DbcWindow::from_path(path) {
+        "dbc" => match ui::dbc_window::DbcWindow::from_path(std::path::Path::new(&path_str)) {
             Ok(dbc_window) => {
                 ui_state.add_recent_file(&path_str);
                 ui_state.dbc_windows.push(dbc_window);
@@ -46,7 +47,7 @@ fn open_path(ui_state: &mut ui::UiState, path: &std::path::Path) {
                 ui_state.error_dialog.show = true;
             }
         },
-        "arxml" | "kcd" => match crate::import::import_file(path) {
+        "arxml" | "kcd" => match crate::import::import_file(std::path::Path::new(&path_str)) {
             Ok(editable_dbc) => {
                 let dbc_window = ui::dbc_window::DbcWindow::new(&path_str, editable_dbc);
                 ui_state.add_recent_file(&path_str);

@@ -20,6 +20,8 @@ pub struct MessageEditWindowState {
     /// 当前消息 ID（应用 ID 修改后随之更新）
     pub current_id: u32,
     pub original_message: EditableMessage,
+    /// 所属 DBC 窗口的路径，用作窗口标题 ID
+    pub window_key: String,
     pub name_buffer: String,
     pub id_buffer: String,
     pub size_buffer: String,
@@ -43,10 +45,11 @@ pub fn parse_message_id(s: &str) -> Option<u32> {
 
 #[allow(dead_code)]
 impl MessageEditWindowState {
-    pub fn open(msg: &EditableMessage) -> Self {
+    pub fn open(msg: &EditableMessage, window_key: &str) -> Self {
         Self {
             current_id: msg.message_id(),
             original_message: msg.clone(),
+            window_key: window_key.to_string(),
             name_buffer: msg.message_name().to_string(),
             id_buffer: format!("0x{:03X}", msg.message_id()),
             size_buffer: msg.message_size().to_string(),
@@ -169,7 +172,10 @@ impl MessageEditWindowState {
     pub fn render(&mut self, ui: &Ui) -> MessageEditEvent {
         let mut event = MessageEditEvent::None;
 
-        let title = format!("Edit Message - 0x{:03X}", self.current_id);
+        let title = format!(
+            "Edit Message - 0x{:03X}##{}",
+            self.current_id, self.window_key
+        );
         let mut is_open = true;
 
         ui.window(&title)

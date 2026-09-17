@@ -17,6 +17,8 @@ pub struct SignalEditDialog {
     pub show: bool,
     pub message_id: u32,
     pub original_name: String,
+    /// 所属 DBC 窗口的路径，用作窗口标题 ID（不同 DBC 的同名信号对话框不冲突）
+    pub window_key: String,
     pub focus_requested: bool,
 
     pub name_buffer: String,
@@ -40,6 +42,7 @@ impl SignalEditDialog {
             show: false,
             message_id: 0,
             original_name: String::new(),
+            window_key: String::new(),
             focus_requested: false,
             name_buffer: String::new(),
             start_bit_buffer: String::new(),
@@ -57,9 +60,10 @@ impl SignalEditDialog {
         }
     }
 
-    pub fn open_from_signal(&mut self, message_id: u32, signal: &EditableSignal) {
+    pub fn open_from_signal(&mut self, message_id: u32, signal: &EditableSignal, window_key: &str) {
         self.show = true;
         self.focus_requested = true;
+        self.window_key = window_key.to_string();
         self.message_id = message_id;
         self.original_name = signal.name().to_string();
         self.name_buffer = signal.name().to_string();
@@ -289,7 +293,7 @@ impl SignalEditDialog {
     pub fn render(&mut self, ui: &Ui) -> SignalEditEvent {
         let mut event = SignalEditEvent::None;
 
-        let title = format!("Edit Signal - {}", self.original_name);
+        let title = format!("Edit Signal - {}##{}", self.original_name, self.window_key);
         let mut is_open = true;
 
         let mut window = ui
