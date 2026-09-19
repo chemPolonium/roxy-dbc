@@ -3,6 +3,7 @@
 mod app;
 mod editable_dbc;
 mod export;
+mod fibex;
 mod file_encoding;
 mod import;
 mod ui;
@@ -25,48 +26,6 @@ struct App {
     startup_files: Vec<PathBuf>,
 }
 
-/// 按扩展名打开一个 DBC / ARXML / KCD 文件，成功后记录最近文件并聚焦
-fn open_path(ui_state: &mut ui::UiState, path: &std::path::Path) {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
-    // 统一为规范化的绝对路径：相对 / 绝对写法指向同一文件时只算一个
-    let path_str = ui::state::normalize_path(&path.to_string_lossy());
-
-    match ext.as_str() {
-        "dbc" => match ui::dbc_window::DbcWindow::from_path(std::path::Path::new(&path_str)) {
-            Ok(dbc_window) => {
-                ui_state.add_recent_file(&path_str);
-                ui_state.dbc_windows.push(dbc_window);
-                ui_state.last_focused_dbc_index = Some(ui_state.dbc_windows.len() - 1);
-            }
-            Err(e) => {
-                ui_state.error_dialog.message = format!("Failed to load file: {}", e);
-                ui_state.error_dialog.show = true;
-            }
-        },
-        "arxml" | "kcd" => match crate::import::import_file(std::path::Path::new(&path_str)) {
-            Ok(editable_dbc) => {
-                let dbc_window = ui::dbc_window::DbcWindow::new(&path_str, editable_dbc);
-                ui_state.add_recent_file(&path_str);
-                ui_state.dbc_windows.push(dbc_window);
-                ui_state.last_focused_dbc_index = Some(ui_state.dbc_windows.len() - 1);
-            }
-            Err(e) => {
-                ui_state.error_dialog.message = format!("Import failed: {}", e);
-                ui_state.error_dialog.show = true;
-            }
-        },
-        _ => {
-            ui_state.error_dialog.message =
-                format!("Unsupported file type: {} (expected .dbc / .arxml / .kcd)", path_str);
-            ui_state.error_dialog.show = true;
-        }
-    }
-}
-
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.window = Some(AppWindow::new(event_loop));
@@ -75,7 +34,7 @@ impl ApplicationHandler for App {
         // 打开命令行传入的文件（支持多个，按顺序打开并聚焦最后一个）
         let files = std::mem::take(&mut self.startup_files);
         for path in files {
-            open_path(&mut self.ui_state, &path);
+            self.ui_state.open_path(&path);
         }
     }
 
@@ -110,7 +69,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::DroppedFile(path) => {
-                open_path(&mut self.ui_state, &path);
+                self.ui_state.open_path(path);
                 self.ui_state.file_hovering = false;
             }
             WindowEvent::HoveredFile(_path) => {
@@ -201,15 +160,14 @@ impl ApplicationHandler for App {
         }
 
         // 转发给 dear-imgui-winit 平台层处理输入
-        if let Some(imgui) = window.imgui.as_mut() {
-            if let Err(e) = imgui.platform.handle_window_event(
+        if let Some(imgui) = window.imgui.as_mut()
+            && let Err(e) = imgui.platform.handle_window_event(
                 &mut imgui.context,
                 &window.window,
                 &event,
             ) {
                 eprintln!("platform handle_window_event failed: {e}");
             }
-        }
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {

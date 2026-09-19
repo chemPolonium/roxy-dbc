@@ -26,18 +26,11 @@ fn render_file_menu(ui: &Ui, ui_state: &mut UiState) {
             handle_new_dbc(ui_state);
         }
         ui.separator();
-        if ui.menu_item_with_shortcut("Load DBC File", "Ctrl+O") {
-            handle_load_dbc_file(ui_state);
+        if ui.menu_item_with_shortcut("Load File", "Ctrl+O") {
+            handle_load_file(ui_state);
         }
-        if ui.menu_item("Import...") {
+        if ui.menu_item("Import as DBC...") {
             handle_import_file(ui_state);
-        }
-        if ui.menu_item_enabled_selected_no_shortcut(
-            "Export ARXML...",
-            false,
-            ui_state.last_focused_dbc_index.is_some(),
-        ) {
-            handle_export_arxml(ui_state);
         }
         if !ui_state.recent_files.is_empty() {
             ui.menu("Recent Files", || {
@@ -68,6 +61,14 @@ fn render_file_menu(ui: &Ui, ui_state: &mut UiState) {
             handle_save_dbc(ui_state, true);
         }
         ui.separator();
+        let has_fibex = ui_state.fibex.last_focused_fibex_index.is_some();
+        if ui.menu_item_enabled_selected_no_shortcut("Save FIBEX", false, has_fibex) {
+            handle_save_fibex(ui_state, false);
+        }
+        if ui.menu_item_enabled_selected_no_shortcut("Save FIBEX As...", false, has_fibex) {
+            handle_save_fibex(ui_state, true);
+        }
+        ui.separator();
         if ui.menu_item("Close DBC") {
             handle_close_dbc(ui_state);
         }
@@ -88,7 +89,7 @@ fn render_file_menu(ui: &Ui, ui_state: &mut UiState) {
         }
 
         if ui.is_key_pressed_with_repeat(Key::O, false) {
-            handle_load_dbc_file(ui_state);
+            handle_load_file(ui_state);
         }
 
         if ui.is_key_pressed_with_repeat(Key::N, false) {
@@ -97,98 +98,174 @@ fn render_file_menu(ui: &Ui, ui_state: &mut UiState) {
     }
 }
 
-/// 渲染编辑菜单
+/// 渲染编辑菜单：按焦点把操作分发到 DBC 或 FIBEX 窗口
 fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
     let ctrl = ui.io().key_ctrl();
 
     ui.menu("Edit", || {
-        if let Some(idx) = ui_state.last_focused_dbc_index {
-            if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
-                let can_undo = win.dbc.can_undo();
-                let can_redo = win.dbc.can_redo();
-
-                if ui.menu_item_enabled_selected_with_shortcut("Undo", "Ctrl+Z", false, can_undo) {
-                    if let Err(e) = win.dbc.undo() {
-                        eprintln!("Undo failed: {}", e);
-                    }
-                }
-
-                if ui.menu_item_enabled_selected_with_shortcut("Redo", "Ctrl+Y", false, can_redo) {
-                    if let Err(e) = win.dbc.redo() {
-                        eprintln!("Redo failed: {}", e);
-                    }
-                }
-
-                ui.separator();
-
-                let has_selection = !win.selected_message_ids().is_empty();
-                let has_clipboard = ui_state.has_clipboard_message();
-
-                if ui.menu_item_enabled_selected_with_shortcut("Copy", "Ctrl+C", false, has_selection) {
-                    edit_copy_message(ui_state, idx);
-                }
-                if ui.menu_item_enabled_selected_with_shortcut("Cut", "Ctrl+X", false, has_selection) {
-                    edit_cut_message(ui_state, idx);
-                }
-                if ui.menu_item_enabled_selected_with_shortcut("Paste", "Ctrl+V", false, has_clipboard) {
-                    edit_paste_message(ui_state, idx);
-                }
-                ui.separator();
-                if ui.menu_item_enabled_selected_with_shortcut("Delete", "Del", false, has_selection) {
-                    edit_delete_message(ui_state, idx);
-                }
-                ui.separator();
-                if ui.menu_item("Add Message") {
-                    edit_add_message(ui_state, idx);
-                }
-            } else {
-                ui.text_disabled("No active DBC window");
-            }
+        if ui_state.focus == crate::ui::state::FocusTarget::Fibex {
+            render_fibex_edit_items(ui, ui_state);
         } else {
-            ui.text_disabled("No active DBC window");
+            render_dbc_edit_items(ui, ui_state);
         }
     });
 
-    // 文本输入框激活时跳过全局快捷键，避免编辑属性时误触发消息级操作
+    // 文本输入框激活时跳过全局快捷键，避免编辑属性时误触发消息级操作。
+    // Ctrl+O / Ctrl+N / Ctrl+S 在 render_file_menu 的快捷键段处理，此处不再重复。
     if ctrl && !ui.io().want_capture_keyboard() {
-        if let Some(idx) = ui_state.last_focused_dbc_index {
-            if ui_state.dbc_windows.get(idx).is_some() {
-                if ui.is_key_pressed_with_repeat(Key::Z, false) {
-                    if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
-                        if let Err(e) = win.dbc.undo() {
-                            eprintln!("Undo failed: {}", e);
-                        }
+        // DBC 编辑快捷键只在焦点位于 DBC 窗口时生效
+        if ui_state.focus == crate::ui::state::FocusTarget::Dbc
+            && let Some(idx) = ui_state.last_focused_dbc_index
+            && ui_state.dbc_windows.get(idx).is_some()
+        {
+            if ui.is_key_pressed_with_repeat(Key::Z, false)
+                && let Some(win) = ui_state.dbc_windows.get_mut(idx)
+                    && let Err(e) = win.dbc.undo() {
+                        eprintln!("Undo failed: {}", e);
                     }
-                }
-                if ui.is_key_pressed_with_repeat(Key::Y, false) {
-                    if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
-                        if let Err(e) = win.dbc.redo() {
-                            eprintln!("Redo failed: {}", e);
-                        }
+            if ui.is_key_pressed_with_repeat(Key::Y, false)
+                && let Some(win) = ui_state.dbc_windows.get_mut(idx)
+                    && let Err(e) = win.dbc.redo() {
+                        eprintln!("Redo failed: {}", e);
                     }
-                }
-                if ui.is_key_pressed_with_repeat(Key::C, false) {
-                    edit_copy_message(ui_state, idx);
-                }
-                if ui.is_key_pressed_with_repeat(Key::X, false) {
-                    edit_cut_message(ui_state, idx);
-                }
-                if ui.is_key_pressed_with_repeat(Key::V, false) {
-                    edit_paste_message(ui_state, idx);
-                }
+            if ui.is_key_pressed_with_repeat(Key::C, false) {
+                edit_copy_message(ui_state, idx);
+            }
+            if ui.is_key_pressed_with_repeat(Key::X, false) {
+                edit_cut_message(ui_state, idx);
+            }
+            if ui.is_key_pressed_with_repeat(Key::V, false) {
+                edit_paste_message(ui_state, idx);
             }
         }
     }
 
-    // Del 删除选中的消息（无需 Ctrl）；跳过文本输入焦点和待确认的删除对话框
-    if !ui.io().want_capture_keyboard() && ui_state.confirm_delete_dialog.target.is_none() {
-        if let Some(idx) = ui_state.last_focused_dbc_index {
-            if ui_state.dbc_windows.get(idx).is_some()
+    // Del 删除选中的消息（无需 Ctrl）；只在焦点位于 DBC 窗口时生效，
+    // 并跳过文本输入焦点和待确认的删除对话框
+    if !ui.io().want_capture_keyboard()
+        && ui_state.confirm_delete_dialog.target.is_none()
+        && ui_state.focus == crate::ui::state::FocusTarget::Dbc
+        && let Some(idx) = ui_state.last_focused_dbc_index
+            && ui_state.dbc_windows.get(idx).is_some()
                 && ui.is_key_pressed_with_repeat(Key::Delete, false)
             {
                 edit_delete_message(ui_state, idx);
             }
+}
+
+/// DBC 窗口的编辑菜单项
+fn render_dbc_edit_items(ui: &Ui, ui_state: &mut UiState) {
+    if let Some(idx) = ui_state.last_focused_dbc_index {
+        if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
+            let can_undo = win.dbc.can_undo();
+            let can_redo = win.dbc.can_redo();
+
+            if ui.menu_item_enabled_selected_with_shortcut("Undo", "Ctrl+Z", false, can_undo)
+                && let Err(e) = win.dbc.undo() {
+                    eprintln!("Undo failed: {}", e);
+                }
+
+            if ui.menu_item_enabled_selected_with_shortcut("Redo", "Ctrl+Y", false, can_redo)
+                && let Err(e) = win.dbc.redo() {
+                    eprintln!("Redo failed: {}", e);
+                }
+
+            ui.separator();
+
+            let has_selection = !win.selected_message_ids().is_empty();
+            let has_clipboard = ui_state.has_clipboard_message();
+
+            if ui.menu_item_enabled_selected_with_shortcut("Copy", "Ctrl+C", false, has_selection) {
+                edit_copy_message(ui_state, idx);
+            }
+            if ui.menu_item_enabled_selected_with_shortcut("Cut", "Ctrl+X", false, has_selection) {
+                edit_cut_message(ui_state, idx);
+            }
+            if ui.menu_item_enabled_selected_with_shortcut("Paste", "Ctrl+V", false, has_clipboard) {
+                edit_paste_message(ui_state, idx);
+            }
+            ui.separator();
+            if ui.menu_item_enabled_selected_with_shortcut("Delete", "Del", false, has_selection) {
+                edit_delete_message(ui_state, idx);
+            }
+            ui.separator();
+            if ui.menu_item("Add Message") {
+                edit_add_message(ui_state, idx);
+            }
+        } else {
+            ui.text_disabled("No active DBC window");
         }
+    } else {
+        ui.text_disabled("No active DBC window");
+    }
+}
+
+/// FIBEX 窗口的编辑菜单项（焦点位于 FIBEX 窗口时）
+fn render_fibex_edit_items(ui: &Ui, ui_state: &mut UiState) {
+    let has_clipboard = ui_state.fibex.has_clipboard_frame();
+    if let Some(idx) = ui_state.fibex.last_focused_fibex_index {
+        if let Some(win) = ui_state.fibex.fibex_windows.get_mut(idx) {
+            let can_undo = win.fibex.can_undo();
+            let can_redo = win.fibex.can_redo();
+
+            if ui.menu_item_enabled_selected_no_shortcut("Undo", false, can_undo)
+                && let Err(e) = win.fibex.undo() {
+                    eprintln!("Undo failed: {}", e);
+                }
+            if ui.menu_item_enabled_selected_no_shortcut("Redo", false, can_redo)
+                && let Err(e) = win.fibex.redo() {
+                    eprintln!("Redo failed: {}", e);
+                }
+
+            ui.separator();
+
+            let has_selection = !win.selected_frame_names().is_empty();
+
+            if ui.menu_item_enabled_selected_no_shortcut("Copy", false, has_selection) {
+                let names = win.selected_frame_names();
+                let frames: Vec<_> = names
+                    .iter()
+                    .filter_map(|n| win.fibex.get_frame(n).cloned())
+                    .collect();
+                if !frames.is_empty() {
+                    ui_state.fibex.clipboard.copied_frames = frames;
+                }
+            }
+            if ui.menu_item_enabled_selected_no_shortcut("Paste", false, has_clipboard) {
+                let copied = ui_state.fibex.clipboard.copied_frames.clone();
+                for mut new_frame in copied {
+                    let mut suffix = 1;
+                    let mut new_name = format!("{}_copy", new_frame.name());
+                    while win.fibex.get_frame(&new_name).is_some() {
+                        suffix += 1;
+                        new_name = format!("{}_copy{}", new_frame.name(), suffix);
+                    }
+                    new_frame.set_name(&new_name);
+                    win.fibex.add_frame(&new_frame);
+                }
+                win.is_dirty = true;
+            }
+            ui.separator();
+            if ui.menu_item_enabled_selected_no_shortcut("Delete", false, has_selection) {
+                let names = win.selected_frame_names();
+                if !names.is_empty() {
+                    ui_state.fibex.confirm_delete_dialog.target =
+                        Some(crate::fibex::state::DeleteTarget::Frames(names.clone()));
+                    ui_state.fibex.confirm_delete_dialog.display_name =
+                        format!("{} frame(s)", names.len());
+                    ui_state.fibex.confirm_delete_dialog.show = true;
+                }
+            }
+            ui.separator();
+            if ui.menu_item("Add Frame") {
+                win.fibex.new_frame();
+                win.is_dirty = true;
+            }
+        } else {
+            ui.text_disabled("No active FIBEX window");
+        }
+    } else {
+        ui.text_disabled("No active FIBEX window");
     }
 }
 
@@ -268,14 +345,12 @@ fn render_tools_menu(ui: &Ui, ui_state: &mut UiState) {
     let has_dbc = !ui_state.dbc_windows.is_empty();
 
     ui.menu("Tools", || {
-        if ui.menu_item_enabled_selected_no_shortcut("Validate", false, has_dbc) {
-            if let Some(idx) = ui_state.last_focused_dbc_index {
-                if let Some(win) = ui_state.dbc_windows.get(idx) {
+        if ui.menu_item_enabled_selected_no_shortcut("Validate", false, has_dbc)
+            && let Some(idx) = ui_state.last_focused_dbc_index
+                && let Some(win) = ui_state.dbc_windows.get(idx) {
                     ui_state.validation_dialog.issues = win.dbc.validate();
                     ui_state.validation_dialog.show = true;
                 }
-            }
-        }
     });
 }
 
@@ -296,26 +371,79 @@ fn handle_new_dbc(ui_state: &mut UiState) {
     ui_state.last_focused_dbc_index = Some(ui_state.dbc_windows.len() - 1);
 }
 
-/// 处理加载 DBC 文件
-fn handle_load_dbc_file(ui_state: &mut UiState) {
+/// 保存当前聚焦的 FIBEX 窗口（按扩展名选择 FIBEX / ARXML 格式，按原编码写出）
+fn handle_save_fibex(ui_state: &mut UiState, save_as: bool) {
+    let idx = match ui_state.fibex.last_focused_fibex_index {
+        Some(i) => i,
+        None => return,
+    };
+
+    let file_path = ui_state.fibex.fibex_windows[idx].file_path.clone();
+    let needs_dialog = save_as || !std::path::Path::new(&file_path).exists();
+
+    let save_path = if needs_dialog {
+        let ext = if matches!(
+            crate::fibex::ui::fibex_window::save_format(&file_path),
+            crate::fibex::ui::fibex_window::SaveFormat::Arxml
+        ) {
+            "arxml"
+        } else {
+            "fibex"
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("FIBEX/ARXML files", &["fibex", "fx", "arxml", "xml"])
+            .set_file_name(format!("output.{}", ext))
+            .save_file()
+        else {
+            return;
+        };
+        path.to_string_lossy().to_string()
+    } else {
+        file_path
+    };
+
+    let win = &mut ui_state.fibex.fibex_windows[idx];
+    let xml = match crate::fibex::ui::fibex_window::save_format(&save_path) {
+        crate::fibex::ui::fibex_window::SaveFormat::Arxml => {
+            crate::fibex::export::arxml::export_arxml(&win.fibex)
+        }
+        crate::fibex::ui::fibex_window::SaveFormat::Fibex => {
+            crate::fibex::export::fibex::export_fibex(&win.fibex)
+        }
+    };
+    // 另存到新路径默认 UTF-8；原路径按原编码写出
+    if save_path != win.file_path {
+        win.text_encoding = encoding_rs::UTF_8;
+        win.had_bom = false;
+    }
+    let bytes = crate::file_encoding::encode_to_bytes(&xml, win.text_encoding, win.had_bom);
+    match std::fs::write(&save_path, &bytes) {
+        Ok(_) => {
+            win.file_path = crate::ui::state::normalize_path(&save_path);
+            win.is_dirty = false;
+        }
+        Err(e) => {
+            ui_state.fibex.error_dialog.message = format!("Failed to save: {}", e);
+            ui_state.fibex.error_dialog.show = true;
+        }
+    }
+}
+
+/// 处理加载文件（Ctrl+O）：按扩展名分流——dbc/kcd 进 DBC 编辑窗口，
+/// xml/arxml（含 FIBEX 格式的 XML）进 FIBEX 查看窗口，格式按文件内容自动识别
+fn handle_load_file(ui_state: &mut UiState) {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("DBC files", &["dbc"])
+        .add_filter(
+            "Database files (dbc, xml, arxml, kcd)",
+            &["dbc", "xml", "arxml", "kcd"],
+        )
+        .add_filter("All files", &["*"])
         .pick_file()
     else {
         return;
     };
 
-    let path_str = crate::ui::state::normalize_path(&path.to_string_lossy());
-
-    if let Some(existing_idx) = ui_state
-        .dbc_windows
-        .iter()
-        .position(|w| w.file_path == path_str)
-    {
-        focus_existing_dbc_window(ui_state, existing_idx);
-    } else {
-        load_new_dbc_file(ui_state, std::path::Path::new(&path_str));
-    }
+    ui_state.open_path(&path);
 }
 
 /// 处理导入 ARXML/KCD 文件
@@ -342,27 +470,6 @@ fn handle_import_file(ui_state: &mut UiState) {
     }
 }
 
-fn handle_export_arxml(ui_state: &mut UiState) {
-    let idx = match ui_state.last_focused_dbc_index {
-        Some(i) => i,
-        None => return,
-    };
-
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("ARXML files", &["arxml"])
-        .set_file_name("export.arxml")
-        .save_file()
-    else {
-        return;
-    };
-
-    let xml = crate::export::arxml::export_arxml(&ui_state.dbc_windows[idx].dbc);
-    if let Err(e) = std::fs::write(&path, xml) {
-        ui_state.error_dialog.message = format!("Export failed: {}", e);
-        ui_state.error_dialog.show = true;
-    }
-}
-
 /// 处理关闭 DBC
 fn handle_close_dbc(ui_state: &mut UiState) {
     if let Some(idx) = ui_state.last_focused_dbc_index {
@@ -376,32 +483,6 @@ fn handle_close_dbc(ui_state: &mut UiState) {
     }
 }
 
-/// 聚焦已存在的 DBC 窗口
-fn focus_existing_dbc_window(ui_state: &mut UiState, window_index: usize) {
-    if let Some(window) = ui_state.dbc_windows.get_mut(window_index) {
-        window.is_open = true;
-        ui_state.dbc_window_focus_request = Some(window_index);
-    }
-    ui_state.last_focused_dbc_index = Some(window_index);
-}
-
-/// 加载新的 DBC 文件
-fn load_new_dbc_file(ui_state: &mut UiState, path: &std::path::Path) {
-    let path_str = path.to_string_lossy().to_string();
-    match DbcWindow::from_path(path) {
-        Ok(dbc_window) => {
-            ui_state.add_recent_file(&path_str);
-            ui_state.dbc_windows.push(dbc_window);
-            ui_state.last_focused_dbc_index = Some(ui_state.dbc_windows.len() - 1);
-        }
-        Err(e) => {
-            // 打开失败时用错误对话框提示（release 构建无控制台）
-            ui_state.error_dialog.message = e;
-            ui_state.error_dialog.show = true;
-        }
-    }
-}
-
 fn handle_open_recent(ui_state: &mut UiState, path: &str) {
     let path_buf = std::path::PathBuf::from(path);
     if !path_buf.exists() {
@@ -410,15 +491,9 @@ fn handle_open_recent(ui_state: &mut UiState, path: &str) {
         return;
     }
 
-    if let Some(existing_idx) = ui_state
-        .dbc_windows
-        .iter()
-        .position(|w| w.file_path == path)
-    {
-        focus_existing_dbc_window(ui_state, existing_idx);
-    } else {
-        load_new_dbc_file(ui_state, &path_buf);
-    }
+    // 按扩展名分流：dbc/kcd 进 DBC 编辑窗口，xml/arxml 进 FIBEX 查看窗口；
+    // 已打开的同一文件会聚焦已有窗口
+    ui_state.open_path(&path_buf);
 }
 
 fn handle_save_dbc(ui_state: &mut UiState, save_as: bool) {

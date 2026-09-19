@@ -25,6 +25,9 @@ pub struct MessageEditWindowState {
     pub name_buffer: String,
     pub id_buffer: String,
     pub size_buffer: String,
+    /// 发送节点下拉选项（节点列表 + 兜底项），选中项写入 transmitter_buffer
+    pub transmitter_options: Vec<String>,
+    pub transmitter_sel: usize,
     pub transmitter_buffer: String,
     pub comment_buffer: String,
     pub frame_format_is_extended: bool,
@@ -45,15 +48,32 @@ pub fn parse_message_id(s: &str) -> Option<u32> {
 
 #[allow(dead_code)]
 impl MessageEditWindowState {
-    pub fn open(msg: &EditableMessage, window_key: &str) -> Self {
+    pub fn open(msg: &EditableMessage, window_key: &str, nodes: Vec<String>) -> Self {
+        // 发送节点从节点列表中选择；当前值不在列表中（如 Vector__XXX 或已删除节点）时兜底追加，
+        // 保证原有值不会静默丢失
+        let mut transmitter_options = nodes;
+        let transmitter = msg.transmitter();
+        if !transmitter_options.iter().any(|n| n == transmitter) {
+            transmitter_options.push(transmitter.to_string());
+        }
+        if !transmitter_options.iter().any(|n| n == "Vector__XXX") {
+            transmitter_options.push("Vector__XXX".to_string());
+        }
+        let transmitter_sel = transmitter_options
+            .iter()
+            .position(|n| n == transmitter)
+            .unwrap_or(0);
+
         Self {
             current_id: msg.message_id(),
             original_message: msg.clone(),
             window_key: window_key.to_string(),
             name_buffer: msg.message_name().to_string(),
+            transmitter_options,
+            transmitter_sel,
+            transmitter_buffer: transmitter.to_string(),
             id_buffer: format!("0x{:03X}", msg.message_id()),
             size_buffer: msg.message_size().to_string(),
-            transmitter_buffer: msg.transmitter().to_string(),
             comment_buffer: msg.comment().to_string(),
             frame_format_is_extended: msg.frame_format().is_extended(),
             frame_format_is_fd: msg.frame_format().is_fd(),
@@ -121,13 +141,12 @@ impl MessageEditWindowState {
         let mut change_count = 0;
 
         // ID 修改优先应用，后续属性编辑使用新 ID
-        if let Some(new_id) = parse_message_id(&self.id_buffer) {
-            if new_id != msg_id {
+        if let Some(new_id) = parse_message_id(&self.id_buffer)
+            && new_id != msg_id {
                 dbc.set_message_id(msg_id, new_id);
                 self.current_id = new_id;
                 change_count += 1;
             }
-        }
 
         let active_id = self.current_id;
 
@@ -142,12 +161,11 @@ impl MessageEditWindowState {
             change_count += 1;
         }
 
-        if let Ok(size) = self.size_buffer.trim().parse::<u64>() {
-            if size != self.original_message.message_size() {
+        if let Ok(size) = self.size_buffer.trim().parse::<u64>()
+            && size != self.original_message.message_size() {
                 dbc.set_message_size(active_id, size);
                 change_count += 1;
             }
-        }
 
         if self.transmitter_buffer.trim() != self.original_message.transmitter() {
             dbc.set_message_transmitter(active_id, self.transmitter_buffer.trim());
@@ -197,8 +215,19 @@ impl MessageEditWindowState {
                 ui.checkbox("CAN FD##ff", &mut self.frame_format_is_fd);
 
                 ui.input_text("Size##msg_edit", &mut self.size_buffer).build();
-                ui.input_text("Transmitter##msg_edit", &mut self.transmitter_buffer)
-                    .build();
+
+                // 发送节点从 Node List 下拉选择
+                if ui
+                    .combo_simple_string(
+                        "Transmitter##msg_edit",
+                        &mut self.transmitter_sel,
+                        &self.transmitter_options,
+                    )
+                {
+                    self.transmitter_buffer =
+                        self.transmitter_options[self.transmitter_sel].clone();
+                }
+
                 ui.input_text("Comment##msg_edit", &mut self.comment_buffer)
                     .build();
 

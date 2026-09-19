@@ -323,16 +323,14 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
     // 无选中行时禁用添加（目标消息未定），不做多余的文字提示
     {
         let _disabled = ui.begin_disabled_with_cond(window.selected.is_none());
-        if ui.button("+ Add Signal") {
-            if let Some((msg_id, _)) = window.selected.clone() {
-                if ctx.dbc.get_message(msg_id).is_some() {
+        if ui.button("+ Add Signal")
+            && let Some((msg_id, _)) = window.selected.clone()
+                && ctx.dbc.get_message(msg_id).is_some() {
                     let name = next_signal_name(ctx.dbc);
                     let sig = default_signal_named(&name);
                     ctx.dbc.add_signal(msg_id, &sig);
                     *ctx.is_dirty = true;
                 }
-            }
-        }
     }
     ui.same_line();
     if ui.button("Export CSV...") {
@@ -411,8 +409,8 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
                 ui.table_setup_scroll_freeze(1, 1);
                 ui.table_headers_row();
 
-                if let Some(mut sort_specs) = ui.table_get_sort_specs() {
-                    if sort_specs.is_dirty() {
+                if let Some(mut sort_specs) = ui.table_get_sort_specs()
+                    && sort_specs.is_dirty() {
                         if let Some(spec) = sort_specs.iter().next() {
                             window.sort_column = usize::from(spec.column_index) as u32;
                         window.sort_ascending =
@@ -420,7 +418,6 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
                         }
                         sort_specs.clear_dirty(ui);
                     }
-                }
 
                 for row in &rows {
                     let key = (row.msg_id, row.sig_name.clone());
@@ -458,16 +455,14 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
                     {
                         window.selected = Some(key.clone());
                     }
-                    if ui.is_item_hovered() && ui.is_mouse_double_clicked(MouseButton::Left) {
-                        if let Some(msg) = ctx.dbc.get_message(row.msg_id) {
-                            if let Some(sig) =
+                    if ui.is_item_hovered() && ui.is_mouse_double_clicked(MouseButton::Left)
+                        && let Some(msg) = ctx.dbc.get_message(row.msg_id)
+                            && let Some(sig) =
                                 msg.signals().iter().find(|s| s.name() == row.sig_name)
                             {
                                 ctx.signal_edit_dialog
                                     .open_from_signal(msg.message_id(), sig, ctx.file_path);
                             }
-                        }
-                    }
 
                     if let Some(_popup) = ui.begin_popup_context_item_with_label(Some(
                         &format!(
@@ -478,25 +473,24 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
                         if window.selected.as_ref() != Some(&key) {
                             window.selected = Some(key.clone());
                         }
-                        if ui.menu_item("Edit Signal...") {
-                            if let Some(msg) = ctx.dbc.get_message(row.msg_id) {
-                                if let Some(sig) =
+                        if ui.menu_item("Edit Signal...")
+                            && let Some(msg) = ctx.dbc.get_message(row.msg_id)
+                                && let Some(sig) =
                                     msg.signals().iter().find(|s| s.name() == row.sig_name)
                                 {
                                     ctx.signal_edit_dialog
                                         .open_from_signal(msg.message_id(), sig, ctx.file_path);
                                 }
-                            }
-                        }
                         if ui.menu_item("Edit Values...") {
                             window.values_edit_target = Some(key.clone());
                             window.values_edit_buffer = format_values(&row.values);
                         }
-                        if ui.menu_item("Edit Message...") {
-                            if let Some(msg) = ctx.dbc.get_message(row.msg_id) {
-                                ctx.edit_windows.push(MessageEditWindowState::open(msg, ctx.file_path));
+                        if ui.menu_item("Edit Message...")
+                            && let Some(msg) = ctx.dbc.get_message(row.msg_id) {
+                                let nodes = ctx.dbc.nodes().clone();
+                                ctx.edit_windows
+                                    .push(MessageEditWindowState::open(msg, ctx.file_path, nodes));
                             }
-                        }
                         ui.separator();
                         if ui.menu_item("Delete Signal") {
                             event = AllSignalsEvent::DeleteSignal {

@@ -5,7 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-09-19
+
+### Changed
+- **Export ARXML 从菜单栏移入 DBC 窗口的独立标签页**：导出动作随窗口走，不再依赖全局焦点状态（只打开 FIBEX 配置时菜单项也不会误置灰）
+- **Edit 菜单按焦点分发**：焦点在 FIBEX 窗口时，Undo / Redo / Copy / Paste / Delete / Add Frame 作用于 FIBEX 数据（此前编辑菜单只对 DBC 窗口生效）
+- **统一文件打开入口（Ctrl+O / Load File）**：一个入口即可打开所有支持的文件——`.dbc` / `.kcd` 进 DBC 编辑窗口，`.xml` / `.arxml`（含 FIBEX 格式的 XML，按文件内容自动识别格式）进 FIBEX 查看窗口；拖放与命令行走同一分流逻辑
+  - File > Import as DBC... 保留：将 ARXML/KCD 显式转换为可编辑的 DBC 模型
+- **所有表格启用横向滚动与列宽自适应**（ImGui 原生 `SCROLL_X` + `SIZING_FIXED FIT` 语义，非手写逻辑）
+  - 列宽自动适配当前内容（内容长则列宽随之变宽，过宽时出现表格水平滚动条）
+  - 注释 / Message / Node 等"长文本"列改为 `WidthStretch`，自动占满表格剩余宽度
+  - fibex 各表格移除手写的固定列宽，交由 ImGui 按内容计算
+
+### Added
+- **整合 roxy-fibex：支持 FIBEX XML 与 AUTOSAR ARXML (FlexRay) 数据库**
+  - 新增 FIBEX 查看窗口（五标签页）：帧（名称/长度/通道/时隙/基础周期/重复周期/启动/PDU 数）、PDU 列表、信号列表、ECU 列表、集群参数
+  - 打开 .fibex / .fx / .xml / .arxml 文件自动识别格式（FIBEX 3.0 / AUTOSAR R4.x），拖放与命令行同样支持
+  - File 菜单新增 Load FIBEX / ARXML、Save FIBEX / Save FIBEX As（按扩展名选择 FIBEX / ARXML 保存格式）
+  - FIBEX 编辑功能完整移植：帧 / PDU / 信号增删改与撤销重做、位布局、调度表视图
+
+### Fixed
+- **Ctrl+O 弹出两次文件选择对话框**：文件级快捷键（Ctrl+O / Ctrl+N / Ctrl+S）与 Edit 菜单的全局快捷键段重复注册，同一按键触发两次；现已去除重复，Ctrl+Z/Y/C/X/V 等 DBC 编辑快捷键按焦点分发
+- **ARXML 解析读不全的问题**：PDU 的信号映射元素标签为 `I-SIGNAL-TO-I-PDU-MAPPING`（此前只匹配容器名 `I-SIGNAL-TO-PDU-MAPPINGS`，导致一个信号都解析不到，PDU 信号数恒为 0）
+- 集成测试以 PowerTrain.arxml 断言解析结果与 Vector CANoe 一致：48 帧 / 24 PDU / 信号非空 / 时隙与重复周期正确
+
+### Changed
+- **ARXML 解析增强（对齐 Vector CANoe 显示内容）**
+  - PDU / 信号的发送与接收节点（Senders / Receivers）：从 ECU 端口 `I-PDU-PORT` / `I-SIGNAL-PORT` 的方向后缀（_Tx / _Rx）解析；PDU 列表与信号列表新增"发送 / 接收"列
+  - 物理值换算：解析 `COMPU-METHOD`（`COMPU-RATIONAL-COEFFS` 分子 [offset, factor]）填入信号因子 / 偏移；枚举 `COMPU-SCALE` 解析为信号值表
+
 ## [0.8.0] - 2026-09-18
+
+### Added
+- **Message 编辑的发送节点改为下拉选择**：Transmitter 从 Node List 的节点列表中选择（含 `Vector__XXX` 选项）；文件中的历史值不在节点列表时兜底追加显示，不会被静默丢弃
 
 ### Changed
 - **移除 DBC 窗口底部的文件信息行**，消除窗口右侧的滚动条：表格填满标签页全部剩余空间

@@ -10,6 +10,7 @@ pub enum DeleteTarget {
 }
 
 #[allow(dead_code)]
+#[derive(Default)]
 pub struct ConfirmDeleteDialog {
     pub show: bool,
     pub target: Option<DeleteTarget>,
@@ -17,74 +18,46 @@ pub struct ConfirmDeleteDialog {
     pub was_open: bool,
 }
 
-impl Default for ConfirmDeleteDialog {
-    fn default() -> Self {
-        Self {
-            show: false,
-            target: None,
-            display_name: String::new(),
-            was_open: false,
-        }
-    }
-}
 
+#[derive(Default)]
 pub struct CloseConfirmDialog {
     pub show: bool,
     pub dbc_window_index: Option<usize>,
 }
 
-impl Default for CloseConfirmDialog {
-    fn default() -> Self {
-        Self {
-            show: false,
-            dbc_window_index: None,
-        }
-    }
-}
 
 #[allow(dead_code)]
 /// 错误对话框状态
+#[derive(Default)]
 pub struct ErrorDialog {
     pub show: bool,
     pub message: String,
 }
 
-impl Default for ErrorDialog {
-    fn default() -> Self {
-        Self {
-            show: false,
-            message: String::new(),
-        }
-    }
-}
 
+#[derive(Default)]
 pub struct ValidationDialog {
     pub show: bool,
     pub issues: Vec<ValidationIssue>,
 }
 
-impl Default for ValidationDialog {
-    fn default() -> Self {
-        Self {
-            show: false,
-            issues: Vec::new(),
-        }
-    }
-}
 
 /// 剪贴板状态（用于复制/粘贴）
+#[derive(Default)]
 pub struct ClipboardState {
     pub copied_messages: Vec<EditableMessage>,
     pub copied_signals: Vec<EditableSignal>,
 }
 
-impl Default for ClipboardState {
-    fn default() -> Self {
-        Self {
-            copied_messages: Vec::new(),
-            copied_signals: Vec::new(),
-        }
-    }
+
+#[allow(dead_code)]
+/// 当前获得键盘焦点的窗口类型，Edit 菜单据此把操作分发到 DBC 或 FIBEX 窗口
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum FocusTarget {
+    #[default]
+    None,
+    Dbc,
+    Fibex,
 }
 
 #[allow(dead_code)]
@@ -102,6 +75,10 @@ pub struct UiState {
     pub close_confirm_dialog: CloseConfirmDialog,
     pub recent_files: Vec<String>,
     pub file_hovering: bool,
+    /// FIBEX / ARXML (FlexRay) 查看与编辑窗口（从 roxy-fibex 整合）
+    pub fibex: crate::fibex::state::FibexUiState,
+    /// 当前聚焦的窗口类型
+    pub focus: FocusTarget,
 }
 
 impl Default for UiState {
@@ -119,6 +96,8 @@ impl Default for UiState {
             close_confirm_dialog: CloseConfirmDialog::default(),
             recent_files: Vec::new(),
             file_hovering: false,
+            fibex: crate::fibex::state::FibexUiState::default(),
+            focus: FocusTarget::None,
         }
     }
 }
@@ -145,6 +124,65 @@ impl UiState {
     /// 检查剪贴板是否有内容
     pub fn has_clipboard_message(&self) -> bool {
         !self.clipboard.copied_messages.is_empty()
+    }
+
+    /// 统一的文件打开入口（Ctrl+O / 拖放 / 命令行 / 最近文件都走这里）：
+    /// - .dbc  → DBC 编辑窗口
+    /// - .kcd  → 导入为 DBC 编辑窗口
+    /// - .arxml / .xml / .fibex / .fx → FIBEX / AUTOSAR 查看窗口
+    ///
+    /// 已打开的同一文件（按规范化路径比较）只会聚焦已有窗口，不会重复打开。
+    pub fn open_path(&mut self, path: &std::path::Path) {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
+        // 统一为规范化的绝对路径：相对 / 绝对写法指向同一文件时只算一个
+        let path_str = normalize_path(&path.to_string_lossy());
+        let norm_path = std::path::Path::new(&path_str);
+
+        match ext.as_str() {
+            "dbc" => match DbcWindow::from_path(norm_path) {
+                Ok(dbc_window) => {
+                    self.add_recent_file(&path_str);
+                    self.dbc_windows.push(dbc_window);
+                    self.last_focused_dbc_index = Some(self.dbc_windows.len() - 1);
+                }
+                Err(e) => {
+                    self.error_dialog.message = format!("Failed to load file: {}", e);
+                    self.error_dialog.show = true;
+                }
+            },
+            "kcd" => match crate::import::import_file(norm_path) {
+                Ok(editable_dbc) => {
+                    let dbc_window = DbcWindow::new(&path_str, editable_dbc);
+                    self.add_recent_file(&path_str);
+                    self.dbc_windows.push(dbc_window);
+                    self.last_focused_dbc_index = Some(self.dbc_windows.len() - 1);
+                }
+                Err(e) => {
+                    self.error_dialog.message = format!("Import failed: {}", e);
+                    self.error_dialog.show = true;
+                }
+            },
+            // FIBEX XML / AUTOSAR ARXML（自动识别格式）→ FIBEX 查看窗口
+            "arxml" | "xml" | "fibex" | "fx" => {
+                self.fibex.open_file_path(norm_path);
+                if !self.fibex.error_dialog.show {
+                    // 打开成功才计入最近文件
+                    self.add_recent_file(&path_str);
+                    self.last_focused_dbc_index = None;
+                }
+            }
+            _ => {
+                self.error_dialog.message = format!(
+                    "Unsupported file type: {} (expected .dbc / .arxml / .xml / .kcd)",
+                    path_str
+                );
+                self.error_dialog.show = true;
+            }
+        }
     }
 
     /// 生成下一个可用的 Message ID：优先取 max+1 起的第一个空闲 ID，
@@ -185,12 +223,12 @@ impl UiState {
     }
 
     pub fn load_recent_files(&mut self) {
-        if let Some(path) = recent_files_path() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
+        if let Some(path) = recent_files_path()
+            && let Ok(content) = std::fs::read_to_string(&path) {
                 let mut seen: Vec<String> = Vec::new();
                 for line in content.lines().filter(|l| !l.is_empty()) {
                     let norm = normalize_path(line);
-                    if seen.iter().any(|p| *p == norm) {
+                    if seen.contains(&norm) {
                         continue;
                     }
                     seen.push(norm);
@@ -200,7 +238,6 @@ impl UiState {
                 }
                 self.recent_files = seen;
             }
-        }
     }
 
     pub fn save_recent_files(&self) {

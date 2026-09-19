@@ -33,6 +33,7 @@ pub fn render_ui(ui: &Ui, ui_state: &mut UiState) {
 
     menu::render_main_menu_bar(ui, ui_state);
     dbc_window::render_dbc_windows(ui, ui_state);
+    crate::fibex::ui::fibex_window::render_fibex_windows(ui, &mut ui_state.fibex);
 
     render_about_dialog(ui, ui_state);
     render_error_dialog(ui, ui_state);

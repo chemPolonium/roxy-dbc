@@ -1,0 +1,440 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fx:FIBEX VERSION="3.1.1"
+          xmlns:fx="http://www.asam.net/xml/fbx"
+          xmlns:ho="http://www.asam.net/xml"
+          xmlns:fr="http://www.asam.net/xml/fbx/flexray"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://www.asam.net/xml/fbx fibex.xsd">
+  <fx:PROJECT ID="sample-project">
+    <ho:SHORT-NAME>PowertrainSample</ho:SHORT-NAME>
+    <ho:DESC>roxy-fibex FlexRay sample (FIBEX 3.1.1)</ho:DESC>
+    <fx:COMPANY-INFO-SPECIFICATIONS>
+      <ho:COMPANY-INFO ID="company-roxy">
+        <ho:SHORT-NAME>Roxy</ho:SHORT-NAME>
+      </ho:COMPANY-INFO>
+    </fx:COMPANY-INFO-SPECIFICATIONS>
+    <fx:CONTROLLERS>
+      <ho:CONTROLLER ID="ecu-eng">
+        <ho:SHORT-NAME>EngECU</ho:SHORT-NAME>
+        <ho:DESC>Engine controller</ho:DESC>
+      </ho:CONTROLLER>
+      <ho:CONTROLLER ID="ecu-trans">
+        <ho:SHORT-NAME>TransECU</ho:SHORT-NAME>
+        <ho:DESC>Transmission controller</ho:DESC>
+      </ho:CONTROLLER>
+      <ho:CONTROLLER ID="ecu-chassis">
+        <ho:SHORT-NAME>ChassisECU</ho:SHORT-NAME>
+      </ho:CONTROLLER>
+      <ho:CONTROLLER ID="ecu-dash">
+        <ho:SHORT-NAME>DashECU</ho:SHORT-NAME>
+      </ho:CONTROLLER>
+    </fx:CONTROLLERS>
+    <fx:FEATURES>
+      <fx:PROTOCOLS>
+        <fx:PROTOCOL VERSION="2005">FRING</fx:PROTOCOL>
+      </fx:PROTOCOLS>
+    </fx:FEATURES>
+  </fx:PROJECT>
+  <fx:ELEMENTS>
+    <fx:CLUSTER ID="cluster-pt">
+      <ho:SHORT-NAME>PowertrainCluster</ho:SHORT-NAME>
+      <fx:PROTOCOL VERSION="2005">FRING</fx:PROTOCOL>
+      <fx:SPEED>10000</fx:SPEED>
+      <fx:COMMUNICATION-PATTERN>
+        <fx:CYCLE>MULTIPLIED</fx:CYCLE>
+        <fx:CYCLE-TIME-ms>5</fx:CYCLE-TIME-ms>
+      </fx:COMMUNICATION-PATTERN>
+      <fx:COLDSTART-ATTEMPTS>8</fx:COLDSTART-ATTEMPTS>
+      <fx:ACTION-POINT-OFFSET>3</fx:ACTION-POINT-OFFSET>
+      <fx:MINISLOT-ACTION-POINT-OFFSET>2</fx:MINISLOT-ACTION-POINT-OFFSET>
+      <fx:DYNAMIC-SLOT-IDLE-PHASE>1</fx:DYNAMIC-SLOT-IDLE-PHASE>
+      <fx:MACROTICK-DURATION>0.005</fx:MACROTICK-DURATION>
+      <fx:MINOR-VERSION>3</fx:MINOR-VERSION>
+      <fx:NETWORK-IDLE-TIME>75</fx:NETWORK-IDLE-TIME>
+      <fx:NUMBER-OF-MINISLOTS>292</fx:NUMBER-OF-MINISLOTS>
+      <fx:NUMBER-OF-STATIC-SLOTS>10</fx:NUMBER-OF-STATIC-SLOTS>
+      <fx:MINISLOT-DURATION>9</fx:MINISLOT-DURATION>
+      <fx:STATIC-SLOT-DURATION>67</fx:STATIC-SLOT-DURATION>
+      <fx:SYMBOL-WINDOW>1</fx:SYMBOL-WINDOW>
+      <fx:SYMBOL-WINDOW-IDLE-PHASE>1</fx:SYMBOL-WINDOW-IDLE-PHASE>
+      <fx:OFFSET-CORRECTION-START>233</fx:OFFSET-CORRECTION-START>
+      <fx:CHANNELS>
+        <fx:CHANNEL ID="channel-a">
+          <ho:SHORT-NAME>ChannelA</ho:SHORT-NAME>
+          <fx:STATIC-PART>
+            <fx:SLOTS>
+              <fx:SLOT ID="slot-a-1">
+                <ho:SHORT-NAME>StaticSlot1</ho:SHORT-NAME>
+                <fx:SLOT-ID>1</fx:SLOT-ID>
+                <fx:FRAME-TRIGGERINGS>
+                  <fx:FRAME-TRIGGERING ID="ft-a-engine">
+                    <fx:TIMINGS>
+                      <fx:CYCLE-REPETITION>1</fx:CYCLE-REPETITION>
+                      <fx:BASE-CYCLE>0</fx:BASE-CYCLE>
+                    </fx:TIMINGS>
+                    <fx:FRAME-REF REF-TYPE="fx:FRAME-TYPE" ID-REF="frame-engine"/>
+                  </fx:FRAME-TRIGGERING>
+                </fx:FRAME-TRIGGERINGS>
+              </fx:SLOT>
+              <fx:SLOT ID="slot-a-2">
+                <ho:SHORT-NAME>StaticSlot2</ho:SHORT-NAME>
+                <fx:SLOT-ID>2</fx:SLOT-ID>
+                <fx:FRAME-TRIGGERINGS>
+                  <fx:FRAME-TRIGGERING ID="ft-a-trans">
+                    <fx:TIMINGS>
+                      <fx:CYCLE-REPETITION>1</fx:CYCLE-REPETITION>
+                      <fx:BASE-CYCLE>0</fx:BASE-CYCLE>
+                    </fx:TIMINGS>
+                    <fx:FRAME-REF REF-TYPE="fx:FRAME-TYPE" ID-REF="frame-trans"/>
+                  </fx:FRAME-TRIGGERING>
+                </fx:FRAME-TRIGGERINGS>
+              </fx:SLOT>
+              <fx:SLOT ID="slot-a-4">
+                <ho:SHORT-NAME>StaticSlot4</ho:SHORT-NAME>
+                <fx:SLOT-ID>4</fx:SLOT-ID>
+                <fx:FRAME-TRIGGERINGS>
+                  <fx:FRAME-TRIGGERING ID="ft-a-dash">
+                    <fx:TIMINGS>
+                      <fx:CYCLE-REPETITION>8</fx:CYCLE-REPETITION>
+                      <fx:BASE-CYCLE>0</fx:BASE-CYCLE>
+                    </fx:TIMINGS>
+                    <fx:FRAME-REF REF-TYPE="fx:FRAME-TYPE" ID-REF="frame-dash"/>
+                  </fx:FRAME-TRIGGERING>
+                </fx:FRAME-TRIGGERINGS>
+              </fx:SLOT>
+            </fx:SLOTS>
+          </fx:STATIC-PART>
+        </fx:CHANNEL>
+        <fx:CHANNEL ID="channel-b">
+          <ho:SHORT-NAME>ChannelB</ho:SHORT-NAME>
+          <fx:STATIC-PART>
+            <fx:SLOTS>
+              <fx:SLOT ID="slot-b-1">
+                <ho:SHORT-NAME>StaticSlot1</ho:SHORT-NAME>
+                <fx:SLOT-ID>1</fx:SLOT-ID>
+                <fx:FRAME-TRIGGERINGS>
+                  <fx:FRAME-TRIGGERING ID="ft-b-engine">
+                    <fx:TIMINGS>
+                      <fx:CYCLE-REPETITION>1</fx:CYCLE-REPETITION>
+                      <fx:BASE-CYCLE>0</fx:BASE-CYCLE>
+                    </fx:TIMINGS>
+                    <fx:FRAME-REF REF-TYPE="fx:FRAME-TYPE" ID-REF="frame-engine"/>
+                  </fx:FRAME-TRIGGERING>
+                </fx:FRAME-TRIGGERINGS>
+              </fx:SLOT>
+              <fx:SLOT ID="slot-b-3">
+                <ho:SHORT-NAME>StaticSlot3</ho:SHORT-NAME>
+                <fx:SLOT-ID>3</fx:SLOT-ID>
+                <fx:FRAME-TRIGGERINGS>
+                  <fx:FRAME-TRIGGERING ID="ft-b-chassis">
+                    <fx:TIMINGS>
+                      <fx:CYCLE-REPETITION>4</fx:CYCLE-REPETITION>
+                      <fx:BASE-CYCLE>0</fx:BASE-CYCLE>
+                    </fx:TIMINGS>
+                    <fx:FRAME-REF REF-TYPE="fx:FRAME-TYPE" ID-REF="frame-chassis"/>
+                  </fx:FRAME-TRIGGERING>
+                </fx:FRAME-TRIGGERINGS>
+              </fx:SLOT>
+              <fx:SLOT ID="slot-b-4">
+                <ho:SHORT-NAME>StaticSlot4</ho:SHORT-NAME>
+                <fx:SLOT-ID>4</fx:SLOT-ID>
+                <fx:FRAME-TRIGGERINGS>
+                  <fx:FRAME-TRIGGERING ID="ft-b-dash">
+                    <fx:TIMINGS>
+                      <fx:CYCLE-REPETITION>8</fx:CYCLE-REPETITION>
+                      <fx:BASE-CYCLE>0</fx:BASE-CYCLE>
+                    </fx:TIMINGS>
+                    <fx:FRAME-REF REF-TYPE="fx:FRAME-TYPE" ID-REF="frame-dash"/>
+                  </fx:FRAME-TRIGGERING>
+                </fx:FRAME-TRIGGERINGS>
+              </fx:SLOT>
+            </fx:SLOTS>
+          </fx:STATIC-PART>
+        </fx:CHANNEL>
+      </fx:CHANNELS>
+    </fx:CLUSTER>
+    <ho:CODING ID="coding-enginespeed">
+      <ho:SHORT-NAME>EngineSpeed_Coding</ho:SHORT-NAME>
+      <ho:CODED-TYPE>
+        <ho:BIT-LENGTH>16</ho:BIT-LENGTH>
+        <ho:SIGN-CONVENTION>UNSIGNED</ho:SIGN-CONVENTION>
+      </ho:CODED-TYPE>
+      <ho:COMPU-METHOD>
+        <ho:SCALES>
+          <ho:SCALE>
+            <ho:LOWER-LIMIT>0</ho:LOWER-LIMIT>
+            <ho:UPPER-LIMIT>16383.75</ho:UPPER-LIMIT>
+            <ho:COMPU>
+              <ho:COMPU-RATIONAL-COEFFS>
+                <ho:COMPU-NUMERATOR>
+                  <ho:V>0</ho:V>
+                  <ho:V>0.25</ho:V>
+                </ho:COMPU-NUMERATOR>
+                <ho:COMPU-DENOMINATOR>
+                  <ho:V>1</ho:V>
+                </ho:COMPU-DENOMINATOR>
+              </ho:COMPU-RATIONAL-COEFFS>
+            </ho:COMPU>
+            <ho:FUNCTION-CHANNEL>
+              <ho:UNIT>
+                <ho:DISPLAY-NAME>rpm</ho:DISPLAY-NAME>
+              </ho:UNIT>
+            </ho:FUNCTION-CHANNEL>
+          </ho:SCALE>
+        </ho:SCALES>
+      </ho:COMPU-METHOD>
+    </ho:CODING>
+    <ho:CODING ID="coding-coolanttemp">
+      <ho:SHORT-NAME>CoolantTemp_Coding</ho:SHORT-NAME>
+      <ho:CODED-TYPE>
+        <ho:BIT-LENGTH>8</ho:BIT-LENGTH>
+        <ho:SIGN-CONVENTION>UNSIGNED</ho:SIGN-CONVENTION>
+      </ho:CODED-TYPE>
+      <ho:COMPU-METHOD>
+        <ho:SCALES>
+          <ho:SCALE>
+            <ho:LOWER-LIMIT>-40</ho:LOWER-LIMIT>
+            <ho:UPPER-LIMIT>215</ho:UPPER-LIMIT>
+            <ho:COMPU>
+              <ho:COMPU-RATIONAL-COEFFS>
+                <ho:COMPU-NUMERATOR>
+                  <ho:V>-40</ho:V>
+                  <ho:V>1</ho:V>
+                </ho:COMPU-NUMERATOR>
+                <ho:COMPU-DENOMINATOR>
+                  <ho:V>1</ho:V>
+                </ho:COMPU-DENOMINATOR>
+              </ho:COMPU-RATIONAL-COEFFS>
+            </ho:COMPU>
+            <ho:FUNCTION-CHANNEL>
+              <ho:UNIT>
+                <ho:DISPLAY-NAME>DegC</ho:DISPLAY-NAME>
+              </ho:UNIT>
+            </ho:FUNCTION-CHANNEL>
+          </ho:SCALE>
+        </ho:SCALES>
+      </ho:COMPU-METHOD>
+    </ho:CODING>
+    <ho:CODING ID="coding-statusbits">
+      <ho:SHORT-NAME>Status_Coding</ho:SHORT-NAME>
+      <ho:CODED-TYPE>
+        <ho:BIT-LENGTH>8</ho:BIT-LENGTH>
+        <ho:SIGN-CONVENTION>UNSIGNED</ho:SIGN-CONVENTION>
+      </ho:CODED-TYPE>
+      <ho:COMPU-METHOD>
+        <ho:SCALES>
+          <ho:SCALE>
+            <ho:LOWER-LIMIT>0</ho:LOWER-LIMIT>
+            <ho:UPPER-LIMIT>0</ho:UPPER-LIMIT>
+            <ho:COMPU>
+              <ho:COMPU-CONST>
+                <ho:VT>OK</ho:VT>
+              </ho:COMPU-CONST>
+            </ho:COMPU>
+          </ho:SCALE>
+          <ho:SCALE>
+            <ho:LOWER-LIMIT>1</ho:LOWER-LIMIT>
+            <ho:UPPER-LIMIT>1</ho:UPPER-LIMIT>
+            <ho:COMPU>
+              <ho:COMPU-CONST>
+                <ho:VT>Warning</ho:VT>
+              </ho:COMPU-CONST>
+            </ho:COMPU>
+          </ho:SCALE>
+          <ho:SCALE>
+            <ho:LOWER-LIMIT>2</ho:LOWER-LIMIT>
+            <ho:UPPER-LIMIT>2</ho:UPPER-LIMIT>
+            <ho:COMPU>
+              <ho:COMPU-CONST>
+                <ho:VT>Error</ho:VT>
+              </ho:COMPU-CONST>
+            </ho:COMPU>
+          </ho:SCALE>
+        </ho:SCALES>
+      </ho:COMPU-METHOD>
+    </ho:CODING>
+    <ho:SIGNAL ID="sig-enginespeed">
+      <ho:SHORT-NAME>EngineSpeed</ho:SHORT-NAME>
+      <ho:DESC>Engine speed measured at crankshaft</ho:DESC>
+      <ho:CODING-REF REF-TYPE="ho:CODING-TYPE" ID-REF="coding-enginespeed"/>
+    </ho:SIGNAL>
+    <ho:SIGNAL ID="sig-coolanttemp">
+      <ho:SHORT-NAME>CoolantTemp</ho:SHORT-NAME>
+      <ho:CODING-REF REF-TYPE="ho:CODING-TYPE" ID-REF="coding-coolanttemp"/>
+    </ho:SIGNAL>
+    <ho:SIGNAL ID="sig-throttlepos">
+      <ho:SHORT-NAME>ThrottlePos</ho:SHORT-NAME>
+    </ho:SIGNAL>
+    <ho:SIGNAL ID="sig-gearengaged">
+      <ho:SHORT-NAME>GearEngaged</ho:SHORT-NAME>
+    </ho:SIGNAL>
+    <ho:SIGNAL ID="sig-transtemp">
+      <ho:SHORT-NAME>TransTemp</ho:SHORT-NAME>
+    </ho:SIGNAL>
+    <ho:SIGNAL ID="sig-torquereq">
+      <ho:SHORT-NAME>TorqueReq</ho:SHORT-NAME>
+    </ho:SIGNAL>
+    <ho:SIGNAL ID="sig-wheelfl">
+      <ho:SHORT-NAME>WheelSpeedFL</ho:SHORT-NAME>
+    </ho:SIGNAL>
+    <ho:SIGNAL ID="sig-wheelfr">
+      <ho:SHORT-NAME>WheelSpeedFR</ho:SHORT-NAME>
+    </ho:SIGNAL>
+    <ho:SIGNAL ID="sig-yawrate">
+      <ho:SHORT-NAME>YawRate</ho:SHORT-NAME>
+    </ho:SIGNAL>
+    <ho:SIGNAL ID="sig-status">
+      <ho:SHORT-NAME>ChassisStatus</ho:SHORT-NAME>
+      <ho:CODING-REF REF-TYPE="ho:CODING-TYPE" ID-REF="coding-statusbits"/>
+    </ho:SIGNAL>
+    <ho:SIGNAL ID="sig-odometer">
+      <ho:SHORT-NAME>Odometer</ho:SHORT-NAME>
+    </ho:SIGNAL>
+    <ho:SIGNAL ID="sig-fuellevel">
+      <ho:SHORT-NAME>FuelLevel</ho:SHORT-NAME>
+    </ho:SIGNAL>
+    <fx:PDU ID="pdu-eng">
+      <ho:SHORT-NAME>Eng_PDU</ho:SHORT-NAME>
+      <fx:PDU-TYPE>STATIC-PDU</fx:PDU-TYPE>
+      <fx:PDU-LENGTH>4</fx:PDU-LENGTH>
+      <fx:SIGNAL-INSTANCES>
+        <fx:SIGNAL-INSTANCE ID="si-enginespeed">
+          <fx:SIGNAL-REF REF-TYPE="ho:SIGNAL-TYPE" ID-REF="sig-enginespeed"/>
+          <fx:START-BIT-POSITION>0</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:SIGNAL-INSTANCE>
+        <fx:SIGNAL-INSTANCE ID="si-coolanttemp">
+          <fx:SIGNAL-REF REF-TYPE="ho:SIGNAL-TYPE" ID-REF="sig-coolanttemp"/>
+          <fx:START-BIT-POSITION>16</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:SIGNAL-INSTANCE>
+        <fx:SIGNAL-INSTANCE ID="si-throttlepos">
+          <fx:SIGNAL-REF REF-TYPE="ho:SIGNAL-TYPE" ID-REF="sig-throttlepos"/>
+          <fx:START-BIT-POSITION>24</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:SIGNAL-INSTANCE>
+      </fx:SIGNAL-INSTANCES>
+    </fx:PDU>
+    <fx:PDU ID="pdu-trans">
+      <ho:SHORT-NAME>Trans_PDU</ho:SHORT-NAME>
+      <fx:PDU-TYPE>STATIC-PDU</fx:PDU-TYPE>
+      <fx:PDU-LENGTH>4</fx:PDU-LENGTH>
+      <fx:SIGNAL-INSTANCES>
+        <fx:SIGNAL-INSTANCE ID="si-gearengaged">
+          <fx:SIGNAL-REF REF-TYPE="ho:SIGNAL-TYPE" ID-REF="sig-gearengaged"/>
+          <fx:START-BIT-POSITION>0</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:SIGNAL-INSTANCE>
+        <fx:SIGNAL-INSTANCE ID="si-transtemp">
+          <fx:SIGNAL-REF REF-TYPE="ho:SIGNAL-TYPE" ID-REF="sig-transtemp"/>
+          <fx:START-BIT-POSITION>8</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:SIGNAL-INSTANCE>
+        <fx:SIGNAL-INSTANCE ID="si-torquereq">
+          <fx:SIGNAL-REF REF-TYPE="ho:SIGNAL-TYPE" ID-REF="sig-torquereq"/>
+          <fx:START-BIT-POSITION>16</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:SIGNAL-INSTANCE>
+      </fx:SIGNAL-INSTANCES>
+    </fx:PDU>
+    <fx:PDU ID="pdu-chassis">
+      <ho:SHORT-NAME>Chassis_PDU</ho:SHORT-NAME>
+      <fx:PDU-TYPE>STATIC-PDU</fx:PDU-TYPE>
+      <fx:PDU-LENGTH>8</fx:PDU-LENGTH>
+      <fx:SIGNAL-INSTANCES>
+        <fx:SIGNAL-INSTANCE ID="si-wheelfl">
+          <fx:SIGNAL-REF REF-TYPE="ho:SIGNAL-TYPE" ID-REF="sig-wheelfl"/>
+          <fx:START-BIT-POSITION>0</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:SIGNAL-INSTANCE>
+        <fx:SIGNAL-INSTANCE ID="si-wheelfr">
+          <fx:SIGNAL-REF REF-TYPE="ho:SIGNAL-TYPE" ID-REF="sig-wheelfr"/>
+          <fx:START-BIT-POSITION>16</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:SIGNAL-INSTANCE>
+        <fx:SIGNAL-INSTANCE ID="si-yawrate">
+          <fx:SIGNAL-REF REF-TYPE="ho:SIGNAL-TYPE" ID-REF="sig-yawrate"/>
+          <fx:START-BIT-POSITION>32</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:SIGNAL-INSTANCE>
+        <fx:SIGNAL-INSTANCE ID="si-status">
+          <fx:SIGNAL-REF REF-TYPE="ho:SIGNAL-TYPE" ID-REF="sig-status"/>
+          <fx:START-BIT-POSITION>48</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:SIGNAL-INSTANCE>
+      </fx:SIGNAL-INSTANCES>
+    </fx:PDU>
+    <fx:PDU ID="pdu-dash">
+      <ho:SHORT-NAME>Dash_PDU</ho:SHORT-NAME>
+      <fx:PDU-TYPE>STATIC-PDU</fx:PDU-TYPE>
+      <fx:PDU-LENGTH>4</fx:PDU-LENGTH>
+      <fx:SIGNAL-INSTANCES>
+        <fx:SIGNAL-INSTANCE ID="si-odometer">
+          <fx:SIGNAL-REF REF-TYPE="ho:SIGNAL-TYPE" ID-REF="sig-odometer"/>
+          <fx:START-BIT-POSITION>0</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:SIGNAL-INSTANCE>
+        <fx:SIGNAL-INSTANCE ID="si-fuellevel">
+          <fx:SIGNAL-REF REF-TYPE="ho:SIGNAL-TYPE" ID-REF="sig-fuellevel"/>
+          <fx:START-BIT-POSITION>24</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:SIGNAL-INSTANCE>
+      </fx:SIGNAL-INSTANCES>
+    </fx:PDU>
+    <fx:FRAME ID="frame-engine">
+      <ho:SHORT-NAME>EngineData</ho:SHORT-NAME>
+      <ho:DESC>Engine status, transmitted every cycle</ho:DESC>
+      <fx:FRAME-LENGTH>8</fx:FRAME-LENGTH>
+      <fx:PAYLOAD-PREAMBLE>false</fx:PAYLOAD-PREAMBLE>
+      <fx:PDU-MAPPINGS>
+        <fx:PDU-MAPPING ID="map-engine-0">
+          <fx:PDU-REF REF-TYPE="fx:PDU-TYPE" ID-REF="pdu-eng"/>
+          <fx:START-BIT-POSITION>0</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:PDU-MAPPING>
+      </fx:PDU-MAPPINGS>
+    </fx:FRAME>
+    <fx:FRAME ID="frame-trans">
+      <ho:SHORT-NAME>TransmissionData</ho:SHORT-NAME>
+      <fx:FRAME-LENGTH>8</fx:FRAME-LENGTH>
+      <fx:PAYLOAD-PREAMBLE>false</fx:PAYLOAD-PREAMBLE>
+      <fx:PDU-MAPPINGS>
+        <fx:PDU-MAPPING ID="map-trans-0">
+          <fx:PDU-REF REF-TYPE="fx:PDU-TYPE" ID-REF="pdu-trans"/>
+          <fx:START-BIT-POSITION>0</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:PDU-MAPPING>
+      </fx:PDU-MAPPINGS>
+    </fx:FRAME>
+    <fx:FRAME ID="frame-chassis">
+      <ho:SHORT-NAME>ChassisStatus</ho:SHORT-NAME>
+      <fx:FRAME-LENGTH>12</fx:FRAME-LENGTH>
+      <fx:PAYLOAD-PREAMBLE>false</fx:PAYLOAD-PREAMBLE>
+      <fx:PDU-MAPPINGS>
+        <fx:PDU-MAPPING ID="map-chassis-0">
+          <fx:PDU-REF REF-TYPE="fx:PDU-TYPE" ID-REF="pdu-chassis"/>
+          <fx:START-BIT-POSITION>0</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:PDU-MAPPING>
+      </fx:PDU-MAPPINGS>
+    </fx:FRAME>
+    <fx:FRAME ID="frame-dash">
+      <ho:SHORT-NAME>DashInfo</ho:SHORT-NAME>
+      <ho:DESC>Multi-PDU frame: reuses Eng_PDU at offset 0</ho:DESC>
+      <fx:FRAME-LENGTH>8</fx:FRAME-LENGTH>
+      <fx:PAYLOAD-PREAMBLE>false</fx:PAYLOAD-PREAMBLE>
+      <fx:PDU-MAPPINGS>
+        <fx:PDU-MAPPING ID="map-dash-0">
+          <fx:PDU-REF REF-TYPE="fx:PDU-TYPE" ID-REF="pdu-eng"/>
+          <fx:START-BIT-POSITION>0</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:PDU-MAPPING>
+        <fx:PDU-MAPPING ID="map-dash-4">
+          <fx:PDU-REF REF-TYPE="fx:PDU-TYPE" ID-REF="pdu-dash"/>
+          <fx:START-BIT-POSITION>4</fx:START-BIT-POSITION>
+          <fx:IS-HIGH-LOW-BYTE-ORDER>true</fx:IS-HIGH-LOW-BYTE-ORDER>
+        </fx:PDU-MAPPING>
+      </fx:PDU-MAPPINGS>
+    </fx:FRAME>
+  </fx:ELEMENTS>
+</fx:FIBEX>

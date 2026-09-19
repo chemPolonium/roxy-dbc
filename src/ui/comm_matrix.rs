@@ -79,7 +79,7 @@ pub fn render_comm_matrix(ui: &Ui, dbc: &mut EditableDbc, is_dirty: &mut bool) {
                     .iter()
                     .filter(|s| s.receivers().iter().any(|r| r == node))
                     .count();
-                if node == &msg.transmitter() {
+                if node == msg.transmitter() {
                     marks.push((node_idx, Mark::Tx));
                 } else if total > 0 && received == total {
                     marks.push((node_idx, Mark::Rx));
@@ -106,14 +106,13 @@ pub fn render_comm_matrix(ui: &Ui, dbc: &mut EditableDbc, is_dirty: &mut bool) {
                 };
                 let cell_start = ui.cursor_screen_pos();
                 ui.text_colored(color, label);
-                if let Mark::RxPartial { received, total } = mark {
-                    if ui.is_item_hovered() {
-                        ui.set_tooltip(&format!(
+                if let Mark::RxPartial { received, total } = mark
+                    && ui.is_item_hovered() {
+                        ui.set_tooltip(format!(
                             "Receives {} of {} signals (partial)",
                             received, total
                         ));
                     }
-                }
 
                 // 整格点击区：消息行点击 = 切换发送节点
                 ui.set_cursor_screen_pos(cell_start);

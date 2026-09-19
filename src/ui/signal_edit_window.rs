@@ -100,32 +100,30 @@ impl SignalEditDialog {
             let current = dbc.get_message(msg_id)
                 .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
                 .map(|s| s.start_bit());
-            if let Some(current) = current {
-                if start_bit != current {
+            if let Some(current) = current
+                && start_bit != current {
                     let name = if change_count > 0 { new_name } else { old_name };
                     dbc.set_signal_start_bit(msg_id, name, start_bit);
                     change_count += 1;
                 }
-            }
         }
 
         if let Ok(size) = self.size_buffer.trim().parse::<u64>() {
             let current = dbc.get_message(msg_id)
                 .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
                 .map(|s| s.signal_size());
-            if let Some(current) = current {
-                if size != current {
+            if let Some(current) = current
+                && size != current {
                     let name = if change_count > 0 { new_name } else { old_name };
                     dbc.set_signal_size(msg_id, name, size);
                     change_count += 1;
                 }
-            }
         }
 
         {
             let current_bo = dbc.get_message(msg_id)
                 .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
-                .map(|s| s.byte_order().clone());
+                .map(|s| *s.byte_order());
             if let Some(current_bo) = current_bo {
                 let new_bo = if self.byte_order_is_little {
                     ByteOrder::LittleEndian
@@ -143,7 +141,7 @@ impl SignalEditDialog {
         {
             let current_vt = dbc.get_message(msg_id)
                 .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
-                .map(|s| s.value_type().clone());
+                .map(|s| *s.value_type());
             if let Some(current_vt) = current_vt {
                 let new_vt = if self.signed {
                     ValueType::Signed
@@ -162,52 +160,48 @@ impl SignalEditDialog {
             let current = dbc.get_message(msg_id)
                 .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
                 .map(|s| s.factor());
-            if let Some(current) = current {
-                if (factor - current).abs() > f64::EPSILON {
+            if let Some(current) = current
+                && (factor - current).abs() > f64::EPSILON {
                     let name = if change_count > 0 { new_name } else { old_name };
                     dbc.set_signal_factor(msg_id, name, factor);
                     change_count += 1;
                 }
-            }
         }
 
         if let Ok(offset) = self.offset_buffer.trim().parse::<f64>() {
             let current = dbc.get_message(msg_id)
                 .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
                 .map(|s| s.offset());
-            if let Some(current) = current {
-                if (offset - current).abs() > f64::EPSILON {
+            if let Some(current) = current
+                && (offset - current).abs() > f64::EPSILON {
                     let name = if change_count > 0 { new_name } else { old_name };
                     dbc.set_signal_offset(msg_id, name, offset);
                     change_count += 1;
                 }
-            }
         }
 
         if let Ok(min) = self.min_buffer.trim().parse::<f64>() {
             let current = dbc.get_message(msg_id)
                 .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
                 .map(|s| s.min());
-            if let Some(current) = current {
-                if (min - current).abs() > f64::EPSILON {
+            if let Some(current) = current
+                && (min - current).abs() > f64::EPSILON {
                     let name = if change_count > 0 { new_name } else { old_name };
                     dbc.set_signal_min(msg_id, name, min);
                     change_count += 1;
                 }
-            }
         }
 
         if let Ok(max) = self.max_buffer.trim().parse::<f64>() {
             let current = dbc.get_message(msg_id)
                 .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
                 .map(|s| s.max());
-            if let Some(current) = current {
-                if (max - current).abs() > f64::EPSILON {
+            if let Some(current) = current
+                && (max - current).abs() > f64::EPSILON {
                     let name = if change_count > 0 { new_name } else { old_name };
                     dbc.set_signal_max(msg_id, name, max);
                     change_count += 1;
                 }
-            }
         }
 
         let new_unit = self.unit_buffer.trim();
@@ -215,13 +209,12 @@ impl SignalEditDialog {
             let current = dbc.get_message(msg_id)
                 .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
                 .map(|s| s.unit().to_string());
-            if let Some(current) = current {
-                if new_unit != current {
+            if let Some(current) = current
+                && new_unit != current {
                     let name = if change_count > 0 { new_name } else { old_name };
                     dbc.set_signal_unit(msg_id, name, new_unit);
                     change_count += 1;
                 }
-            }
         }
 
         // 接收节点：逗号分隔
@@ -235,26 +228,24 @@ impl SignalEditDialog {
             let current = dbc.get_message(msg_id)
                 .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
                 .map(|s| s.receivers().clone());
-            if let Some(current) = current {
-                if new_receivers != current {
+            if let Some(current) = current
+                && new_receivers != current {
                     let name = if change_count > 0 { new_name } else { old_name };
                     dbc.set_signal_receivers(msg_id, name, new_receivers);
                     change_count += 1;
                 }
-            }
         }
 
         {
             let current = dbc.get_message(msg_id)
                 .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
                 .map(|s| s.comment().to_string());
-            if let Some(current) = current {
-                if self.comment_buffer != current {
+            if let Some(current) = current
+                && self.comment_buffer != current {
                     let name = if change_count > 0 { new_name } else { old_name };
                     dbc.set_signal_comment(msg_id, name, &self.comment_buffer);
                     change_count += 1;
                 }
-            }
         }
 
         {
@@ -269,13 +260,12 @@ impl SignalEditDialog {
             let current = dbc.get_message(msg_id)
                 .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
                 .map(|s| s.value_descriptions().to_vec());
-            if let Some(current) = current {
-                if new_descs != current {
+            if let Some(current) = current
+                && new_descs != current {
                     let name = if change_count > 0 { new_name } else { old_name };
                     dbc.set_signal_value_descriptions(msg_id, name, new_descs);
                     change_count += 1;
                 }
-            }
         }
 
         if change_count > 1 {
@@ -346,21 +336,20 @@ impl SignalEditDialog {
                 self.val_desc_buffer.push((String::new(), String::new()));
             }
             ui.same_line();
-            if ui.button("Import from clipboard##val_desc") {
-                if let Some(text) = read_clipboard_text() {
+            if ui.button("Import from clipboard##val_desc")
+                && let Some(text) = read_clipboard_text() {
                     let parsed = parse_val_desc_text(&text);
                     self.val_desc_buffer.extend(parsed);
                 }
-            }
 
             let mut to_remove = None;
             for (i, (val, desc)) in self.val_desc_buffer.iter_mut().enumerate() {
                 let invalid = val.trim().parse::<i64>().is_err();
-                ui.input_text(&format!("Value##val_desc_{}", i), val).build();
+                ui.input_text(format!("Value##val_desc_{}", i), val).build();
                 ui.same_line();
-                ui.input_text(&format!("Description##val_desc_{}", i), desc).build();
+                ui.input_text(format!("Description##val_desc_{}", i), desc).build();
                 ui.same_line();
-                if ui.button(&format!("X##val_desc_rm_{}", i)) {
+                if ui.button(format!("X##val_desc_rm_{}", i)) {
                     to_remove = Some(i);
                 }
                 if invalid {

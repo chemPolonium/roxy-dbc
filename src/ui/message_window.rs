@@ -178,6 +178,7 @@ impl MessageWindow {
                         TableFlags::RESIZABLE
                             | TableFlags::BORDERS
                             | TableFlags::ROW_BG
+                            | TableFlags::SCROLL_X
                             | TableFlags::SCROLL_Y,
                     )
                     .sizing_policy(dear_imgui_rs::TableSizingPolicy::FixedFit),
@@ -195,7 +196,12 @@ impl MessageWindow {
                 ui.table_setup_column("Max", dear_imgui_rs::TableColumnFlags::NONE, None);
                 ui.table_setup_column("Unit", dear_imgui_rs::TableColumnFlags::NONE, None);
                 ui.table_setup_column("Receivers", dear_imgui_rs::TableColumnFlags::NONE, None);
-                ui.table_setup_column("Comment", dear_imgui_rs::TableColumnFlags::NONE, None);
+                // 注释列 Stretch：占满表格剩余宽度
+                ui.table_setup_column(
+                    "Comment",
+                    dear_imgui_rs::TableColumnFlags::NONE,
+                    Some(dear_imgui_rs::TableColumnWidth::Stretch(1.0)),
+                );
                 // 冻结标题行，滚动时表头保持可见
                 ui.table_setup_scroll_freeze(0, 1);
                 ui.table_headers_row();

@@ -93,6 +93,17 @@ impl AppWindow {
             .io_mut()
             .set_config_windows_move_from_title_bar_only(true);
 
+        // 窗口不透明：默认 94% 的背景透明度会透出 Dockspace 底色，观感发灰
+        {
+            use dear_imgui_rs::StyleColor;
+            let style = context.style_mut();
+            for color in [StyleColor::WindowBg, StyleColor::PopupBg] {
+                let mut c = style.color(color);
+                c[3] = 1.0;
+                style.set_color(color, c);
+            }
+        }
+
         let mut platform = WinitPlatform::new(&mut context).expect("create winit platform");
         platform
             .attach_window(

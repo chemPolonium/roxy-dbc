@@ -3,14 +3,16 @@
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-blue.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
-一个现代化的 CAN 数据库编辑器，使用 Rust 和 ImGui 构建。支持 DBC 编辑、ARXML/KCD 导入导出、信号位布局可视化。
+一个现代化的 CAN / FlexRay 数据库编辑器，使用 Rust 和 dear-imgui 构建。支持 DBC 编辑、FIBEX XML / AUTOSAR ARXML (FlexRay) 查看与编辑、KCD 导入、信号位布局可视化。
 
 ## ✨ 特性
 
 - 🚗 **DBC 完整支持** - 打开、编辑、保存 CAN 数据库文件
+- 🚋 **FIBEX / ARXML (FlexRay)** - 打开、查看、编辑 FIBEX 3.0 与 AUTOSAR R4.x 数据库：帧（时隙/周期）、PDU（含信号映射、收发节点）、信号（含 COMPU-METHOD 因子/偏移/值表）、ECU、集群参数
 - 🇨🇳 **中文支持** - 中文注释 / 值表显示与编辑，自动识别 UTF-8 / GBK 编码并按原编码保存
 - ⚡ **CAN FD** - 标准/扩展、经典/CAN FD 四种帧格式，DLC 最大 64 字节，`VFrameFormat` 属性读写
 - 📋 **All Signals / 通信矩阵** - 全信号展平视图（DBC messages 窗口入口），任意列排序过滤，值表行内编辑，导出 CSV
+- 🖥️ **CANdb++ 风格标签页** - Messages & Signals / All Signals / Node List / Communication Matrix
 - 📄 **多格式支持** - 导入 ARXML / KCD，导出 AUTOSAR ARXML
 - 🖱️ **拖放打开** - 直接把 DBC/ARXML/KCD 文件拖进窗口即可打开
 - ✏️ **消息与信号编辑** - 全部属性可编辑（含消息 ID），含值表（VAL_）编辑

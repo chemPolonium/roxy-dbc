@@ -58,11 +58,17 @@ pub fn render_node_list(ui: &Ui, dbc: &mut EditableDbc, state: &mut NodeListStat
         TableFlags::RESIZABLE
             | TableFlags::BORDERS
             | TableFlags::ROW_BG
+            | TableFlags::SCROLL_X
             | TableFlags::SCROLL_Y,
         [0.0, avail_h],
         0.0,
     ) {
-        ui.table_setup_column("Node", dear_imgui_rs::TableColumnFlags::NONE, None);
+        // Node 列占满剩余宽度；其余列宽自适应内容
+        ui.table_setup_column(
+            "Node",
+            dear_imgui_rs::TableColumnFlags::NONE,
+            Some(dear_imgui_rs::TableColumnWidth::Stretch(1.0)),
+        );
         ui.table_setup_column("TX Messages", dear_imgui_rs::TableColumnFlags::NONE, None);
         ui.table_setup_column("RX Signals", dear_imgui_rs::TableColumnFlags::NONE, None);
         ui.table_setup_column("Actions", dear_imgui_rs::TableColumnFlags::NONE, None);

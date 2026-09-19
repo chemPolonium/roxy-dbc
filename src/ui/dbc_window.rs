@@ -21,6 +21,7 @@ enum DbcTab {
     AllSignals,
     NodeList,
     CommMatrix,
+    Export,
 }
 
 /// DBC 窗口标签页向上抛的事件
@@ -92,6 +93,8 @@ pub struct DbcWindow {
     pending_tab: Option<DbcTab>,
     /// Node List 标签页状态
     node_list: NodeListState,
+    /// ARXML 导出状态：(是否成功, 信息)
+    export_status: Option<(bool, String)>,
 }
 
 impl Default for DbcWindow {
@@ -114,6 +117,7 @@ impl Default for DbcWindow {
             all_signals_window: AllSignalsWindow::default(),
             pending_tab: None,
             node_list: NodeListState::default(),
+            export_status: None,
         }
     }
 }
@@ -139,6 +143,7 @@ impl DbcWindow {
             all_signals_window: AllSignalsWindow::default(),
             pending_tab: None,
             node_list: NodeListState::default(),
+            export_status: None,
         }
     }
 
@@ -278,11 +283,10 @@ impl DbcWindow {
                     self.selection_anchor = Some(new_id);
                 }
             }
-            if ui.is_key_pressed(dear_imgui_rs::Key::Enter) {
-                if let Some(msg_id) = self.selection_cursor.or(self.selected_message_ids.first().copied()) {
+            if ui.is_key_pressed(dear_imgui_rs::Key::Enter)
+                && let Some(msg_id) = self.selection_cursor.or(self.selected_message_ids.first().copied()) {
                     event = MessageTableEvent::OpenMessage(msg_id);
                 }
-            }
         }
 
         // 底部状态栏预留 20px
@@ -296,6 +300,7 @@ impl DbcWindow {
                     TableFlags::RESIZABLE
                         | TableFlags::BORDERS
                         | TableFlags::ROW_BG
+                        | TableFlags::SCROLL_X
                         | TableFlags::SCROLL_Y
                         | TableFlags::SORTABLE,
                 )
@@ -308,13 +313,18 @@ impl DbcWindow {
             ui.table_setup_column("DLC", dear_imgui_rs::TableColumnFlags::NONE, None);
             ui.table_setup_column("Transmitter", dear_imgui_rs::TableColumnFlags::NONE, None);
             ui.table_setup_column("Signals", dear_imgui_rs::TableColumnFlags::NONE, None);
-            ui.table_setup_column("Comment", dear_imgui_rs::TableColumnFlags::NONE, None);
+            // 注释列 Stretch：占满表格剩余宽度；其余列宽自适应内容
+            ui.table_setup_column(
+                "Comment",
+                dear_imgui_rs::TableColumnFlags::NONE,
+                Some(dear_imgui_rs::TableColumnWidth::Stretch(1.0)),
+            );
             // 冻结标题行，滚动时表头保持可见
             ui.table_setup_scroll_freeze(0, 1);
             ui.table_headers_row();
 
-            if let Some(mut sort_specs) = ui.table_get_sort_specs() {
-                if sort_specs.is_dirty() {
+            if let Some(mut sort_specs) = ui.table_get_sort_specs()
+                && sort_specs.is_dirty() {
                     if let Some(spec) = sort_specs.iter().next() {
                         self.message_table.sort_column_idx = usize::from(spec.column_index) as u32;
                         self.message_table.sort_ascending =
@@ -322,7 +332,6 @@ impl DbcWindow {
                     }
                     sort_specs.clear_dirty(ui);
                 }
-            }
 
             for (row_pos, &idx) in filtered.iter().enumerate() {
                 let msg = &messages[idx];
@@ -435,12 +444,11 @@ impl DbcWindow {
             let win_event = msg_win.render(ui, &self.dbc, has_clipboard, &self.file_path);
             match win_event {
                 MessageWindowEvent::EditSignal(sig_name) => {
-                    if let Some(msg) = self.dbc.get_message(msg_win.message_id) {
-                        if let Some(sig) = msg.signals().iter().find(|s| s.name() == sig_name) {
+                    if let Some(msg) = self.dbc.get_message(msg_win.message_id)
+                        && let Some(sig) = msg.signals().iter().find(|s| s.name() == sig_name) {
                             self.signal_edit_dialog
                                 .open_from_signal(msg.message_id(), sig, &self.file_path);
                         }
-                    }
                 }
                 MessageWindowEvent::CopySignal(sig_names) => {
                     signal_events.push(SignalWindowEvent::CopySignal {
@@ -482,15 +490,14 @@ impl DbcWindow {
         let dialog_msg_id = self.signal_edit_dialog.message_id;
         self.render_signal_edit_dialog(ui);
 
-        if dialog_was_shown && !self.signal_edit_dialog.show {
-            if let Some(msg_win) = self
+        if dialog_was_shown && !self.signal_edit_dialog.show
+            && let Some(msg_win) = self
                 .message_windows
                 .iter_mut()
                 .find(|w| w.message_id == dialog_msg_id)
             {
                 msg_win.focus_requested = true;
             }
-        }
 
         signal_events
     }
@@ -550,17 +557,65 @@ impl DbcWindow {
                     ev => event = DbcWindowEvent::AllSignals(ev),
                 }
             }
-            if let Some(_tab) = ui.tab_item_with_flags("Node List", None, flags_for(DbcTab::NodeList)) {
-                if render_node_list(ui, &mut self.dbc, &mut self.node_list) {
+            if let Some(_tab) = ui.tab_item_with_flags("Node List", None, flags_for(DbcTab::NodeList))
+                && render_node_list(ui, &mut self.dbc, &mut self.node_list) {
                     self.is_dirty = true;
                 }
-            }
             if let Some(_tab) = ui.tab_item_with_flags("Communication Matrix", None, flags_for(DbcTab::CommMatrix)) {
                 render_comm_matrix(ui, &mut self.dbc, &mut self.is_dirty);
+            }
+            if let Some(_tab) = ui.tab_item_with_flags("Export ARXML", None, flags_for(DbcTab::Export)) {
+                self.render_export_tab(ui);
             }
         }
 
         event
+    }
+
+    /// Export ARXML 标签页：把当前 DBC 导出为 AUTOSAR 4.x 风格 ARXML
+    fn render_export_tab(&mut self, ui: &Ui) {
+        ui.text_disabled(
+            "Export this DBC as AUTOSAR 4.x style ARXML (CAN-FRAME / I-SIGNAL-I-PDU).",
+        );
+        ui.separator();
+
+        if ui.button("Export ARXML...") {
+            let default_name = format!(
+                "{}.arxml",
+                std::path::Path::new(&self.file_path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("export")
+            );
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("ARXML files", &["arxml"])
+                .set_file_name(&default_name)
+                .save_file()
+            else {
+                return;
+            };
+            let xml = crate::export::arxml::export_arxml(&self.dbc);
+            match std::fs::write(&path, xml) {
+                Ok(_) => {
+                    self.export_status = Some((
+                        true,
+                        format!("Exported to {}", path.to_string_lossy()),
+                    ));
+                }
+                Err(e) => {
+                    self.export_status = Some((false, format!("Export failed: {}", e)));
+                }
+            }
+        }
+
+        if let Some((ok, message)) = &self.export_status {
+            ui.same_line();
+            if *ok {
+                ui.text_colored([0.4, 0.85, 0.4, 1.0], message);
+            } else {
+                ui.text_colored([1.0, 0.3, 0.3, 1.0], message);
+            }
+        }
     }
 
     fn render_edit_windows(&mut self, ui: &Ui) {
@@ -657,12 +712,11 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
         let dirty_marker = if dbc_window.is_dirty { "* " } else { "" };
         let title = format!("DBC - {}{}##dbc_{}", dirty_marker, dbc_window.file_path, dbc_window.file_path);
 
-        if let Some(request_focus_idx) = ui_state.dbc_window_focus_request {
-            if request_focus_idx == window_idx {
+        if let Some(request_focus_idx) = ui_state.dbc_window_focus_request
+            && request_focus_idx == window_idx {
                 ui.set_window_focus(Some(&title));
                 ui_state.dbc_window_focus_request = None;
             }
-        }
 
         let mut is_open = ui_state.dbc_windows[window_idx].is_open;
         let was_open = is_open;
@@ -679,6 +733,7 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
 
         if ui.is_window_focused() {
             ui_state.last_focused_dbc_index = Some(window_idx);
+            ui_state.focus = crate::ui::state::FocusTarget::Dbc;
         }
 
         if !is_open && was_open && ui_state.dbc_windows[window_idx].is_dirty {
@@ -754,12 +809,12 @@ fn handle_message_table_event(
             ui_state.dbc_windows[window_idx].open_message_window(msg_id);
         }
         MessageTableEvent::EditMessage(msg_id) => {
-            if let Some(win) = ui_state.dbc_windows.get_mut(window_idx) {
-                if let Some(msg) = win.dbc.get_message(msg_id) {
-                    let edit_win = MessageEditWindowState::open(msg, &win.file_path);
+            if let Some(win) = ui_state.dbc_windows.get_mut(window_idx)
+                && let Some(msg) = win.dbc.get_message(msg_id) {
+                    let nodes = win.dbc.nodes().clone();
+                    let edit_win = MessageEditWindowState::open(msg, &win.file_path, nodes);
                     win.edit_windows.push(edit_win);
                 }
-            }
         }
         MessageTableEvent::CopyMessage(ids) => {
             let msgs: Vec<EditableMessage> = ids
@@ -942,11 +997,10 @@ fn render_close_confirm_dialog(ui: &Ui, ui_state: &mut UiState) {
         }
         ui.same_line();
         if ui.button("Don't Save") {
-            if let Some(idx) = ui_state.close_confirm_dialog.dbc_window_index {
-                if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
+            if let Some(idx) = ui_state.close_confirm_dialog.dbc_window_index
+                && let Some(win) = ui_state.dbc_windows.get_mut(idx) {
                     win.is_open = false;
                 }
-            }
             ui_state.close_confirm_dialog.dbc_window_index = None;
             ui.close_current_popup();
         }
@@ -996,6 +1050,7 @@ fn render_validation_dialog(ui: &Ui, ui_state: &mut UiState) {
                             dear_imgui_rs::TableFlags::RESIZABLE
                                 | dear_imgui_rs::TableFlags::BORDERS
                                 | dear_imgui_rs::TableFlags::ROW_BG
+                                | dear_imgui_rs::TableFlags::SCROLL_X
                                 | dear_imgui_rs::TableFlags::SCROLL_Y,
                         )
                         .sizing_policy(dear_imgui_rs::TableSizingPolicy::FixedFit),
@@ -1003,7 +1058,12 @@ fn render_validation_dialog(ui: &Ui, ui_state: &mut UiState) {
                     0.0,
                 ) {
                     ui.table_setup_column("Severity", dear_imgui_rs::TableColumnFlags::NONE, None);
-                    ui.table_setup_column("Message", dear_imgui_rs::TableColumnFlags::NONE, None);
+                    // Message 列占满剩余宽度
+                    ui.table_setup_column(
+                        "Message",
+                        dear_imgui_rs::TableColumnFlags::NONE,
+                        Some(dear_imgui_rs::TableColumnWidth::Stretch(1.0)),
+                    );
                     ui.table_setup_scroll_freeze(0, 1);
                     ui.table_headers_row();
 
@@ -1050,9 +1110,9 @@ pub fn save_dbc_window(ui_state: &mut UiState, idx: usize) {
 fn handle_signal_window_event(ui_state: &mut UiState, event: SignalWindowEvent) {
     match event {
         SignalWindowEvent::CopySignal { msg_id, sig_names } => {
-            if let Some(idx) = ui_state.last_focused_dbc_index {
-                if let Some(win) = ui_state.dbc_windows.get(idx) {
-                    if let Some(msg) = win.dbc.get_message(msg_id) {
+            if let Some(idx) = ui_state.last_focused_dbc_index
+                && let Some(win) = ui_state.dbc_windows.get(idx)
+                    && let Some(msg) = win.dbc.get_message(msg_id) {
                         let sigs: Vec<crate::editable_dbc::EditableSignal> = sig_names
                             .iter()
                             .filter_map(|name| {
@@ -1066,13 +1126,11 @@ fn handle_signal_window_event(ui_state: &mut UiState, event: SignalWindowEvent) 
                             ui_state.clipboard.copied_signals = sigs;
                         }
                     }
-                }
-            }
         }
         SignalWindowEvent::CutSignal { msg_id, sig_names } => {
-            if let Some(idx) = ui_state.last_focused_dbc_index {
-                if let Some(win) = ui_state.dbc_windows.get(idx) {
-                    if let Some(msg) = win.dbc.get_message(msg_id) {
+            if let Some(idx) = ui_state.last_focused_dbc_index
+                && let Some(win) = ui_state.dbc_windows.get(idx)
+                    && let Some(msg) = win.dbc.get_message(msg_id) {
                         let sigs: Vec<crate::editable_dbc::EditableSignal> = sig_names
                             .iter()
                             .filter_map(|name| {
@@ -1086,8 +1144,6 @@ fn handle_signal_window_event(ui_state: &mut UiState, event: SignalWindowEvent) 
                             ui_state.clipboard.copied_signals = sigs;
                         }
                     }
-                }
-            }
             ui_state.confirm_delete_dialog.target =
                 Some(DeleteTarget::Signals(msg_id, sig_names.clone()));
             ui_state.confirm_delete_dialog.display_name = signals_display_name(&sig_names);
@@ -1104,8 +1160,8 @@ fn handle_signal_window_event(ui_state: &mut UiState, event: SignalWindowEvent) 
             if copied.is_empty() {
                 return;
             }
-            if let Some(idx) = ui_state.last_focused_dbc_index {
-                if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
+            if let Some(idx) = ui_state.last_focused_dbc_index
+                && let Some(win) = ui_state.dbc_windows.get_mut(idx) {
                     for sig in copied {
                         let mut new_sig = sig;
                         // 名称自动去重：_copy / _copy2 ...
@@ -1125,7 +1181,6 @@ fn handle_signal_window_event(ui_state: &mut UiState, event: SignalWindowEvent) 
                     }
                     win.is_dirty = true;
                 }
-            }
         }
     }
 }
@@ -1142,8 +1197,8 @@ fn execute_delete(ui_state: &mut UiState) {
     let target = ui_state.confirm_delete_dialog.target.take();
     match target {
         Some(DeleteTarget::Messages(ids)) => {
-            if let Some(idx) = ui_state.last_focused_dbc_index {
-                if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
+            if let Some(idx) = ui_state.last_focused_dbc_index
+                && let Some(win) = ui_state.dbc_windows.get_mut(idx) {
                     for id in &ids {
                         win.dbc.delete_message(*id);
                     }
@@ -1155,11 +1210,10 @@ fn execute_delete(ui_state: &mut UiState) {
                     win.close_windows_for_messages(&ids);
                     win.is_dirty = true;
                 }
-            }
         }
         Some(DeleteTarget::Signals(msg_id, sig_names)) => {
-            if let Some(idx) = ui_state.last_focused_dbc_index {
-                if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
+            if let Some(idx) = ui_state.last_focused_dbc_index
+                && let Some(win) = ui_state.dbc_windows.get_mut(idx) {
                     for name in &sig_names {
                         win.dbc.delete_signal(msg_id, name);
                     }
@@ -1168,7 +1222,6 @@ fn execute_delete(ui_state: &mut UiState) {
                     }
                     win.is_dirty = true;
                 }
-            }
         }
         None => {}
     }

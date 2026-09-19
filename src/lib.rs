@@ -2,6 +2,7 @@
 pub mod app;
 pub mod editable_dbc;
 pub mod export;
+pub mod fibex;
 pub mod file_encoding;
 pub mod import;
 pub mod ui;

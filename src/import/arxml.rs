@@ -125,11 +125,10 @@ fn parse_arxml_frame(
 
     let mut identifiers = Vec::new();
     collect_elements_by_tag(frame_elem, "IDENTIFIER", &mut identifiers);
-    if identifiers.is_empty() {
-        if let Some(t) = triggering {
+    if identifiers.is_empty()
+        && let Some(t) = triggering {
             collect_elements_by_tag(t, "IDENTIFIER", &mut identifiers);
         }
-    }
 
     let message_id = identifiers
         .first()
