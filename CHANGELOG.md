@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.10.0] - 2026-10-08
+
+### Added
+- DBC 属性
+  - 打开文件时读入属性声明（`BA_DEF_`）、默认值（`BA_DEF_DEF_`）与取值（`BA_`），保存时写回；`VFrameFormat` 仍按帧格式（标准/扩展、经典/CAN FD）自己写出，不重复登记
+  - 消息与信号的编辑窗口底部多一节 **Attributes**：文件里声明了什么就列什么，枚举属性用下拉（当前值不在列表里时把它追加进下拉，不会被改掉），其余用文本框；清空文本即删除该取值
+  - 给没声明过的属性赋值时自动补一条声明，范围取到能容下这个值
+  - Tools > Validate 报出取值超出声明的 INT/FLOAT 范围、或不在枚举列表里的属性
+  - 属性改动走撤销历史，并与同一次 Apply 里的其他改动合并成一步撤销
+  - Messages & Signals 表新增 **Cycle** 列：按 `GenMsgCycleTime`、`CycleTime` 的优先顺序取文件里声明过的那个，取不到（含文件里的默认值）时显示 `-`；点列标题可按周期排序
+- CAN 数据库导出为 ARXML 现在带上整张数据库
+  - 除 CAN-FRAME 与 I-SIGNAL-I-PDU 外，还写 CAN-CLUSTER（含通道与每条帧的 CAN-FRAME-TRIGGERING：标识符、标准/扩展寻址、CAN FD 收发行为）、I-SIGNAL 与 COMPU-METHOD（因子/偏移、上下限、单位、值表、符号类型）、ECU-INSTANCE 与端口（帧的 FRAME-PORT 表达发送/接收，信号级 I-SIGNAL-PORT 表达每个信号的接收者）、帧与信号的注释
+  - 读回侧按引用解析（FRAME-REF / PDU-REF / I-SIGNAL-REF / COMPU-METHOD-REF / 端口名后缀），不再只靠命名约定；缺引用时才回退到 `{帧名}_PDU` / `{帧名}_Trigger`
+  - Ctrl+O / 拖放 / 命令行打开 .arxml / .xml 时按内容分流：CAN 快照进 DBC 编辑窗口，FlexRay 进 FIBEX 查看窗口，因此导出的 CAN ARXML 可以直接再打开回来
+- FlexRay 帧按通道排程
+  - 帧编辑窗口的排程改成每通道一行：Channel A / Channel B 各有 Send 勾选框和时隙、起始周期、重复周期、Startup 字段；勾掉 Send 表示该通道不再发送这帧
+  - Schedule 页点空格子只改所点通道的排程，另一通道不受影响；Unschedule 一次清除两个通道，算一步撤销
+  - Frames 表的 Slot / Base Cycle / Repetition / Startup 列在两通道取值不同时写成 `A 1 / B 2`，相同或只有一个通道时只写一个值；Channel 列写 A / B / A+B
+- FlexRay 关键时隙与通信周期
+  - ECU List 标签页新增 **Key Slot** 列：显示该 ECU 控制器用的关键时隙号与用途，例如 `16 (sync + startup)`；文件里没配的显示 `-`
+  - Cluster Parameters 标签页新增 **Macroticks per Cycle (gCycle)**：一个通信周期包含多少个宏节拍，与上面的周期时间和宏节拍时长对应
+  - 保存回 ARXML / FIBEX 时写出这两项，往返不丢
+- 通信矩阵 Excel 模板 ↔ DBC
+  - File 菜单新增 **Import Excel Matrix...**：读取填好的 .xlsx 模板生成一个 DBC 编辑窗口，报文行下面的信号行归属它上面最近的报文行，节点列的 S 是发送、R 是接收。表头认不出 Msg_Name / Signal_Name 时直接说明这不是本工具的模板。生成后窗口记录的文件名是同名 .dbc，`Ctrl+S` 写出 DBC，不会覆盖 Excel 源文件
+  - File 菜单新增 **Export Excel Template...**：导出只有表头的空白模板，供填写
+  - DBC 窗口的 **Export** 标签页新增 **Export Excel...**：把当前 DBC 按模板写成 .xlsx（报文一行、信号一行，节点列标 S/R），改完可再导回
+  - Ctrl+O / 拖放 / 命令行走同一个入口，现在也能直接打开 .xlsx
+  - 导入过程中被跳过的行（缺 Msg_ID、信号上面没有报文行）在 Validation Results 窗口里按行号列出。模板里的报文类型、发送类型、周期时间、快速周期、重发次数、延时、信号发送类型、初始值、无效值、非使能值存为 DBC 属性（GenMsgType / GenMsgSendType / GenMsgCycleTime / GenMsgCycleTimeFast / GenMsgNrOfRepetition / GenMsgDelayTime / GenSigSendType / GenSigStartValue / GenSigInvalidValue / GenSigInactiveValue），初始值一类支持 `0x` 十六进制；导出模板时按同样的名字读回来
+  - `Ctrl+S` / Save As 的默认文件名沿用窗口当前文件名，不再固定为 output.dbc
+- File 菜单新增 **New FIBEX**（`Ctrl+Shift+N`）：新建空的 FlexRay 数据库，首次保存时选择路径与格式
+- FIBEX 窗口新增 **Schedule** 标签页：按通道显示静态段的"周期 × 时隙"矩阵，同一格出现多个帧时标红
+- 在 Schedule 页可直接改排程：选中一个帧（Frames 页里选，或点网格里已排程的格子），再点空格子即把它排到该时隙与该周期；`Unschedule` 清除排程；`Ctrl+Z` 撤销。目标时隙在该周期已被占用时拒绝改动，并说明是哪一帧占用；改动后一行提示说明实际生效的发送规律
+- PDU 列表支持右键复制 / 剪切 / 粘贴，粘贴出的副本自动取不重名的名字
+- Signal List 标签页可按任意列排序（点列标题），与其余表格一致
+- FIBEX 窗口新增 **Communication Matrix** 标签页：行是帧（可展开到帧内各 PDU 的信号），列是 ECU，格子里标 TX / RX；只收到该帧部分信号时标 R\*，鼠标悬停显示收到几个。帧名后面附带时隙号与周期
+- Signal List 标签页新增 **Export CSV...**：每个信号一行，含所属 PDU、起始位、长度、字节序、数据类型、因子/偏移、上下限、单位、发送与接收、注释和值表；文件带 UTF-8 BOM，Excel 直接打开不乱码
+- 焦点在 FIBEX 窗口时，Tools > Validate 校验当前 FlexRay 数据库
+
+### Fixed
+- 帧在 A、B 两个通道占用不同时隙时只保住一个通道：现在每通道各存一条触发，读入、显示与保存回 ARXML / FIBEX 都不再丢掉另一个通道的时隙
+- Validate 的时隙冲突改为按通道比较：A 通道与 B 通道使用同一编号的时隙不再被误报为冲突
+- 一帧没有任何通道触发时不再显示成默认的第 1 时隙，而是显示 `-`，Validate 提示 "not triggered on any channel"
+- 打开 ARXML 时，帧引用的传输层 PDU 与网络管理 PDU 现在会出现在 PDU 列表里，不再只剩一个引用名
+- 帧内 PDU 的起始位置改为按位读取；此前按字节读取，导致同一帧内第二个 PDU 的位置远超帧长
+- ARXML 的集群参数（静态时隙数、宏节拍、周期、速率、各类偏移与空闲时间）现在显示文件里的真实值，而不是内置默认值；Validate 里大量"时隙号超出 gNumberOfStaticSlots"的误报随之消失
+- 保存为 ARXML 不再丢失信号的因子/偏移、值表、符号类型、上下限与单位；保存为 FIBEX 不再丢失帧内的多个 PDU
+- ARXML 里的 payload preamble 标志现在能读出（该标志写在触发点上，不在帧里）
+- FIBEX 文件里的 `EVENT-PDU` 显示为 Event 类型，不再被并入 Dynamic
+- 焦点在 FIBEX 窗口时，Edit 菜单的撤销/重做/复制/粘贴/删除/新建帧以及 `Ctrl+Z`、`Ctrl+Y` 真正作用于 FlexRay 数据
+- 校验对话框可以拖动边缘调整大小，问题列表在框内滚动
+- 调度表格里点击格子，选中的是被点的那一格
+- 保存 ARXML 时，出现在多个 PDU 里的同名信号只写一份定义
+
 ## [0.9.0] - 2026-09-19
 
 ### Changed

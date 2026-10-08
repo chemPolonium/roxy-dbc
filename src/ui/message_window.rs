@@ -210,10 +210,7 @@ impl MessageWindow {
                     ui.table_next_row();
 
                     let sig_name = signal.name();
-                    let is_selected = self
-                        .selected_signal_names
-                        .iter()
-                        .any(|n| n == sig_name);
+                    let is_selected = self.selected_signal_names.iter().any(|n| n == sig_name);
 
                     ui.table_set_column_index(0);
                     // ID 用行号区分，避免重复信号名导致的 ID 冲突
@@ -270,9 +267,9 @@ impl MessageWindow {
                         event = MessageWindowEvent::EditSignal(sig_name.to_string());
                     }
 
-                    if let Some(_popup) = ui.begin_popup_context_item_with_label(Some(
-                        &format!("sig_ctx_{}", row_pos),
-                    )) {
+                    if let Some(_popup) = ui
+                        .begin_popup_context_item_with_label(Some(&format!("sig_ctx_{}", row_pos)))
+                    {
                         if !self.selected_signal_names.iter().any(|n| n == sig_name) {
                             let name_owned = sig_name.to_string();
                             self.selected_signal_names = vec![name_owned.clone()];
@@ -289,7 +286,8 @@ impl MessageWindow {
                         if ui.menu_item("Cut") {
                             event = MessageWindowEvent::CutSignal(selected_names.clone());
                         }
-                        if ui.menu_item_enabled_selected_no_shortcut("Paste", false, has_clipboard) {
+                        if ui.menu_item_enabled_selected_no_shortcut("Paste", false, has_clipboard)
+                        {
                             event = MessageWindowEvent::PasteSignal;
                         }
                         ui.separator();

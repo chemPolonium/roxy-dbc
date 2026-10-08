@@ -106,11 +106,7 @@ impl AppWindow {
 
         let mut platform = WinitPlatform::new(&mut context).expect("create winit platform");
         platform
-            .attach_window(
-                Arc::clone(&self.window),
-                HiDpiMode::Default,
-                &mut context,
-            )
+            .attach_window(Arc::clone(&self.window), HiDpiMode::Default, &mut context)
             .expect("attach winit window");
 
         context
@@ -141,9 +137,7 @@ impl AppWindow {
             if let Ok(bytes) = std::fs::read(path) {
                 let data: &'static [u8] = Box::leak(bytes.into_boxed_slice());
                 // # Safety: 字体数据与图集同生命周期，且是完整字体。
-                sources.push(unsafe {
-                    dear_imgui_rs::FontSource::ttf_data_with_size(data, 13.0)
-                });
+                sources.push(unsafe { dear_imgui_rs::FontSource::ttf_data_with_size(data, 13.0) });
                 break;
             }
         }

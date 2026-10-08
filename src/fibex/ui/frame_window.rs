@@ -69,17 +69,29 @@ impl FrameWindow {
         }
 
         window.build(|| {
-            let t = frame.triggering();
             ui.text(format!(
-                "Slot: {}  |  Channel: {}  |  Cycle: {}+{}/{}  |  Length: {} bytes{}",
-                t.slot_id,
-                t.channel.label(),
-                t.base_cycle,
-                t.base_cycle,
-                t.cycle_repetition,
+                "Length: {} bytes{}",
                 frame.length(),
-                if t.startup { "  |  Startup" } else { "" }
+                if frame.payload_preamble() {
+                    "  |  Payload preamble"
+                } else {
+                    ""
+                }
             ));
+            // 每通道一条触发，两通道各占一行
+            if frame.triggerings().is_empty() {
+                ui.text_disabled("Not scheduled on any channel");
+            }
+            for t in frame.triggerings() {
+                ui.text(format!(
+                    "Channel {}: slot {}  |  cycle {} of {}  |  startup {}",
+                    t.channel.label(),
+                    t.slot_id,
+                    t.base_cycle,
+                    t.cycle_repetition,
+                    if t.startup { "yes" } else { "no" }
+                ));
+            }
             if !frame.comment().is_empty() {
                 ui.text(format!("Comment: {}", frame.comment()));
             }
@@ -158,15 +170,26 @@ impl FrameWindow {
             // PDU 表占满窗口剩余高度
             let avail = ui.content_region_avail();
             ui.table("frame_pdu_table")
-                .flags(TableFlags::RESIZABLE | TableFlags::BORDERS | TableFlags::SCROLL_X | TableFlags::SCROLL_Y | TableFlags::ROW_BG)
+                .flags(
+                    TableFlags::RESIZABLE
+                        | TableFlags::BORDERS
+                        | TableFlags::SCROLL_X
+                        | TableFlags::SCROLL_Y
+                        | TableFlags::ROW_BG,
+                )
                 .sizing_policy(TableSizingPolicy::FixedFit)
                 .freeze(0, 1)
                 .outer_size([0.0, avail[1].max(120.0)])
-                .column("Start").done()
-                .column("PDU").done()
-                .column("Length").done()
-                .column("Type").done()
-                .column("Signals").done()
+                .column("Start")
+                .done()
+                .column("PDU")
+                .done()
+                .column("Length")
+                .done()
+                .column("Type")
+                .done()
+                .column("Signals")
+                .done()
                 .headers(true)
                 .build(|ui| {
                     for m in &pdus {
@@ -183,7 +206,8 @@ impl FrameWindow {
                         if ui.input_int(format!("##start_{}", pdu_name).as_str(), &mut start_val) {
                             let clamped = start_val.clamp(0, 253);
                             if clamped >= 0 && (clamped as u32) != m.start_position {
-                                event = FrameWindowEvent::SetPduStart(pdu_name.clone(), clamped as u32);
+                                event =
+                                    FrameWindowEvent::SetPduStart(pdu_name.clone(), clamped as u32);
                             }
                         }
 
@@ -222,10 +246,7 @@ impl FrameWindow {
                         }
 
                         ui.table_set_column_index(2);
-                        ui.text(format!(
-                            "{}",
-                            pdu_info.map(|p| p.length()).unwrap_or(0)
-                        ));
+                        ui.text(format!("{}", pdu_info.map(|p| p.length()).unwrap_or(0)));
 
                         ui.table_set_column_index(3);
                         ui.text(pdu_info.map(|p| p.kind().label()).unwrap_or("?"));
@@ -245,7 +266,11 @@ impl FrameWindow {
 }
 
 /// 绘制帧内 PDU 的字节布局条
-fn render_frame_layout_bar(ui: &Ui, fibex: &EditableFibex, frame: &crate::fibex::editable_fibex::EditableFrame) {
+fn render_frame_layout_bar(
+    ui: &Ui,
+    fibex: &EditableFibex,
+    frame: &crate::fibex::editable_fibex::EditableFrame,
+) {
     let num_bytes = frame.length().max(1) as usize;
     const CELL_W: f32 = 26.0;
     const CELL_H: f32 = 40.0;
@@ -269,8 +294,12 @@ fn render_frame_layout_bar(ui: &Ui, fibex: &EditableFibex, frame: &crate::fibex:
     // 背景网格
     for byte in 0..num_bytes {
         let x = origin[0] + byte as f32 * CELL_W;
-        dl.add_rect([x, origin[1]], [x + CELL_W, origin[1] + CELL_H], [0.35, 0.35, 0.35, 1.0])
-            .build();
+        dl.add_rect(
+            [x, origin[1]],
+            [x + CELL_W, origin[1] + CELL_H],
+            [0.35, 0.35, 0.35, 1.0],
+        )
+        .build();
         dl.add_text(
             [x + 4.0, origin[1] + CELL_H + 2.0],
             [0.6, 0.6, 0.6, 1.0],
@@ -285,15 +314,24 @@ fn render_frame_layout_bar(ui: &Ui, fibex: &EditableFibex, frame: &crate::fibex:
         };
         let color = PALETTE[i % PALETTE.len()];
         let x0 = origin[0] + m.start_position as f32 * CELL_W;
-        let x1 = origin[0] + (m.start_position + pdu.length()).min(num_bytes as u32) as f32 * CELL_W;
+        let x1 =
+            origin[0] + (m.start_position + pdu.length()).min(num_bytes as u32) as f32 * CELL_W;
         if x1 <= x0 {
             continue;
         }
-        dl.add_rect([x0 + 1.0, origin[1] + 1.0], [x1 - 1.0, origin[1] + CELL_H - 1.0], color)
-            .filled(true)
-            .build();
-        dl.add_rect([x0 + 1.0, origin[1] + 1.0], [x1 - 1.0, origin[1] + CELL_H - 1.0], [color[0], color[1], color[2], 1.0])
-            .build();
+        dl.add_rect(
+            [x0 + 1.0, origin[1] + 1.0],
+            [x1 - 1.0, origin[1] + CELL_H - 1.0],
+            color,
+        )
+        .filled(true)
+        .build();
+        dl.add_rect(
+            [x0 + 1.0, origin[1] + 1.0],
+            [x1 - 1.0, origin[1] + CELL_H - 1.0],
+            [color[0], color[1], color[2], 1.0],
+        )
+        .build();
         dl.add_text(
             [x0 + 3.0, origin[1] + CELL_H / 2.0 - 6.0],
             [1.0, 1.0, 1.0, 1.0],

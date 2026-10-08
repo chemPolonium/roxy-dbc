@@ -1,13 +1,15 @@
 use std::path::Path;
 
-use crate::fibex::editable_fibex::{ByteOrder, EditableFrame, EditableFibex, ValueType};
+use crate::fibex::editable_fibex::{
+    ByteOrder, EditableFibex, EditableFrame, EditablePdu, FrChannel, FrameTriggering, ValueType,
+};
+use crate::fibex::state::{DeleteTarget, FibexUiState};
 use crate::fibex::ui::frame_edit_window::{FrameEditEvent, FrameEditWindowState};
 use crate::fibex::ui::frame_window::{FrameWindow, FrameWindowEvent};
 use crate::fibex::ui::pdu_edit_window::{PduEditEvent, PduEditWindowState};
 use crate::fibex::ui::pdu_window::{PduWindow, PduWindowEvent};
-use crate::fibex::ui::schedule_window::ScheduleWindow;
+use crate::fibex::ui::schedule_window::{ScheduleEvent, ScheduleWindow};
 use crate::fibex::ui::signal_edit_window::{SignalEditDialog, SignalEditEvent};
-use crate::fibex::state::{DeleteTarget, FibexUiState};
 use dear_imgui_rs::{Condition, SortDirection, TableFlags, TableSizingPolicy, Ui};
 
 #[derive(Clone)]
@@ -31,6 +33,8 @@ pub struct FibexWindow {
     pdu_sort_ascending: bool,
     pdu_search_query: String,
     signal_search_query: String,
+    signal_sort_column_idx: usize,
+    signal_sort_ascending: bool,
     pub selected_pdu_names: Vec<String>,
     pdu_selection_anchor: Option<String>,
     /// 信号列表页的选中行（pdu 名, 信号名），支持 Ctrl / Shift 多选
@@ -44,7 +48,6 @@ pub struct FibexWindow {
     edit_pdu_windows: Vec<PduEditWindowState>,
     signal_edit_dialog: SignalEditDialog,
     pub schedule_window: ScheduleWindow,
-    pub show_schedule: bool,
     /// 待Confirm Delete的信号，按 PDU 分组：(PDU 名, 信号名列表)
     pending_signal_delete: Option<Vec<(String, Vec<String>)>>,
     pending_pdu_delete: Option<Vec<String>>,
@@ -70,6 +73,8 @@ impl FibexWindow {
             pdu_sort_ascending: true,
             pdu_search_query: String::new(),
             signal_search_query: String::new(),
+            signal_sort_column_idx: 1,
+            signal_sort_ascending: true,
             selected_pdu_names: Vec::new(),
             pdu_selection_anchor: None,
             selected_signal_rows: Vec::new(),
@@ -81,7 +86,6 @@ impl FibexWindow {
             edit_pdu_windows: Vec::new(),
             signal_edit_dialog: SignalEditDialog::default(),
             schedule_window: ScheduleWindow::default(),
-            show_schedule: false,
             pending_signal_delete: None,
             pending_pdu_delete: None,
         }
@@ -118,7 +122,11 @@ impl FibexWindow {
     }
 
     fn open_frame_window(&mut self, frame_name: &str) {
-        if self.frame_windows.iter().any(|w| w.frame_name == frame_name) {
+        if self
+            .frame_windows
+            .iter()
+            .any(|w| w.frame_name == frame_name)
+        {
             return;
         }
         if self.fibex.get_frame(frame_name).is_some() {
@@ -172,14 +180,25 @@ impl FibexWindow {
         filtered.sort_by(|&a, &b| {
             let fa = &frames[a];
             let fb = &frames[b];
+            // 未排程的帧没有触发点，排到最后
+            let ord =
+                |f: &EditableFrame, get: fn(&FrameTriggering) -> u32| match f.first_triggering() {
+                    Some(t) => (0u8, get(&t)),
+                    None => (1u8, 0u32),
+                };
+            let flag =
+                |f: &EditableFrame, get: fn(&FrameTriggering) -> bool| match f.first_triggering() {
+                    Some(t) => (0u8, get(&t) as u8),
+                    None => (1u8, 0u8),
+                };
             let cmp = match col {
                 0 => fa.name().cmp(fb.name()),
                 1 => fa.length().cmp(&fb.length()),
-                2 => format!("{:?}", fa.triggering().channel).cmp(&format!("{:?}", fb.triggering().channel)),
-                3 => fa.triggering().slot_id.cmp(&fb.triggering().slot_id),
-                4 => fa.triggering().base_cycle.cmp(&fb.triggering().base_cycle),
-                5 => fa.triggering().cycle_repetition.cmp(&fb.triggering().cycle_repetition),
-                6 => fa.triggering().startup.cmp(&fb.triggering().startup),
+                2 => fa.channel_label().cmp(fb.channel_label()),
+                3 => ord(fa, |t| t.slot_id).cmp(&ord(fb, |t| t.slot_id)),
+                4 => ord(fa, |t| t.base_cycle).cmp(&ord(fb, |t| t.base_cycle)),
+                5 => ord(fa, |t| t.cycle_repetition).cmp(&ord(fb, |t| t.cycle_repetition)),
+                6 => flag(fa, |t| t.startup).cmp(&flag(fb, |t| t.startup)),
                 7 => fa.pdus().len().cmp(&fb.pdus().len()),
                 8 => fa.comment().cmp(fb.comment()),
                 _ => std::cmp::Ordering::Equal,
@@ -190,10 +209,11 @@ impl FibexWindow {
         // 键盘导航
         if ui.is_window_focused() && !ui.io().want_capture_keyboard() && !filtered.is_empty() {
             let shift = ui.io().key_shift();
-            let cursor_pos = self
-                .selection_cursor
-                .as_ref()
-                .and_then(|n| filtered.iter().position(|&idx| frames[idx].name() == n.as_str()));
+            let cursor_pos = self.selection_cursor.as_ref().and_then(|n| {
+                filtered
+                    .iter()
+                    .position(|&idx| frames[idx].name() == n.as_str())
+            });
 
             let move_cursor = |pos: Option<usize>, down: bool| -> usize {
                 match pos {
@@ -225,7 +245,11 @@ impl FibexWindow {
                         .iter()
                         .position(|&idx| frames[idx].name() == anchor)
                         .unwrap_or(pos);
-                    let (lo, hi) = if anchor_pos <= pos { (anchor_pos, pos) } else { (pos, anchor_pos) };
+                    let (lo, hi) = if anchor_pos <= pos {
+                        (anchor_pos, pos)
+                    } else {
+                        (pos, anchor_pos)
+                    };
                     self.selected_frame_names = filtered[lo..=hi]
                         .iter()
                         .map(|&idx| frames[idx].name().to_string())
@@ -250,19 +274,36 @@ impl FibexWindow {
         let avail = ui.content_region_avail();
 
         ui.table("frames_table")
-            .flags(TableFlags::RESIZABLE | TableFlags::BORDERS | TableFlags::SCROLL_X | TableFlags::SCROLL_Y | TableFlags::SORTABLE | TableFlags::ROW_BG)
+            .flags(
+                TableFlags::RESIZABLE
+                    | TableFlags::BORDERS
+                    | TableFlags::SCROLL_X
+                    | TableFlags::SCROLL_Y
+                    | TableFlags::SORTABLE
+                    | TableFlags::ROW_BG,
+            )
             .sizing_policy(TableSizingPolicy::FixedFit)
             .freeze(0, 1)
             .outer_size([0.0, avail[1].max(120.0)])
-            .column("Name").done()
-            .column("Length").done()
-            .column("Channel").done()
-            .column("Slot").done()
-            .column("Base Cycle").done()
-            .column("Repetition").done()
-            .column("Startup").done()
-            .column("PDUs").done()
-            .column("Comment").weight(1.0).done()
+            .column("Name")
+            .done()
+            .column("Length")
+            .done()
+            .column("Channel")
+            .done()
+            .column("Slot")
+            .done()
+            .column("Base Cycle")
+            .done()
+            .column("Repetition")
+            .done()
+            .column("Startup")
+            .done()
+            .column("PDUs")
+            .done()
+            .column("Comment")
+            .weight(1.0)
+            .done()
             .headers(true)
             .build(|ui| {
                 if let Some(mut specs) = ui.table_get_sort_specs()
@@ -277,7 +318,8 @@ impl FibexWindow {
 
                 for (row_pos, frame) in filtered.iter().map(|&idx| &frames[idx]).enumerate() {
                     let frame_name = frame.name().to_string();
-                    let t = frame.triggering();
+                    let ta = frame.channel_triggering(FrChannel::A);
+                    let tb = frame.channel_triggering(FrChannel::B);
 
                     ui.table_next_row();
 
@@ -358,8 +400,7 @@ impl FibexWindow {
                             event = FrameTableEvent::CutFrame(selected_names.clone());
                         }
                         ui.separator();
-                        if ui
-                            .menu_item_enabled_selected_no_shortcut("Paste", false, has_clipboard)
+                        if ui.menu_item_enabled_selected_no_shortcut("Paste", false, has_clipboard)
                         {
                             event = FrameTableEvent::PasteFrame;
                         }
@@ -373,19 +414,27 @@ impl FibexWindow {
                     ui.text(format!("{}", frame.length()));
 
                     ui.table_set_column_index(2);
-                    ui.text(t.channel.label());
+                    ui.text(frame.channel_label());
 
                     ui.table_set_column_index(3);
-                    ui.text(format!("{}", t.slot_id));
+                    ui.text(dual_cell(ta.map(|t| t.slot_id), tb.map(|t| t.slot_id)));
 
                     ui.table_set_column_index(4);
-                    ui.text(format!("{}", t.base_cycle));
+                    ui.text(dual_cell(
+                        ta.map(|t| t.base_cycle),
+                        tb.map(|t| t.base_cycle),
+                    ));
 
                     ui.table_set_column_index(5);
-                    ui.text(format!("{}", t.cycle_repetition));
+                    ui.text(dual_cell(
+                        ta.map(|t| t.cycle_repetition),
+                        tb.map(|t| t.cycle_repetition),
+                    ));
 
                     ui.table_set_column_index(6);
-                    ui.text(if t.startup { "Yes" } else { "-" });
+                    let startup =
+                        |t: Option<FrameTriggering>| t.map(|t| if t.startup { "Yes" } else { "-" });
+                    ui.text(dual_cell(startup(ta), startup(tb)));
 
                     ui.table_set_column_index(7);
                     ui.text(format!("{}", frame.pdus().len()));
@@ -402,7 +451,11 @@ impl FibexWindow {
     // 浮动子窗口（Frame / PDU / 编辑窗口 / 对话框）
     // ------------------------------------------------------------------
 
-    pub fn render_floating_windows(&mut self, ui: &Ui, clipboard: &mut crate::fibex::state::ClipboardState) {
+    pub fn render_floating_windows(
+        &mut self,
+        ui: &Ui,
+        clipboard: &mut crate::fibex::state::ClipboardState,
+    ) {
         // Frame 窗口
         let mut to_open_pdu: Option<String> = None;
         for i in 0..self.frame_windows.len() {
@@ -438,7 +491,8 @@ impl FibexWindow {
                 }
                 FrameWindowEvent::SetPduStart(pdu_name, start) => {
                     let frame_name = self.frame_windows[i].frame_name.clone();
-                    self.fibex.set_frame_pdu_start(&frame_name, &pdu_name, start);
+                    self.fibex
+                        .set_frame_pdu_start(&frame_name, &pdu_name, start);
                     self.is_dirty = true;
                 }
                 FrameWindowEvent::NewPdu => {
@@ -532,11 +586,7 @@ impl FibexWindow {
                         // 粘贴重名信号时自动追加序号，避免静默丢弃
                         let mut suffix = 1;
                         let mut new_name = format!("{}_copy", sig.name());
-                        while self
-                            .fibex
-                            .find_signal_index(&pdu_name, &new_name)
-                            .is_some()
-                        {
+                        while self.fibex.find_signal_index(&pdu_name, &new_name).is_some() {
                             suffix += 1;
                             new_name = format!("{}_copy{}", sig.name(), suffix);
                         }
@@ -553,10 +603,6 @@ impl FibexWindow {
                 PduWindowEvent::None => {}
             }
         }
-
-        // 调度矩阵窗口
-        self.schedule_window
-            .render(ui, &self.fibex, self.fibex_id, &mut self.show_schedule);
 
         // Frame 编辑窗口
         let mut to_remove: Option<usize> = None;
@@ -617,10 +663,12 @@ impl FibexWindow {
         }
     }
 
-    fn render_pdu_master_content(&mut self, ui: &Ui) {
-        if ui.button("+ Add PDU") {
-            self.handle_pdu_master_event(PduMasterEvent::AddPdu);
-        }
+    fn render_pdu_master_content(&mut self, ui: &Ui, has_pdu_clipboard: bool) -> PduMasterEvent {
+        let mut event = if ui.button("+ Add PDU") {
+            PduMasterEvent::AddPdu
+        } else {
+            PduMasterEvent::None
+        };
         ui.same_line();
         ui.input_text("##pdu_search", &mut self.pdu_search_query)
             .hint("Filter PDUs...")
@@ -658,20 +706,34 @@ impl FibexWindow {
             };
             if asc { cmp } else { cmp.reverse() }
         });
-        let mut event = PduMasterEvent::None;
 
         ui.table("pdus_master_table")
-            .flags(TableFlags::RESIZABLE | TableFlags::BORDERS | TableFlags::SCROLL_X | TableFlags::SCROLL_Y | TableFlags::SORTABLE | TableFlags::ROW_BG)
+            .flags(
+                TableFlags::RESIZABLE
+                    | TableFlags::BORDERS
+                    | TableFlags::SCROLL_X
+                    | TableFlags::SCROLL_Y
+                    | TableFlags::SORTABLE
+                    | TableFlags::ROW_BG,
+            )
             .sizing_policy(TableSizingPolicy::FixedFit)
             .freeze(0, 1)
             .outer_size([0.0, avail[1].max(120.0)])
-            .column("Name").done()
-            .column("Length").done()
-            .column("Type").done()
-            .column("Signals").done()
-            .column("Tx").done()
-            .column("Rx").done()
-            .column("Comment").weight(1.0).done()
+            .column("Name")
+            .done()
+            .column("Length")
+            .done()
+            .column("Type")
+            .done()
+            .column("Signals")
+            .done()
+            .column("Tx")
+            .done()
+            .column("Rx")
+            .done()
+            .column("Comment")
+            .weight(1.0)
+            .done()
             .headers(true)
             .build(|ui| {
                 if let Some(mut specs) = ui.table_get_sort_specs()
@@ -679,16 +741,14 @@ impl FibexWindow {
                 {
                     if let Some(spec) = specs.iter().next() {
                         self.pdu_sort_column_idx = spec.column_index.get();
-                        self.pdu_sort_ascending =
-                            spec.sort_direction == SortDirection::Ascending;
+                        self.pdu_sort_ascending = spec.sort_direction == SortDirection::Ascending;
                     }
                     specs.clear_dirty(ui);
                 }
                 for (row_pos, pdu) in pdus.iter().enumerate() {
                     let pdu_name = pdu.name().to_string();
                     ui.table_next_row();
-                    let is_selected =
-                        self.selected_pdu_names.iter().any(|n| n == &pdu_name);
+                    let is_selected = self.selected_pdu_names.iter().any(|n| n == &pdu_name);
 
                     ui.table_set_column_index(0);
                     if ui
@@ -722,10 +782,8 @@ impl FibexWindow {
                             } else {
                                 (row_pos, anchor_pos)
                             };
-                            self.selected_pdu_names = pdus[lo..=hi]
-                                .iter()
-                                .map(|p| p.name().to_string())
-                                .collect();
+                            self.selected_pdu_names =
+                                pdus[lo..=hi].iter().map(|p| p.name().to_string()).collect();
                         } else {
                             self.selected_pdu_names = vec![pdu_name.clone()];
                             self.pdu_selection_anchor = Some(pdu_name.clone());
@@ -736,9 +794,10 @@ impl FibexWindow {
                     {
                         event = PduMasterEvent::OpenPdu(pdu_name.clone());
                     }
-                    if let Some(_popup) = ui.begin_popup_context_item_with_label(Some(
-                        &format!("pdu_master_ctx_{}_{}", self.fibex_id, pdu_name),
-                    )) {
+                    if let Some(_popup) = ui.begin_popup_context_item_with_label(Some(&format!(
+                        "pdu_master_ctx_{}_{}",
+                        self.fibex_id, pdu_name
+                    ))) {
                         if !self.selected_pdu_names.iter().any(|n| n == &pdu_name) {
                             self.selected_pdu_names = vec![pdu_name.clone()];
                             self.pdu_selection_anchor = Some(pdu_name.clone());
@@ -749,6 +808,19 @@ impl FibexWindow {
                         }
                         if ui.menu_item("Edit") {
                             event = PduMasterEvent::EditPdu(pdu_name.clone());
+                        }
+                        if ui.menu_item("Copy") {
+                            event = PduMasterEvent::CopyPdu(selected.clone());
+                        }
+                        if ui.menu_item("Cut") {
+                            event = PduMasterEvent::CutPdu(selected.clone());
+                        }
+                        if ui.menu_item_enabled_selected_no_shortcut(
+                            "Paste PDU",
+                            false,
+                            has_pdu_clipboard,
+                        ) {
+                            event = PduMasterEvent::PastePdu;
                         }
                         ui.separator();
                         if ui.menu_item("Delete") {
@@ -786,11 +858,12 @@ impl FibexWindow {
                 }
             });
 
-        self.handle_pdu_master_event(event);
+        event
     }
 
-    /// 全文件信号列表（信号列表标签页）：跨 PDU 汇总所有信号，支持筛选与双击定位
-    fn render_signal_list_content(&mut self, ui: &Ui) {
+    /// 全文件信号列表（信号列表标签页）：跨 PDU 汇总所有信号，支持筛选、排序与导出 CSV。
+    /// 返回值是导出失败时的提示文本。
+    fn render_signal_list_content(&mut self, ui: &Ui) -> Option<String> {
         // 汇总 (PDU 名, 信号) 并按筛选条件过滤
         let query = self.signal_search_query.to_lowercase();
         let mut rows: Vec<(String, crate::fibex::editable_fibex::EditableSignal)> = Vec::new();
@@ -806,44 +879,89 @@ impl FibexWindow {
             }
         }
 
+        let col = self.signal_sort_column_idx;
+        let asc = self.signal_sort_ascending;
+        rows.sort_by(|(pa, sa), (pb, sb)| {
+            let cmp = match col {
+                0 => pa.cmp(pb),
+                1 => sa.name().cmp(sb.name()),
+                2 => sa.start_bit().cmp(&sb.start_bit()),
+                3 => sa.length_bits().cmp(&sb.length_bits()),
+                4 => format!("{:?}", sa.byte_order()).cmp(&format!("{:?}", sb.byte_order())),
+                5 => format!("{:?}", sa.value_type()).cmp(&format!("{:?}", sb.value_type())),
+                6 => sa.factor().total_cmp(&sb.factor()),
+                7 => sa.offset().total_cmp(&sb.offset()),
+                8 => sa.unit().cmp(sb.unit()),
+                9 => sa.senders().join(",").cmp(&sb.senders().join(",")),
+                10 => sa.receivers().join(",").cmp(&sb.receivers().join(",")),
+                _ => std::cmp::Ordering::Equal,
+            };
+            if asc { cmp } else { cmp.reverse() }
+        });
+
         ui.input_text("##signal_search", &mut self.signal_search_query)
             .hint("Filter signals / PDUs...")
             .build();
         ui.same_line();
         ui.text_disabled(format!("{} signals", rows.len()));
+        ui.same_line();
+        let export_error =
+            crate::fibex::ui::comm_matrix::render_export_button(ui, &self.fibex, &self.file_path);
         // 工具栏行结束；实测剩余高度让表格正好填满
         let avail = ui.content_region_avail();
 
         let table_height = avail[1].max(120.0);
         ui.table("all_signals_table")
-            .flags(TableFlags::RESIZABLE | TableFlags::BORDERS | TableFlags::SCROLL_X | TableFlags::SCROLL_Y | TableFlags::ROW_BG)
+            .flags(
+                TableFlags::RESIZABLE
+                    | TableFlags::BORDERS
+                    | TableFlags::SCROLL_X
+                    | TableFlags::SCROLL_Y
+                    | TableFlags::SORTABLE
+                    | TableFlags::ROW_BG,
+            )
             .sizing_policy(TableSizingPolicy::FixedFit)
             .freeze(0, 1)
             .outer_size([0.0, table_height])
-            .column("PDU").done()
-            .column("Name").done()
-            .column("Start").done()
-            .column("Bits").done()
-            .column("Byte Order").done()
-            .column("Type").done()
-            .column("Factor").done()
-            .column("Offset").done()
-            .column("Unit").done()
-            .column("Tx").done()
-            .column("Rx").done()
+            .column("PDU")
+            .done()
+            .column("Name")
+            .done()
+            .column("Start")
+            .done()
+            .column("Bits")
+            .done()
+            .column("Byte Order")
+            .done()
+            .column("Type")
+            .done()
+            .column("Factor")
+            .done()
+            .column("Offset")
+            .done()
+            .column("Unit")
+            .done()
+            .column("Tx")
+            .done()
+            .column("Rx")
+            .done()
             .headers(true)
             .build(|ui| {
                 // 选择行为与帧 / PDU 列表一致：单击选中、Ctrl 切换、Shift 范围选择
                 if let Some(mut specs) = ui.table_get_sort_specs()
                     && specs.is_dirty()
                 {
+                    if let Some(spec) = specs.iter().next() {
+                        self.signal_sort_column_idx = spec.column_index.get();
+                        self.signal_sort_ascending =
+                            spec.sort_direction == SortDirection::Ascending;
+                    }
                     specs.clear_dirty(ui);
                 }
                 for (row_pos, (pdu_name, sig)) in rows.iter().enumerate() {
                     let sig_name = sig.name().to_string();
                     let row_key = (pdu_name.clone(), sig_name.clone());
-                    let is_selected =
-                        self.selected_signal_rows.iter().any(|k| k == &row_key);
+                    let is_selected = self.selected_signal_rows.iter().any(|k| k == &row_key);
 
                     ui.table_next_row();
 
@@ -858,10 +976,8 @@ impl FibexWindow {
                         let ctrl = ui.io().key_ctrl();
                         let shift = ui.io().key_shift();
                         if ctrl {
-                            if let Some(pos) = self
-                                .selected_signal_rows
-                                .iter()
-                                .position(|k| k == &row_key)
+                            if let Some(pos) =
+                                self.selected_signal_rows.iter().position(|k| k == &row_key)
                             {
                                 self.selected_signal_rows.remove(pos);
                             } else {
@@ -900,9 +1016,10 @@ impl FibexWindow {
                         self.open_pdu_window(pdu_name);
                     }
 
-                    if let Some(_popup) = ui.begin_popup_context_item_with_label(Some(
-                        &format!("sig_list_ctx_{}_{}", pdu_name, sig_name),
-                    )) {
+                    if let Some(_popup) = ui.begin_popup_context_item_with_label(Some(&format!(
+                        "sig_list_ctx_{}_{}",
+                        pdu_name, sig_name
+                    ))) {
                         if self.selected_signal_rows.is_empty() {
                             self.selected_signal_rows = vec![row_key.clone()];
                         }
@@ -911,10 +1028,7 @@ impl FibexWindow {
                         }
                         ui.separator();
                         let selected = self.selected_signal_rows.clone();
-                        if ui.menu_item(format!(
-                            "Delete selected signals ({})",
-                            selected.len()
-                        )) {
+                        if ui.menu_item(format!("Delete selected signals ({})", selected.len())) {
                             // 按 PDU 分组
                             let mut groups: Vec<(String, Vec<String>)> = Vec::new();
                             for (p, s) in selected {
@@ -965,26 +1079,8 @@ impl FibexWindow {
                     }
                 }
             });
-    }
 
-    fn handle_pdu_master_event(&mut self, event: PduMasterEvent) {
-        match event {
-            PduMasterEvent::OpenPdu(name) => self.open_pdu_window(&name),
-            PduMasterEvent::EditPdu(name) => {
-                if let Some(pdu) = self.fibex.get_pdu(&name) {
-                    let edit_win = PduEditWindowState::open(&name, pdu);
-                    self.edit_pdu_windows.push(edit_win);
-                }
-            }
-            PduMasterEvent::DeletePdu(names) => {
-                self.pending_pdu_delete = Some(names);
-            }
-            PduMasterEvent::AddPdu => {
-                self.fibex.new_pdu();
-                self.is_dirty = true;
-            }
-            PduMasterEvent::None => {}
-        }
+        export_error
     }
 
     fn render_signal_edit_dialog(&mut self, ui: &Ui) {
@@ -1039,6 +1135,9 @@ enum PduMasterEvent {
     OpenPdu(String),
     EditPdu(String),
     DeletePdu(Vec<String>),
+    CopyPdu(Vec<String>),
+    CutPdu(Vec<String>),
+    PastePdu,
     AddPdu,
 }
 
@@ -1063,6 +1162,8 @@ fn next_free_start(fibex: &EditableFibex, frame_name: &str) -> u32 {
 // =====================================================================
 
 pub fn render_fibex_windows(ui: &Ui, ui_state: &mut FibexUiState) {
+    // 焦点声明每帧重算：本帧有 FIBEX 窗口获得焦点时置位，由 render_ui 映射为全局焦点目标
+    ui_state.focus_claimed = false;
     for window_idx in 0..ui_state.fibex_windows.len() {
         let fibex_window = &ui_state.fibex_windows[window_idx];
         let dirty_marker = if fibex_window.is_dirty { "* " } else { "" };
@@ -1089,7 +1190,13 @@ pub fn render_fibex_windows(ui: &Ui, ui_state: &mut FibexUiState) {
             .opened(&mut is_open);
 
         let table_event = window_ui.build(|| {
-            // 主窗口内标签页：帧 / PDU 列表 / 信号列表 / ECU 列表 / 集群参数
+            // 焦点必须在 Begin/End 之间查询：build 闭包返回后当前窗口已出栈
+            if ui.is_window_focused() {
+                ui_state.last_focused_fibex_index = Some(window_idx);
+                ui_state.focus_claimed = true;
+            }
+
+            // 主窗口内标签页：帧 / 调度表 / 通信矩阵 / PDU 列表 / 信号列表 / ECU 列表 / 集群参数
             // 各表格用 content_region_avail() 实测剩余高度，正好填满
             let mut table_event = FrameTableEvent::None;
 
@@ -1098,15 +1205,49 @@ pub fn render_fibex_windows(ui: &Ui, ui_state: &mut FibexUiState) {
                     table_event =
                         ui_state.fibex_windows[window_idx].render_frame_table(ui, has_clipboard);
                 }
+                if ui.tab_item("Schedule").is_some() {
+                    let (fibex_id, picked) = {
+                        let win = &ui_state.fibex_windows[window_idx];
+                        (win.fibex_id, win.selected_frame_names().first().cloned())
+                    };
+                    let win = &mut ui_state.fibex_windows[window_idx];
+                    let event =
+                        win.schedule_window
+                            .render_content(ui, &mut win.fibex, fibex_id, picked);
+                    match event {
+                        ScheduleEvent::SelectFrame(name) => {
+                            win.set_selected_frame_name(Some(&name))
+                        }
+                        ScheduleEvent::Modified(name) => {
+                            win.is_dirty = true;
+                            win.set_selected_frame_name(Some(&name));
+                        }
+                        ScheduleEvent::None => {}
+                    }
+                }
+                if ui.tab_item("Communication Matrix").is_some() {
+                    let win = &ui_state.fibex_windows[window_idx];
+                    crate::fibex::ui::comm_matrix::render_comm_matrix(ui, &win.fibex);
+                }
                 if ui.tab_item("PDU List").is_some() {
-                    ui_state.fibex_windows[window_idx].render_pdu_master_content(ui);
+                    let has_pdu_clipboard = ui_state.has_clipboard_pdu();
+                    let pdu_event = ui_state.fibex_windows[window_idx]
+                        .render_pdu_master_content(ui, has_pdu_clipboard);
+                    handle_pdu_master_event(ui_state, window_idx, pdu_event);
                 }
                 if ui.tab_item("Signal List").is_some() {
-                    ui_state.fibex_windows[window_idx].render_signal_list_content(ui);
+                    let export_error =
+                        ui_state.fibex_windows[window_idx].render_signal_list_content(ui);
+                    if let Some(message) = export_error {
+                        ui_state.error_dialog.message = message;
+                        ui_state.error_dialog.show = true;
+                    }
                 }
                 if ui.tab_item("ECU List").is_some() {
-                    let (win, ecu) =
-                        (&mut ui_state.fibex_windows[window_idx], &mut ui_state.ecu_window);
+                    let (win, ecu) = (
+                        &mut ui_state.fibex_windows[window_idx],
+                        &mut ui_state.ecu_window,
+                    );
                     ecu.render_content(ui, &mut win.fibex);
                 }
                 if ui.tab_item("Cluster Parameters").is_some() {
@@ -1123,11 +1264,6 @@ pub fn render_fibex_windows(ui: &Ui, ui_state: &mut FibexUiState) {
 
             table_event
         });
-
-        if ui.is_window_focused() {
-            ui_state.last_focused_fibex_index = Some(window_idx);
-            ui_state.focus_claimed = true;
-        }
 
         if !is_open && was_open && ui_state.fibex_windows[window_idx].is_dirty {
             is_open = true;
@@ -1195,9 +1331,14 @@ fn handle_frame_table_event(
             ui_state.fibex_windows[window_idx].open_frame_window(&frame_name);
         }
         FrameTableEvent::EditFrame(frame_name) => {
-            if let Some(frame) = ui_state.fibex_windows[window_idx].fibex.get_frame(&frame_name) {
+            if let Some(frame) = ui_state.fibex_windows[window_idx]
+                .fibex
+                .get_frame(&frame_name)
+            {
                 let edit_win = FrameEditWindowState::open(&frame_name, frame);
-                ui_state.fibex_windows[window_idx].edit_frame_windows.push(edit_win);
+                ui_state.fibex_windows[window_idx]
+                    .edit_frame_windows
+                    .push(edit_win);
             }
         }
         FrameTableEvent::CopyFrame(names) => {
@@ -1228,18 +1369,14 @@ fn handle_frame_table_event(
                 ui_state.clipboard.copied_frames = frames;
             }
             ui_state.confirm_delete_dialog.target = Some(DeleteTarget::Frames(names.clone()));
-            ui_state.confirm_delete_dialog.display_name = frames_display_name(
-                &ui_state.fibex_windows[window_idx].fibex,
-                &names,
-            );
+            ui_state.confirm_delete_dialog.display_name =
+                frames_display_name(&ui_state.fibex_windows[window_idx].fibex, &names);
             ui_state.confirm_delete_dialog.show = true;
         }
         FrameTableEvent::DeleteFrame(names) => {
             ui_state.confirm_delete_dialog.target = Some(DeleteTarget::Frames(names.clone()));
-            ui_state.confirm_delete_dialog.display_name = frames_display_name(
-                &ui_state.fibex_windows[window_idx].fibex,
-                &names,
-            );
+            ui_state.confirm_delete_dialog.display_name =
+                frames_display_name(&ui_state.fibex_windows[window_idx].fibex, &names);
             ui_state.confirm_delete_dialog.show = true;
         }
         FrameTableEvent::PasteFrame => {
@@ -1247,10 +1384,8 @@ fn handle_frame_table_event(
             if !copied.is_empty() {
                 let win = &mut ui_state.fibex_windows[window_idx];
                 for mut new_frame in copied {
-                    let mut new_name = format!("{}_copy", new_frame.name());
-                    while win.fibex.get_frame(&new_name).is_some() {
-                        new_name = format!("{}_copy{}", new_name, 2);
-                    }
+                    let base = new_frame.name().to_string();
+                    let new_name = unique_copy_name(&base, |n| win.fibex.get_frame(n).is_some());
                     new_frame.set_name(&new_name);
                     win.fibex.add_frame(&new_frame);
                 }
@@ -1264,6 +1399,83 @@ fn handle_frame_table_event(
             win.is_dirty = true;
         }
         FrameTableEvent::None => {}
+    }
+}
+
+/// PDU 列表标签页的事件处理。放在外层是因为复制/粘贴要读写跨窗口共享的剪贴板。
+fn handle_pdu_master_event(ui_state: &mut FibexUiState, window_idx: usize, event: PduMasterEvent) {
+    match event {
+        PduMasterEvent::OpenPdu(name) => ui_state.fibex_windows[window_idx].open_pdu_window(&name),
+        PduMasterEvent::EditPdu(name) => {
+            let win = &mut ui_state.fibex_windows[window_idx];
+            if let Some(pdu) = win.fibex.get_pdu(&name) {
+                let edit_win = PduEditWindowState::open(&name, pdu);
+                win.edit_pdu_windows.push(edit_win);
+            }
+        }
+        PduMasterEvent::DeletePdu(names) => {
+            ui_state.fibex_windows[window_idx].pending_pdu_delete = Some(names);
+        }
+        PduMasterEvent::AddPdu => {
+            let win = &mut ui_state.fibex_windows[window_idx];
+            win.fibex.new_pdu();
+            win.is_dirty = true;
+        }
+        PduMasterEvent::CopyPdu(names) => {
+            let pdus: Vec<EditablePdu> = names
+                .iter()
+                .filter_map(|n| ui_state.fibex_windows[window_idx].fibex.get_pdu(n).cloned())
+                .collect();
+            if !pdus.is_empty() {
+                ui_state.clipboard.copied_pdus = pdus;
+            }
+        }
+        PduMasterEvent::CutPdu(names) => {
+            handle_pdu_master_event(ui_state, window_idx, PduMasterEvent::CopyPdu(names.clone()));
+            ui_state.fibex_windows[window_idx].pending_pdu_delete = Some(names);
+        }
+        PduMasterEvent::PastePdu => {
+            let copied = ui_state.clipboard.copied_pdus.clone();
+            if copied.is_empty() {
+                return;
+            }
+            let win = &mut ui_state.fibex_windows[window_idx];
+            for mut pdu in copied {
+                let base = pdu.name().to_string();
+                let name = unique_copy_name(&base, |n| win.fibex.get_pdu(n).is_some());
+                pdu.name = name;
+                win.fibex.add_pdu(&pdu);
+            }
+            win.is_dirty = true;
+        }
+        PduMasterEvent::None => {}
+    }
+}
+
+/// 生成不冲突的副本名：base -> base_copy -> base_copy2 -> base_copy3 ...
+fn unique_copy_name(base: &str, exists: impl Fn(&str) -> bool) -> String {
+    let mut suffix = 1usize;
+    loop {
+        let name = if suffix == 1 {
+            format!("{base}_copy")
+        } else {
+            format!("{base}_copy{suffix}")
+        };
+        if !exists(&name) {
+            return name;
+        }
+        suffix += 1;
+    }
+}
+
+/// 帧表格里两通道共用一列的取值：相同就写一次，不同写 "A 1 / B 3"
+fn dual_cell<T: PartialEq + std::fmt::Display>(a: Option<T>, b: Option<T>) -> String {
+    match (a, b) {
+        (Some(x), Some(y)) if x == y => x.to_string(),
+        (Some(x), Some(y)) => format!("A {} / B {}", x, y),
+        (Some(x), None) => x.to_string(),
+        (None, Some(y)) => y.to_string(),
+        (None, None) => "-".to_string(),
     }
 }
 
@@ -1362,9 +1574,8 @@ fn execute_delete(ui_state: &mut FibexUiState) {
                 if total > 1 {
                     win.fibex.merge_last_compounds(total);
                 }
-                win.selected_signal_rows.retain(|(p, _)| {
-                    !groups.iter().any(|(gp, _)| gp == p)
-                });
+                win.selected_signal_rows
+                    .retain(|(p, _)| !groups.iter().any(|(gp, _)| gp == p));
                 win.is_dirty = true;
             }
         }
@@ -1379,7 +1590,10 @@ fn render_close_confirm_dialog(ui: &Ui, ui_state: &mut FibexUiState) {
     }
 
     if let Some(_popup) = ui.begin_modal_popup("Save Changes") {
-        let idx = ui_state.close_confirm_dialog.fibex_window_index.unwrap_or(0);
+        let idx = ui_state
+            .close_confirm_dialog
+            .fibex_window_index
+            .unwrap_or(0);
         let file_name = ui_state
             .fibex_windows
             .get(idx)
@@ -1430,7 +1644,7 @@ fn render_validation_dialog(ui: &Ui, ui_state: &mut FibexUiState) {
     let mut is_open = true;
     ui.window("Validation Results")
         .opened(&mut is_open)
-        .flags(dear_imgui_rs::WindowFlags::ALWAYS_AUTO_RESIZE)
+        .size([640.0, 420.0], dear_imgui_rs::Condition::FirstUseEver)
         .build(|| {
             let issues = &ui_state.validation_dialog.issues;
             let error_count = issues
@@ -1443,7 +1657,10 @@ fn render_validation_dialog(ui: &Ui, ui_state: &mut FibexUiState) {
                 .count();
 
             if issues.is_empty() {
-                ui.text_colored([0.0, 0.8, 0.0, 1.0], "No issues found. The database is valid.");
+                ui.text_colored(
+                    [0.0, 0.8, 0.0, 1.0],
+                    "No issues found. The database is valid.",
+                );
             } else {
                 ui.text(format!(
                     "Found {} error(s), {} warning(s):",
@@ -1451,15 +1668,26 @@ fn render_validation_dialog(ui: &Ui, ui_state: &mut FibexUiState) {
                 ));
                 ui.separator();
 
-                if let Some(_table) = ui.begin_table_with_flags(
+                // 表格填满剩余高度并在内部滚动：窗口尺寸交给用户拖拽
+                let avail_h = ui.content_region_avail()[1];
+                if let Some(_table) = ui.begin_table_with_sizing(
                     "validation_table",
                     2,
-                    imgui_table_flags(),
+                    dear_imgui_rs::TableOptions::new()
+                        .flags(imgui_table_flags())
+                        .sizing_policy(dear_imgui_rs::TableSizingPolicy::FixedFit),
+                    [0.0, avail_h],
+                    0.0,
                 ) {
                     // 冻结标题行
                     ui.table_setup_scroll_freeze(0, 1);
                     ui.table_setup_column("Severity", dear_imgui_rs::TableColumnFlags::NONE, None);
-                    ui.table_setup_column("Message", dear_imgui_rs::TableColumnFlags::NONE, None);
+                    // Message 列占满剩余宽度
+                    ui.table_setup_column(
+                        "Message",
+                        dear_imgui_rs::TableColumnFlags::NONE,
+                        Some(dear_imgui_rs::TableColumnWidth::Stretch(1.0)),
+                    );
                     ui.table_headers_row();
 
                     for issue in issues {
@@ -1488,7 +1716,7 @@ fn render_validation_dialog(ui: &Ui, ui_state: &mut FibexUiState) {
 fn imgui_table_flags() -> dear_imgui_rs::TableFlags {
     dear_imgui_rs::TableFlags::RESIZABLE
         | dear_imgui_rs::TableFlags::BORDERS
-        
+        | dear_imgui_rs::TableFlags::SCROLL_X
         | dear_imgui_rs::TableFlags::SCROLL_Y
         | dear_imgui_rs::TableFlags::ROW_BG
 }

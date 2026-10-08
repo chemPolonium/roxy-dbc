@@ -2,6 +2,7 @@
 
 mod app;
 mod editable_dbc;
+mod excel;
 mod export;
 mod fibex;
 mod file_encoding;
@@ -101,7 +102,10 @@ impl ApplicationHandler for App {
                     }
                 };
 
-                if let Err(e) = imgui.platform.prepare_frame(&mut imgui.context, &window.window) {
+                if let Err(e) = imgui
+                    .platform
+                    .prepare_frame(&mut imgui.context, &window.window)
+                {
                     eprintln!("prepare_frame failed: {e}");
                     return;
                 }
@@ -161,13 +165,13 @@ impl ApplicationHandler for App {
 
         // 转发给 dear-imgui-winit 平台层处理输入
         if let Some(imgui) = window.imgui.as_mut()
-            && let Err(e) = imgui.platform.handle_window_event(
-                &mut imgui.context,
-                &window.window,
-                &event,
-            ) {
-                eprintln!("platform handle_window_event failed: {e}");
-            }
+            && let Err(e) =
+                imgui
+                    .platform
+                    .handle_window_event(&mut imgui.context, &window.window, &event)
+        {
+            eprintln!("platform handle_window_event failed: {e}");
+        }
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {

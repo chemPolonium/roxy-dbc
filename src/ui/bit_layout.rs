@@ -1,7 +1,7 @@
 use can_dbc::ByteOrder;
 use dear_imgui_rs::Ui;
 
-use crate::editable_dbc::{get_signal_bit_positions, EditableMessage};
+use crate::editable_dbc::{EditableMessage, get_signal_bit_positions};
 
 /// Compute the absolute bit indices occupied by a signal.
 /// Bit index N means byte N/8, bit N%8 within that byte.
@@ -78,9 +78,13 @@ pub fn render_bit_layout(ui: &Ui, message: &EditableMessage, selected_names: &[S
             let col = 7 - (bit % 8);
             let x = origin[0] + LABEL_W + col as f32 * CELL_W;
             let y = grid_top + byte as f32 * CELL_H;
-            dl.add_rect([x + 1.0, y + 1.0], [x + CELL_W - 1.0, y + CELL_H - 1.0], color)
-                .filled(true)
-                .build();
+            dl.add_rect(
+                [x + 1.0, y + 1.0],
+                [x + CELL_W - 1.0, y + CELL_H - 1.0],
+                color,
+            )
+            .filled(true)
+            .build();
             if label_pos.is_none() {
                 label_pos = Some([x, y]);
             }
@@ -92,9 +96,13 @@ pub fn render_bit_layout(ui: &Ui, message: &EditableMessage, selected_names: &[S
             } else {
                 [color[0], color[1], color[2], 1.0]
             };
-            dl.add_rect([x + 0.5, y + 0.5], [x + CELL_W - 0.5, y + CELL_H - 0.5], border_color)
-                .thickness(if is_selected { 2.0 } else { 1.0 })
-                .build();
+            dl.add_rect(
+                [x + 0.5, y + 0.5],
+                [x + CELL_W - 0.5, y + CELL_H - 0.5],
+                border_color,
+            )
+            .thickness(if is_selected { 2.0 } else { 1.0 })
+            .build();
             dl.add_text(
                 [x + 3.0, y + CELL_H / 2.0 - 6.0],
                 [1.0, 1.0, 1.0, 1.0],

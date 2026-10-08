@@ -8,7 +8,7 @@ use crate::ui::all_signals_window::{self, AllSignalsEvent, AllSignalsWindow};
 use crate::ui::comm_matrix::render_comm_matrix;
 use crate::ui::message_edit_window::{MessageEditEvent, MessageEditWindowState};
 use crate::ui::message_window::{MessageWindow, MessageWindowEvent};
-use crate::ui::node_window::{render_node_list, NodeListState};
+use crate::ui::node_window::{NodeListState, render_node_list};
 use crate::ui::signal_edit_window::SignalEditDialog;
 use crate::ui::state::{DeleteTarget, UiState};
 use dear_imgui_rs::{Condition, MouseButton, SortDirection, TabItemFlags, TableFlags, Ui};
@@ -188,7 +188,11 @@ impl DbcWindow {
                 window.had_bom = decoded.had_bom;
                 Ok(window)
             }
-            Err(e) => Err(format!("Failed to parse DBC {}: {:?}", file_path.display(), e)),
+            Err(e) => Err(format!(
+                "Failed to parse DBC {}: {:?}",
+                file_path.display(),
+                e
+            )),
         }
     }
 
@@ -224,16 +228,29 @@ impl DbcWindow {
 
         let col = self.message_table.sort_column_idx;
         let asc = self.message_table.sort_ascending;
+        // 周期时间列：按 GenMsgCycleTime / CycleTime 依次取文件里声明过的那个
+        let cycles: Vec<Option<String>> = messages
+            .iter()
+            .map(|m| {
+                self.dbc
+                    .message_cycle_time(m.message_id())
+                    .map(|v| v.display())
+            })
+            .collect();
         filtered.sort_by(|&a, &b| {
             let ma = &messages[a];
             let mb = &messages[b];
+            let cycle_key = |v: &Option<String>| v.as_deref().and_then(|s| s.parse::<f64>().ok());
             let cmp = match col {
                 0 => ma.message_id().cmp(&mb.message_id()),
                 1 => ma.message_name().cmp(mb.message_name()),
                 2 => ma.message_size().cmp(&mb.message_size()),
                 3 => ma.transmitter().cmp(mb.transmitter()),
                 4 => ma.signals().len().cmp(&mb.signals().len()),
-                5 => ma.comment().cmp(mb.comment()),
+                5 => cycle_key(&cycles[a])
+                    .partial_cmp(&cycle_key(&cycles[b]))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                6 => ma.comment().cmp(mb.comment()),
                 _ => std::cmp::Ordering::Equal,
             };
             if asc { cmp } else { cmp.reverse() }
@@ -242,9 +259,11 @@ impl DbcWindow {
         // Keyboard navigation
         if ui.is_window_focused() && !ui.io().want_capture_keyboard() && !filtered.is_empty() {
             let shift = ui.io().key_shift();
-            let cursor_pos = self
-                .selection_cursor
-                .and_then(|id| filtered.iter().position(|&idx| messages[idx].message_id() == id));
+            let cursor_pos = self.selection_cursor.and_then(|id| {
+                filtered
+                    .iter()
+                    .position(|&idx| messages[idx].message_id() == id)
+            });
 
             let move_cursor = |pos: Option<usize>, down: bool| -> usize {
                 match pos {
@@ -273,7 +292,11 @@ impl DbcWindow {
                         .iter()
                         .position(|&idx| messages[idx].message_id() == anchor)
                         .unwrap_or(pos);
-                    let (lo, hi) = if anchor_pos <= pos { (anchor_pos, pos) } else { (pos, anchor_pos) };
+                    let (lo, hi) = if anchor_pos <= pos {
+                        (anchor_pos, pos)
+                    } else {
+                        (pos, anchor_pos)
+                    };
                     self.selected_message_ids = filtered[lo..=hi]
                         .iter()
                         .map(|&idx| messages[idx].message_id())
@@ -284,9 +307,12 @@ impl DbcWindow {
                 }
             }
             if ui.is_key_pressed(dear_imgui_rs::Key::Enter)
-                && let Some(msg_id) = self.selection_cursor.or(self.selected_message_ids.first().copied()) {
-                    event = MessageTableEvent::OpenMessage(msg_id);
-                }
+                && let Some(msg_id) = self
+                    .selection_cursor
+                    .or(self.selected_message_ids.first().copied())
+            {
+                event = MessageTableEvent::OpenMessage(msg_id);
+            }
         }
 
         // 底部状态栏预留 20px
@@ -294,7 +320,7 @@ impl DbcWindow {
         let avail_h = ui.content_region_avail()[1];
         if let Some(_table) = ui.begin_table_with_sizing(
             "msg_table",
-            6,
+            7,
             dear_imgui_rs::TableOptions::new()
                 .flags(
                     TableFlags::RESIZABLE
@@ -313,6 +339,7 @@ impl DbcWindow {
             ui.table_setup_column("DLC", dear_imgui_rs::TableColumnFlags::NONE, None);
             ui.table_setup_column("Transmitter", dear_imgui_rs::TableColumnFlags::NONE, None);
             ui.table_setup_column("Signals", dear_imgui_rs::TableColumnFlags::NONE, None);
+            ui.table_setup_column("Cycle", dear_imgui_rs::TableColumnFlags::NONE, None);
             // 注释列 Stretch：占满表格剩余宽度；其余列宽自适应内容
             ui.table_setup_column(
                 "Comment",
@@ -324,14 +351,15 @@ impl DbcWindow {
             ui.table_headers_row();
 
             if let Some(mut sort_specs) = ui.table_get_sort_specs()
-                && sort_specs.is_dirty() {
-                    if let Some(spec) = sort_specs.iter().next() {
-                        self.message_table.sort_column_idx = usize::from(spec.column_index) as u32;
-                        self.message_table.sort_ascending =
-                            spec.sort_direction == SortDirection::Ascending;
-                    }
-                    sort_specs.clear_dirty(ui);
+                && sort_specs.is_dirty()
+            {
+                if let Some(spec) = sort_specs.iter().next() {
+                    self.message_table.sort_column_idx = usize::from(spec.column_index) as u32;
+                    self.message_table.sort_ascending =
+                        spec.sort_direction == SortDirection::Ascending;
                 }
+                sort_specs.clear_dirty(ui);
+            }
 
             for (row_pos, &idx) in filtered.iter().enumerate() {
                 let msg = &messages[idx];
@@ -342,7 +370,11 @@ impl DbcWindow {
                 let is_selected = self.selected_message_ids.contains(&msg_id);
 
                 ui.table_set_column_index(0);
-                let id_label = format!("0x{:03X}{}", msg_id, if msg.is_extended() { "x" } else { "" });
+                let id_label = format!(
+                    "0x{:03X}{}",
+                    msg_id,
+                    if msg.is_extended() { "x" } else { "" }
+                );
                 if ui
                     .selectable_config(id_label)
                     .selected(is_selected)
@@ -352,8 +384,10 @@ impl DbcWindow {
                     let ctrl = ui.io().key_ctrl();
                     let shift = ui.io().key_shift();
                     if ctrl {
-                        if let Some(pos) =
-                            self.selected_message_ids.iter().position(|&id| id == msg_id)
+                        if let Some(pos) = self
+                            .selected_message_ids
+                            .iter()
+                            .position(|&id| id == msg_id)
                         {
                             self.selected_message_ids.remove(pos);
                         } else {
@@ -383,15 +417,13 @@ impl DbcWindow {
                         self.selection_cursor = Some(msg_id);
                     }
                 }
-                if ui.is_item_hovered()
-                    && ui.is_mouse_double_clicked(MouseButton::Left)
-                {
+                if ui.is_item_hovered() && ui.is_mouse_double_clicked(MouseButton::Left) {
                     event = MessageTableEvent::OpenMessage(msg_id);
                 }
 
-                if let Some(_popup) = ui.begin_popup_context_item_with_label(Some(
-                    &format!("msg_ctx_{}", msg_id),
-                )) {
+                if let Some(_popup) =
+                    ui.begin_popup_context_item_with_label(Some(&format!("msg_ctx_{}", msg_id)))
+                {
                     if !self.selected_message_ids.contains(&msg_id) {
                         self.selected_message_ids = vec![msg_id];
                         self.selection_anchor = Some(msg_id);
@@ -430,6 +462,12 @@ impl DbcWindow {
                 ui.text(format!("{}", msg.signals().len()));
 
                 ui.table_set_column_index(5);
+                match cycles[idx].as_deref() {
+                    Some(cycle) => ui.text(cycle),
+                    None => ui.text_disabled("-"),
+                }
+
+                ui.table_set_column_index(6);
                 ui.text(msg.comment());
             }
         }
@@ -437,7 +475,11 @@ impl DbcWindow {
         event
     }
 
-    pub fn render_floating_windows(&mut self, ui: &Ui, has_clipboard: bool) -> Vec<SignalWindowEvent> {
+    pub fn render_floating_windows(
+        &mut self,
+        ui: &Ui,
+        has_clipboard: bool,
+    ) -> Vec<SignalWindowEvent> {
         let mut signal_events = Vec::new();
 
         for msg_win in &mut self.message_windows {
@@ -445,10 +487,15 @@ impl DbcWindow {
             match win_event {
                 MessageWindowEvent::EditSignal(sig_name) => {
                     if let Some(msg) = self.dbc.get_message(msg_win.message_id)
-                        && let Some(sig) = msg.signals().iter().find(|s| s.name() == sig_name) {
-                            self.signal_edit_dialog
-                                .open_from_signal(msg.message_id(), sig, &self.file_path);
-                        }
+                        && let Some(sig) = msg.signals().iter().find(|s| s.name() == sig_name)
+                    {
+                        self.signal_edit_dialog.open_from_signal(
+                            &self.dbc,
+                            msg.message_id(),
+                            sig,
+                            &self.file_path,
+                        );
+                    }
                 }
                 MessageWindowEvent::CopySignal(sig_names) => {
                     signal_events.push(SignalWindowEvent::CopySignal {
@@ -480,9 +527,8 @@ impl DbcWindow {
                 MessageWindowEvent::None => {}
             }
         }
-        self.message_windows.retain(|w| {
-            w.is_open && self.dbc.get_message(w.message_id).is_some()
-        });
+        self.message_windows
+            .retain(|w| w.is_open && self.dbc.get_message(w.message_id).is_some());
 
         self.render_edit_windows(ui);
 
@@ -490,14 +536,15 @@ impl DbcWindow {
         let dialog_msg_id = self.signal_edit_dialog.message_id;
         self.render_signal_edit_dialog(ui);
 
-        if dialog_was_shown && !self.signal_edit_dialog.show
+        if dialog_was_shown
+            && !self.signal_edit_dialog.show
             && let Some(msg_win) = self
                 .message_windows
                 .iter_mut()
                 .find(|w| w.message_id == dialog_msg_id)
-            {
-                msg_win.focus_requested = true;
-            }
+        {
+            msg_win.focus_requested = true;
+        }
 
         signal_events
     }
@@ -507,14 +554,14 @@ impl DbcWindow {
             return;
         }
         if self.dbc.get_message(msg_id).is_some() {
-            self.message_windows
-                .push(MessageWindow::new(msg_id));
+            self.message_windows.push(MessageWindow::new(msg_id));
         }
     }
 
     /// 关闭与被删消息关联的 Message 窗口、编辑窗口和信号编辑对话框
     pub fn close_windows_for_messages(&mut self, ids: &[u32]) {
-        self.message_windows.retain(|w| !ids.contains(&w.message_id));
+        self.message_windows
+            .retain(|w| !ids.contains(&w.message_id));
         self.edit_windows.retain(|w| !ids.contains(&w.current_id));
         if ids.contains(&self.signal_edit_dialog.message_id) {
             self.signal_edit_dialog.show = false;
@@ -535,7 +582,9 @@ impl DbcWindow {
                 }
             };
 
-            if let Some(_tab) = ui.tab_item_with_flags("Messages & Signals", None, flags_for(DbcTab::Messages)) {
+            if let Some(_tab) =
+                ui.tab_item_with_flags("Messages & Signals", None, flags_for(DbcTab::Messages))
+            {
                 match self.render_message_table(ui, has_clipboard) {
                     MessageTableEvent::OpenAllSignals => {
                         self.pending_tab = Some(DbcTab::AllSignals);
@@ -544,7 +593,9 @@ impl DbcWindow {
                     ev => event = DbcWindowEvent::Msg(ev),
                 }
             }
-            if let Some(_tab) = ui.tab_item_with_flags("All Signals", None, flags_for(DbcTab::AllSignals)) {
+            if let Some(_tab) =
+                ui.tab_item_with_flags("All Signals", None, flags_for(DbcTab::AllSignals))
+            {
                 let ctx = all_signals_window::MatrixContext {
                     dbc: &mut self.dbc,
                     signal_edit_dialog: &mut self.signal_edit_dialog,
@@ -557,14 +608,18 @@ impl DbcWindow {
                     ev => event = DbcWindowEvent::AllSignals(ev),
                 }
             }
-            if let Some(_tab) = ui.tab_item_with_flags("Node List", None, flags_for(DbcTab::NodeList))
-                && render_node_list(ui, &mut self.dbc, &mut self.node_list) {
-                    self.is_dirty = true;
-                }
-            if let Some(_tab) = ui.tab_item_with_flags("Communication Matrix", None, flags_for(DbcTab::CommMatrix)) {
+            if let Some(_tab) =
+                ui.tab_item_with_flags("Node List", None, flags_for(DbcTab::NodeList))
+                && render_node_list(ui, &mut self.dbc, &mut self.node_list)
+            {
+                self.is_dirty = true;
+            }
+            if let Some(_tab) =
+                ui.tab_item_with_flags("Communication Matrix", None, flags_for(DbcTab::CommMatrix))
+            {
                 render_comm_matrix(ui, &mut self.dbc, &mut self.is_dirty);
             }
-            if let Some(_tab) = ui.tab_item_with_flags("Export ARXML", None, flags_for(DbcTab::Export)) {
+            if let Some(_tab) = ui.tab_item_with_flags("Export", None, flags_for(DbcTab::Export)) {
                 self.render_export_tab(ui);
             }
         }
@@ -572,10 +627,10 @@ impl DbcWindow {
         event
     }
 
-    /// Export ARXML 标签页：把当前 DBC 导出为 AUTOSAR 4.x 风格 ARXML
+    /// 导出标签页：把当前 DBC 导出为 ARXML 或通信矩阵 Excel
     fn render_export_tab(&mut self, ui: &Ui) {
         ui.text_disabled(
-            "Export this DBC as AUTOSAR 4.x style ARXML (CAN-FRAME / I-SIGNAL-I-PDU).",
+            "Export this DBC as AUTOSAR 4.x style ARXML, or as the CanMatrix Excel sheet.",
         );
         ui.separator();
 
@@ -597,15 +652,35 @@ impl DbcWindow {
             let xml = crate::export::arxml::export_arxml(&self.dbc);
             match std::fs::write(&path, xml) {
                 Ok(_) => {
-                    self.export_status = Some((
-                        true,
-                        format!("Exported to {}", path.to_string_lossy()),
-                    ));
+                    self.export_status =
+                        Some((true, format!("Exported to {}", path.to_string_lossy())));
                 }
                 Err(e) => {
                     self.export_status = Some((false, format!("Export failed: {}", e)));
                 }
             }
+        }
+
+        ui.same_line();
+        if ui.button("Export Excel...") {
+            let default_name = format!(
+                "{}.xlsx",
+                std::path::Path::new(&self.file_path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("export")
+            );
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("Excel files", &["xlsx"])
+                .set_file_name(&default_name)
+                .save_file()
+            else {
+                return;
+            };
+            self.export_status = match crate::excel::write_template(&path, Some(&self.dbc)) {
+                Ok(()) => Some((true, format!("Exported to {}", path.to_string_lossy()))),
+                Err(e) => Some((false, e)),
+            };
         }
 
         if let Some((ok, message)) = &self.export_status {
@@ -616,13 +691,17 @@ impl DbcWindow {
                 ui.text_colored([1.0, 0.3, 0.3, 1.0], message);
             }
         }
+
+        ui.separator();
+        // 说明这些列落到 DBC 属性里，Excel 与 .dbc 之间来回不丢
+        ui.text_wrapped(crate::excel::attribute_columns_hint());
     }
 
     fn render_edit_windows(&mut self, ui: &Ui) {
         let mut to_remove = None;
 
         for (i, edit_win) in self.edit_windows.iter_mut().enumerate() {
-            let event = edit_win.render(ui);
+            let event = edit_win.render(ui, &self.dbc);
             match event {
                 MessageEditEvent::Apply => {
                     let old_id = edit_win.current_id;
@@ -683,7 +762,7 @@ impl DbcWindow {
             return;
         }
 
-        let event = self.signal_edit_dialog.render(ui);
+        let event = self.signal_edit_dialog.render(ui, &self.dbc);
         match event {
             crate::ui::signal_edit_window::SignalEditEvent::Apply => {
                 self.signal_edit_dialog.apply_edit(&mut self.dbc);
@@ -710,13 +789,17 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
         // 标题显示完整路径（含所在文件夹）；ID 取 ## 后的稳定路径，
         // 脏标记变化不重置布局，同名文件（不同路径）也不互相覆盖
         let dirty_marker = if dbc_window.is_dirty { "* " } else { "" };
-        let title = format!("DBC - {}{}##dbc_{}", dirty_marker, dbc_window.file_path, dbc_window.file_path);
+        let title = format!(
+            "DBC - {}{}##dbc_{}",
+            dirty_marker, dbc_window.file_path, dbc_window.file_path
+        );
 
         if let Some(request_focus_idx) = ui_state.dbc_window_focus_request
-            && request_focus_idx == window_idx {
-                ui.set_window_focus(Some(&title));
-                ui_state.dbc_window_focus_request = None;
-            }
+            && request_focus_idx == window_idx
+        {
+            ui.set_window_focus(Some(&title));
+            ui_state.dbc_window_focus_request = None;
+        }
 
         let mut is_open = ui_state.dbc_windows[window_idx].is_open;
         let was_open = is_open;
@@ -728,13 +811,13 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
             .opened(&mut is_open);
 
         let window_event = window_ui.build(|| {
+            // 焦点必须在 Begin/End 之间查询：build 闭包返回后当前窗口已出栈
+            if ui.is_window_focused() {
+                ui_state.last_focused_dbc_index = Some(window_idx);
+                ui_state.focus = crate::ui::state::FocusTarget::Dbc;
+            }
             ui_state.dbc_windows[window_idx].render_tabs(ui, has_clipboard)
         });
-
-        if ui.is_window_focused() {
-            ui_state.last_focused_dbc_index = Some(window_idx);
-            ui_state.focus = crate::ui::state::FocusTarget::Dbc;
-        }
 
         if !is_open && was_open && ui_state.dbc_windows[window_idx].is_dirty {
             is_open = true;
@@ -750,7 +833,10 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
                     handle_message_table_event(ui_state, window_idx, table_event);
                 }
             }
-            Some(DbcWindowEvent::AllSignals(AllSignalsEvent::DeleteSignal { msg_id, sig_name })) => {
+            Some(DbcWindowEvent::AllSignals(AllSignalsEvent::DeleteSignal {
+                msg_id,
+                sig_name,
+            })) => {
                 ui_state.confirm_delete_dialog.target =
                     Some(DeleteTarget::Signals(msg_id, vec![sig_name.clone()]));
                 ui_state.confirm_delete_dialog.display_name = format!("signal '{}'", sig_name);
@@ -799,27 +885,29 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
     }
 }
 
-fn handle_message_table_event(
-    ui_state: &mut UiState,
-    window_idx: usize,
-    event: MessageTableEvent,
-) {
+fn handle_message_table_event(ui_state: &mut UiState, window_idx: usize, event: MessageTableEvent) {
     match event {
         MessageTableEvent::OpenMessage(msg_id) => {
             ui_state.dbc_windows[window_idx].open_message_window(msg_id);
         }
         MessageTableEvent::EditMessage(msg_id) => {
             if let Some(win) = ui_state.dbc_windows.get_mut(window_idx)
-                && let Some(msg) = win.dbc.get_message(msg_id) {
-                    let nodes = win.dbc.nodes().clone();
-                    let edit_win = MessageEditWindowState::open(msg, &win.file_path, nodes);
-                    win.edit_windows.push(edit_win);
-                }
+                && let Some(msg) = win.dbc.get_message(msg_id)
+            {
+                let nodes = win.dbc.nodes().clone();
+                let edit_win = MessageEditWindowState::open(&win.dbc, msg, &win.file_path, nodes);
+                win.edit_windows.push(edit_win);
+            }
         }
         MessageTableEvent::CopyMessage(ids) => {
             let msgs: Vec<EditableMessage> = ids
                 .iter()
-                .filter_map(|id| ui_state.dbc_windows[window_idx].dbc.get_message(*id).cloned())
+                .filter_map(|id| {
+                    ui_state.dbc_windows[window_idx]
+                        .dbc
+                        .get_message(*id)
+                        .cloned()
+                })
                 .collect();
             if !msgs.is_empty() {
                 ui_state.clipboard.copied_messages = msgs;
@@ -828,24 +916,25 @@ fn handle_message_table_event(
         MessageTableEvent::CutMessage(ids) => {
             let msgs: Vec<EditableMessage> = ids
                 .iter()
-                .filter_map(|id| ui_state.dbc_windows[window_idx].dbc.get_message(*id).cloned())
+                .filter_map(|id| {
+                    ui_state.dbc_windows[window_idx]
+                        .dbc
+                        .get_message(*id)
+                        .cloned()
+                })
                 .collect();
             if !msgs.is_empty() {
                 ui_state.clipboard.copied_messages = msgs;
             }
             ui_state.confirm_delete_dialog.target = Some(DeleteTarget::Messages(ids.clone()));
-            ui_state.confirm_delete_dialog.display_name = messages_display_name(
-                &ui_state.dbc_windows[window_idx].dbc,
-                &ids,
-            );
+            ui_state.confirm_delete_dialog.display_name =
+                messages_display_name(&ui_state.dbc_windows[window_idx].dbc, &ids);
             ui_state.confirm_delete_dialog.show = true;
         }
         MessageTableEvent::DeleteMessage(ids) => {
             ui_state.confirm_delete_dialog.target = Some(DeleteTarget::Messages(ids.clone()));
-            ui_state.confirm_delete_dialog.display_name = messages_display_name(
-                &ui_state.dbc_windows[window_idx].dbc,
-                &ids,
-            );
+            ui_state.confirm_delete_dialog.display_name =
+                messages_display_name(&ui_state.dbc_windows[window_idx].dbc, &ids);
             ui_state.confirm_delete_dialog.show = true;
         }
         MessageTableEvent::PasteMessage => {
@@ -998,9 +1087,10 @@ fn render_close_confirm_dialog(ui: &Ui, ui_state: &mut UiState) {
         ui.same_line();
         if ui.button("Don't Save") {
             if let Some(idx) = ui_state.close_confirm_dialog.dbc_window_index
-                && let Some(win) = ui_state.dbc_windows.get_mut(idx) {
-                    win.is_open = false;
-                }
+                && let Some(win) = ui_state.dbc_windows.get_mut(idx)
+            {
+                win.is_open = false;
+            }
             ui_state.close_confirm_dialog.dbc_window_index = None;
             ui.close_current_popup();
         }
@@ -1112,38 +1202,40 @@ fn handle_signal_window_event(ui_state: &mut UiState, event: SignalWindowEvent) 
         SignalWindowEvent::CopySignal { msg_id, sig_names } => {
             if let Some(idx) = ui_state.last_focused_dbc_index
                 && let Some(win) = ui_state.dbc_windows.get(idx)
-                    && let Some(msg) = win.dbc.get_message(msg_id) {
-                        let sigs: Vec<crate::editable_dbc::EditableSignal> = sig_names
+                && let Some(msg) = win.dbc.get_message(msg_id)
+            {
+                let sigs: Vec<crate::editable_dbc::EditableSignal> = sig_names
+                    .iter()
+                    .filter_map(|name| {
+                        msg.signals()
                             .iter()
-                            .filter_map(|name| {
-                                msg.signals()
-                                    .iter()
-                                    .find(|s| s.name() == name.as_str())
-                                    .cloned()
-                            })
-                            .collect();
-                        if !sigs.is_empty() {
-                            ui_state.clipboard.copied_signals = sigs;
-                        }
-                    }
+                            .find(|s| s.name() == name.as_str())
+                            .cloned()
+                    })
+                    .collect();
+                if !sigs.is_empty() {
+                    ui_state.clipboard.copied_signals = sigs;
+                }
+            }
         }
         SignalWindowEvent::CutSignal { msg_id, sig_names } => {
             if let Some(idx) = ui_state.last_focused_dbc_index
                 && let Some(win) = ui_state.dbc_windows.get(idx)
-                    && let Some(msg) = win.dbc.get_message(msg_id) {
-                        let sigs: Vec<crate::editable_dbc::EditableSignal> = sig_names
+                && let Some(msg) = win.dbc.get_message(msg_id)
+            {
+                let sigs: Vec<crate::editable_dbc::EditableSignal> = sig_names
+                    .iter()
+                    .filter_map(|name| {
+                        msg.signals()
                             .iter()
-                            .filter_map(|name| {
-                                msg.signals()
-                                    .iter()
-                                    .find(|s| s.name() == name.as_str())
-                                    .cloned()
-                            })
-                            .collect();
-                        if !sigs.is_empty() {
-                            ui_state.clipboard.copied_signals = sigs;
-                        }
-                    }
+                            .find(|s| s.name() == name.as_str())
+                            .cloned()
+                    })
+                    .collect();
+                if !sigs.is_empty() {
+                    ui_state.clipboard.copied_signals = sigs;
+                }
+            }
             ui_state.confirm_delete_dialog.target =
                 Some(DeleteTarget::Signals(msg_id, sig_names.clone()));
             ui_state.confirm_delete_dialog.display_name = signals_display_name(&sig_names);
@@ -1161,26 +1253,27 @@ fn handle_signal_window_event(ui_state: &mut UiState, event: SignalWindowEvent) 
                 return;
             }
             if let Some(idx) = ui_state.last_focused_dbc_index
-                && let Some(win) = ui_state.dbc_windows.get_mut(idx) {
-                    for sig in copied {
-                        let mut new_sig = sig;
-                        // 名称自动去重：_copy / _copy2 ...
-                        let base = new_sig.name().to_string();
-                        let mut name = format!("{}_copy", base);
-                        let mut n = 1;
-                        while win
-                            .dbc
-                            .get_message(msg_id)
-                            .is_some_and(|m| m.signals().iter().any(|s| s.name() == name))
-                        {
-                            n += 1;
-                            name = format!("{}_copy{}", base, n);
-                        }
-                        new_sig.set_name(&name);
-                        win.dbc.add_signal(msg_id, &new_sig);
+                && let Some(win) = ui_state.dbc_windows.get_mut(idx)
+            {
+                for sig in copied {
+                    let mut new_sig = sig;
+                    // 名称自动去重：_copy / _copy2 ...
+                    let base = new_sig.name().to_string();
+                    let mut name = format!("{}_copy", base);
+                    let mut n = 1;
+                    while win
+                        .dbc
+                        .get_message(msg_id)
+                        .is_some_and(|m| m.signals().iter().any(|s| s.name() == name))
+                    {
+                        n += 1;
+                        name = format!("{}_copy{}", base, n);
                     }
-                    win.is_dirty = true;
+                    new_sig.set_name(&name);
+                    win.dbc.add_signal(msg_id, &new_sig);
                 }
+                win.is_dirty = true;
+            }
         }
     }
 }
@@ -1198,30 +1291,32 @@ fn execute_delete(ui_state: &mut UiState) {
     match target {
         Some(DeleteTarget::Messages(ids)) => {
             if let Some(idx) = ui_state.last_focused_dbc_index
-                && let Some(win) = ui_state.dbc_windows.get_mut(idx) {
-                    for id in &ids {
-                        win.dbc.delete_message(*id);
-                    }
-                    if ids.len() > 1 {
-                        win.dbc.merge_last_compounds(ids.len());
-                    }
-                    win.selected_message_ids.retain(|id| !ids.contains(id));
-                    // 关闭被删消息的所有窗口，避免悬空
-                    win.close_windows_for_messages(&ids);
-                    win.is_dirty = true;
+                && let Some(win) = ui_state.dbc_windows.get_mut(idx)
+            {
+                for id in &ids {
+                    win.dbc.delete_message(*id);
                 }
+                if ids.len() > 1 {
+                    win.dbc.merge_last_compounds(ids.len());
+                }
+                win.selected_message_ids.retain(|id| !ids.contains(id));
+                // 关闭被删消息的所有窗口，避免悬空
+                win.close_windows_for_messages(&ids);
+                win.is_dirty = true;
+            }
         }
         Some(DeleteTarget::Signals(msg_id, sig_names)) => {
             if let Some(idx) = ui_state.last_focused_dbc_index
-                && let Some(win) = ui_state.dbc_windows.get_mut(idx) {
-                    for name in &sig_names {
-                        win.dbc.delete_signal(msg_id, name);
-                    }
-                    if sig_names.len() > 1 {
-                        win.dbc.merge_last_compounds(sig_names.len());
-                    }
-                    win.is_dirty = true;
+                && let Some(win) = ui_state.dbc_windows.get_mut(idx)
+            {
+                for name in &sig_names {
+                    win.dbc.delete_signal(msg_id, name);
                 }
+                if sig_names.len() > 1 {
+                    win.dbc.merge_last_compounds(sig_names.len());
+                }
+                win.is_dirty = true;
+            }
         }
         None => {}
     }
@@ -1250,7 +1345,11 @@ mod tests {
         assert_eq!(msg.comment(), "中文注释");
 
         // 保存：按检测到的 GBK 编码写出，重新打开仍能读到中文
-        let out = encode_to_bytes(&window.dbc.to_dbc_string(), window.text_encoding, window.had_bom);
+        let out = encode_to_bytes(
+            &window.dbc.to_dbc_string(),
+            window.text_encoding,
+            window.had_bom,
+        );
         std::fs::write(&path, &out).unwrap();
         let reopened = DbcWindow::from_path(&path).expect("saved GBK file must load");
         assert_eq!(reopened.dbc.get_message(1).unwrap().comment(), "中文注释");

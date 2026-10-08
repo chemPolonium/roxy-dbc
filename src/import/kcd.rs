@@ -16,10 +16,7 @@ pub fn parse_kcd(content: &str) -> Result<EditableDbc, String> {
                 .ok_or_else(|| "Message missing 'id' attribute".to_string())?;
             let message_id = parse_id(id_str)?;
 
-            let message_name = msg_elem
-                .attribute("name")
-                .unwrap_or("Unnamed")
-                .to_string();
+            let message_name = msg_elem.attribute("name").unwrap_or("Unnamed").to_string();
 
             let message_size = msg_elem
                 .attribute("length")
@@ -51,10 +48,7 @@ pub fn parse_kcd(content: &str) -> Result<EditableDbc, String> {
                 .unwrap_or_default();
 
             let mut signals = Vec::new();
-            for sig_elem in msg_elem
-                .children()
-                .filter(|n| n.has_tag_name("Signal"))
-            {
+            for sig_elem in msg_elem.children().filter(|n| n.has_tag_name("Signal")) {
                 let signal = parse_kcd_signal(&sig_elem)?;
                 signals.push(signal);
             }
@@ -63,10 +57,7 @@ pub fn parse_kcd(content: &str) -> Result<EditableDbc, String> {
                 .children()
                 .filter(|n| n.has_tag_name("SignalGroup"))
             {
-                for inner_sig in sig_elem
-                    .children()
-                    .filter(|n| n.has_tag_name("Signal"))
-                {
+                for inner_sig in sig_elem.children().filter(|n| n.has_tag_name("Signal")) {
                     let signal = parse_kcd_signal(&inner_sig)?;
                     signals.push(signal);
                 }
@@ -89,10 +80,7 @@ pub fn parse_kcd(content: &str) -> Result<EditableDbc, String> {
 }
 
 fn parse_kcd_signal(elem: &roxmltree::Node) -> Result<EditableSignal, String> {
-    let name = elem
-        .attribute("name")
-        .unwrap_or("Unnamed")
-        .to_string();
+    let name = elem.attribute("name").unwrap_or("Unnamed").to_string();
 
     let start_bit = elem
         .attribute("offset")
@@ -134,10 +122,7 @@ fn parse_kcd_signal(elem: &roxmltree::Node) -> Result<EditableSignal, String> {
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(0.0);
 
-    let unit = elem
-        .attribute("unit")
-        .unwrap_or("")
-        .to_string();
+    let unit = elem.attribute("unit").unwrap_or("").to_string();
 
     let comment = elem
         .children()

@@ -2,6 +2,7 @@ use can_dbc::{ByteOrder, ValueType};
 use dear_imgui_rs::{Ui, WindowFlags};
 
 use crate::editable_dbc::{EditableDbc, EditableSignal};
+use crate::ui::attributes::AttributeFields;
 
 #[allow(dead_code)]
 pub enum SignalEditEvent {
@@ -34,6 +35,8 @@ pub struct SignalEditDialog {
     pub receivers_buffer: String,
     pub comment_buffer: String,
     pub val_desc_buffer: Vec<(String, String)>,
+    /// 信号属性（发送类型、初始值、无效值等），行由文件里的 BA_DEF_ 决定
+    pub attributes: AttributeFields,
 }
 
 impl SignalEditDialog {
@@ -57,10 +60,17 @@ impl SignalEditDialog {
             receivers_buffer: String::new(),
             comment_buffer: String::new(),
             val_desc_buffer: Vec::new(),
+            attributes: AttributeFields::default(),
         }
     }
 
-    pub fn open_from_signal(&mut self, message_id: u32, signal: &EditableSignal, window_key: &str) {
+    pub fn open_from_signal(
+        &mut self,
+        dbc: &EditableDbc,
+        message_id: u32,
+        signal: &EditableSignal,
+        window_key: &str,
+    ) {
         self.show = true;
         self.focus_requested = true;
         self.window_key = window_key.to_string();
@@ -83,6 +93,7 @@ impl SignalEditDialog {
             .iter()
             .map(|(v, d)| (v.to_string(), d.clone()))
             .collect();
+        self.attributes = AttributeFields::for_signal(dbc, message_id, signal);
     }
 
     pub fn apply_edit(&mut self, dbc: &mut EditableDbc) {
@@ -97,32 +108,49 @@ impl SignalEditDialog {
         }
 
         if let Ok(start_bit) = self.start_bit_buffer.trim().parse::<u64>() {
-            let current = dbc.get_message(msg_id)
-                .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
+            let current = dbc
+                .get_message(msg_id)
+                .and_then(|m| {
+                    m.signals()
+                        .iter()
+                        .find(|s| s.name() == self.original_name || s.name() == new_name)
+                })
                 .map(|s| s.start_bit());
             if let Some(current) = current
-                && start_bit != current {
-                    let name = if change_count > 0 { new_name } else { old_name };
-                    dbc.set_signal_start_bit(msg_id, name, start_bit);
-                    change_count += 1;
-                }
+                && start_bit != current
+            {
+                let name = if change_count > 0 { new_name } else { old_name };
+                dbc.set_signal_start_bit(msg_id, name, start_bit);
+                change_count += 1;
+            }
         }
 
         if let Ok(size) = self.size_buffer.trim().parse::<u64>() {
-            let current = dbc.get_message(msg_id)
-                .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
+            let current = dbc
+                .get_message(msg_id)
+                .and_then(|m| {
+                    m.signals()
+                        .iter()
+                        .find(|s| s.name() == self.original_name || s.name() == new_name)
+                })
                 .map(|s| s.signal_size());
             if let Some(current) = current
-                && size != current {
-                    let name = if change_count > 0 { new_name } else { old_name };
-                    dbc.set_signal_size(msg_id, name, size);
-                    change_count += 1;
-                }
+                && size != current
+            {
+                let name = if change_count > 0 { new_name } else { old_name };
+                dbc.set_signal_size(msg_id, name, size);
+                change_count += 1;
+            }
         }
 
         {
-            let current_bo = dbc.get_message(msg_id)
-                .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
+            let current_bo = dbc
+                .get_message(msg_id)
+                .and_then(|m| {
+                    m.signals()
+                        .iter()
+                        .find(|s| s.name() == self.original_name || s.name() == new_name)
+                })
                 .map(|s| *s.byte_order());
             if let Some(current_bo) = current_bo {
                 let new_bo = if self.byte_order_is_little {
@@ -139,8 +167,13 @@ impl SignalEditDialog {
         }
 
         {
-            let current_vt = dbc.get_message(msg_id)
-                .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
+            let current_vt = dbc
+                .get_message(msg_id)
+                .and_then(|m| {
+                    m.signals()
+                        .iter()
+                        .find(|s| s.name() == self.original_name || s.name() == new_name)
+                })
                 .map(|s| *s.value_type());
             if let Some(current_vt) = current_vt {
                 let new_vt = if self.signed {
@@ -157,64 +190,94 @@ impl SignalEditDialog {
         }
 
         if let Ok(factor) = self.factor_buffer.trim().parse::<f64>() {
-            let current = dbc.get_message(msg_id)
-                .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
+            let current = dbc
+                .get_message(msg_id)
+                .and_then(|m| {
+                    m.signals()
+                        .iter()
+                        .find(|s| s.name() == self.original_name || s.name() == new_name)
+                })
                 .map(|s| s.factor());
             if let Some(current) = current
-                && (factor - current).abs() > f64::EPSILON {
-                    let name = if change_count > 0 { new_name } else { old_name };
-                    dbc.set_signal_factor(msg_id, name, factor);
-                    change_count += 1;
-                }
+                && (factor - current).abs() > f64::EPSILON
+            {
+                let name = if change_count > 0 { new_name } else { old_name };
+                dbc.set_signal_factor(msg_id, name, factor);
+                change_count += 1;
+            }
         }
 
         if let Ok(offset) = self.offset_buffer.trim().parse::<f64>() {
-            let current = dbc.get_message(msg_id)
-                .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
+            let current = dbc
+                .get_message(msg_id)
+                .and_then(|m| {
+                    m.signals()
+                        .iter()
+                        .find(|s| s.name() == self.original_name || s.name() == new_name)
+                })
                 .map(|s| s.offset());
             if let Some(current) = current
-                && (offset - current).abs() > f64::EPSILON {
-                    let name = if change_count > 0 { new_name } else { old_name };
-                    dbc.set_signal_offset(msg_id, name, offset);
-                    change_count += 1;
-                }
+                && (offset - current).abs() > f64::EPSILON
+            {
+                let name = if change_count > 0 { new_name } else { old_name };
+                dbc.set_signal_offset(msg_id, name, offset);
+                change_count += 1;
+            }
         }
 
         if let Ok(min) = self.min_buffer.trim().parse::<f64>() {
-            let current = dbc.get_message(msg_id)
-                .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
+            let current = dbc
+                .get_message(msg_id)
+                .and_then(|m| {
+                    m.signals()
+                        .iter()
+                        .find(|s| s.name() == self.original_name || s.name() == new_name)
+                })
                 .map(|s| s.min());
             if let Some(current) = current
-                && (min - current).abs() > f64::EPSILON {
-                    let name = if change_count > 0 { new_name } else { old_name };
-                    dbc.set_signal_min(msg_id, name, min);
-                    change_count += 1;
-                }
+                && (min - current).abs() > f64::EPSILON
+            {
+                let name = if change_count > 0 { new_name } else { old_name };
+                dbc.set_signal_min(msg_id, name, min);
+                change_count += 1;
+            }
         }
 
         if let Ok(max) = self.max_buffer.trim().parse::<f64>() {
-            let current = dbc.get_message(msg_id)
-                .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
+            let current = dbc
+                .get_message(msg_id)
+                .and_then(|m| {
+                    m.signals()
+                        .iter()
+                        .find(|s| s.name() == self.original_name || s.name() == new_name)
+                })
                 .map(|s| s.max());
             if let Some(current) = current
-                && (max - current).abs() > f64::EPSILON {
-                    let name = if change_count > 0 { new_name } else { old_name };
-                    dbc.set_signal_max(msg_id, name, max);
-                    change_count += 1;
-                }
+                && (max - current).abs() > f64::EPSILON
+            {
+                let name = if change_count > 0 { new_name } else { old_name };
+                dbc.set_signal_max(msg_id, name, max);
+                change_count += 1;
+            }
         }
 
         let new_unit = self.unit_buffer.trim();
         {
-            let current = dbc.get_message(msg_id)
-                .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
+            let current = dbc
+                .get_message(msg_id)
+                .and_then(|m| {
+                    m.signals()
+                        .iter()
+                        .find(|s| s.name() == self.original_name || s.name() == new_name)
+                })
                 .map(|s| s.unit().to_string());
             if let Some(current) = current
-                && new_unit != current {
-                    let name = if change_count > 0 { new_name } else { old_name };
-                    dbc.set_signal_unit(msg_id, name, new_unit);
-                    change_count += 1;
-                }
+                && new_unit != current
+            {
+                let name = if change_count > 0 { new_name } else { old_name };
+                dbc.set_signal_unit(msg_id, name, new_unit);
+                change_count += 1;
+            }
         }
 
         // 接收节点：逗号分隔
@@ -225,47 +288,78 @@ impl SignalEditDialog {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-            let current = dbc.get_message(msg_id)
-                .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
+            let current = dbc
+                .get_message(msg_id)
+                .and_then(|m| {
+                    m.signals()
+                        .iter()
+                        .find(|s| s.name() == self.original_name || s.name() == new_name)
+                })
                 .map(|s| s.receivers().clone());
             if let Some(current) = current
-                && new_receivers != current {
-                    let name = if change_count > 0 { new_name } else { old_name };
-                    dbc.set_signal_receivers(msg_id, name, new_receivers);
-                    change_count += 1;
-                }
+                && new_receivers != current
+            {
+                let name = if change_count > 0 { new_name } else { old_name };
+                dbc.set_signal_receivers(msg_id, name, new_receivers);
+                change_count += 1;
+            }
         }
 
         {
-            let current = dbc.get_message(msg_id)
-                .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
+            let current = dbc
+                .get_message(msg_id)
+                .and_then(|m| {
+                    m.signals()
+                        .iter()
+                        .find(|s| s.name() == self.original_name || s.name() == new_name)
+                })
                 .map(|s| s.comment().to_string());
             if let Some(current) = current
-                && self.comment_buffer != current {
-                    let name = if change_count > 0 { new_name } else { old_name };
-                    dbc.set_signal_comment(msg_id, name, &self.comment_buffer);
-                    change_count += 1;
-                }
+                && self.comment_buffer != current
+            {
+                let name = if change_count > 0 { new_name } else { old_name };
+                dbc.set_signal_comment(msg_id, name, &self.comment_buffer);
+                change_count += 1;
+            }
         }
 
         {
             let mut new_descs: Vec<(i64, String)> = self
                 .val_desc_buffer
                 .iter()
-                .filter_map(|(v, d)| {
-                    v.trim().parse::<i64>().ok().map(|val| (val, d.clone()))
-                })
+                .filter_map(|(v, d)| v.trim().parse::<i64>().ok().map(|val| (val, d.clone())))
                 .collect();
             new_descs.sort_by_key(|(v, _)| *v);
-            let current = dbc.get_message(msg_id)
-                .and_then(|m| m.signals().iter().find(|s| s.name() == self.original_name || s.name() == new_name))
+            let current = dbc
+                .get_message(msg_id)
+                .and_then(|m| {
+                    m.signals()
+                        .iter()
+                        .find(|s| s.name() == self.original_name || s.name() == new_name)
+                })
                 .map(|s| s.value_descriptions().to_vec());
             if let Some(current) = current
-                && new_descs != current {
-                    let name = if change_count > 0 { new_name } else { old_name };
-                    dbc.set_signal_value_descriptions(msg_id, name, new_descs);
-                    change_count += 1;
-                }
+                && new_descs != current
+            {
+                let name = if change_count > 0 { new_name } else { old_name };
+                dbc.set_signal_value_descriptions(msg_id, name, new_descs);
+                change_count += 1;
+            }
+        }
+
+        // 属性按当前（可能刚改过的）信号名写回
+        let name_for_attributes = if change_count > 0 {
+            new_name.to_string()
+        } else {
+            old_name.clone()
+        };
+        let attr_changes = self
+            .attributes
+            .changed_signal(dbc, msg_id, &name_for_attributes);
+        if attr_changes > 0 {
+            self.attributes
+                .apply_to_signal(dbc, msg_id, &name_for_attributes);
+            change_count += attr_changes;
         }
 
         if change_count > 1 {
@@ -273,14 +367,19 @@ impl SignalEditDialog {
         }
 
         if let Some(msg) = dbc.get_message(msg_id) {
-            let current_name = if change_count > 0 { new_name.to_string() } else { old_name.clone() };
+            let current_name = if change_count > 0 {
+                new_name.to_string()
+            } else {
+                old_name.clone()
+            };
             if let Some(sig) = msg.signals().iter().find(|s| s.name() == current_name) {
                 self.original_name = sig.name().to_string();
+                self.attributes = AttributeFields::for_signal(dbc, msg_id, sig);
             }
         }
     }
 
-    pub fn render(&mut self, ui: &Ui) -> SignalEditEvent {
+    pub fn render(&mut self, ui: &Ui, dbc: &EditableDbc) -> SignalEditEvent {
         let mut event = SignalEditEvent::None;
 
         let title = format!("Edit Signal - {}##{}", self.original_name, self.window_key);
@@ -296,11 +395,13 @@ impl SignalEditDialog {
         }
 
         window.build(|| {
-            ui.input_text("Name##sig_edit", &mut self.name_buffer).build();
+            ui.input_text("Name##sig_edit", &mut self.name_buffer)
+                .build();
 
             ui.input_text("Start Bit##sig_edit", &mut self.start_bit_buffer)
                 .build();
-            ui.input_text("Length##sig_edit", &mut self.size_buffer).build();
+            ui.input_text("Length##sig_edit", &mut self.size_buffer)
+                .build();
 
             if ui.radio_button("Intel (LE)##bo", self.byte_order_is_little) {
                 self.byte_order_is_little = true;
@@ -318,11 +419,14 @@ impl SignalEditDialog {
                 self.signed = true;
             }
 
-            ui.input_text("Factor##sig_edit", &mut self.factor_buffer).build();
-            ui.input_text("Offset##sig_edit", &mut self.offset_buffer).build();
+            ui.input_text("Factor##sig_edit", &mut self.factor_buffer)
+                .build();
+            ui.input_text("Offset##sig_edit", &mut self.offset_buffer)
+                .build();
             ui.input_text("Min##sig_edit", &mut self.min_buffer).build();
             ui.input_text("Max##sig_edit", &mut self.max_buffer).build();
-            ui.input_text("Unit##sig_edit", &mut self.unit_buffer).build();
+            ui.input_text("Unit##sig_edit", &mut self.unit_buffer)
+                .build();
             ui.input_text("Receivers##sig_edit", &mut self.receivers_buffer)
                 .hint("e.g. ECU1, ECU2")
                 .build();
@@ -337,17 +441,19 @@ impl SignalEditDialog {
             }
             ui.same_line();
             if ui.button("Import from clipboard##val_desc")
-                && let Some(text) = read_clipboard_text() {
-                    let parsed = parse_val_desc_text(&text);
-                    self.val_desc_buffer.extend(parsed);
-                }
+                && let Some(text) = read_clipboard_text()
+            {
+                let parsed = parse_val_desc_text(&text);
+                self.val_desc_buffer.extend(parsed);
+            }
 
             let mut to_remove = None;
             for (i, (val, desc)) in self.val_desc_buffer.iter_mut().enumerate() {
                 let invalid = val.trim().parse::<i64>().is_err();
                 ui.input_text(format!("Value##val_desc_{}", i), val).build();
                 ui.same_line();
-                ui.input_text(format!("Description##val_desc_{}", i), desc).build();
+                ui.input_text(format!("Description##val_desc_{}", i), desc)
+                    .build();
                 ui.same_line();
                 if ui.button(format!("X##val_desc_rm_{}", i)) {
                     to_remove = Some(i);
@@ -378,6 +484,9 @@ impl SignalEditDialog {
                     format!("Duplicate values: {:?}", duplicates),
                 );
             }
+
+            self.attributes
+                .render(ui, dbc, crate::editable_dbc::AttrTarget::Signal);
 
             ui.separator();
 

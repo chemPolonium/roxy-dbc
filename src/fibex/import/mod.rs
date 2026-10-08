@@ -95,6 +95,43 @@ pub fn find_text_candidates(node: &roxmltree::Node, tags: &[&str]) -> Option<Str
     None
 }
 
+/// 按"层级最浅优先"在子树内查找文本。
+///
+/// AUTOSAR 的集群参数写在 FLEXRAY-CLUSTER-CONDITIONAL 里，而通道与帧触发也在
+/// 同一棵子树内；深度优先会误取嵌套元素（例如帧触发里的 CYCLE），故取最浅的一个。
+pub fn find_shallowest_text(node: &roxmltree::Node, tags: &[&str]) -> Option<String> {
+    let mut queue: std::collections::VecDeque<(usize, roxmltree::Node)> =
+        std::collections::VecDeque::from([(0usize, *node)]);
+    let mut best: Option<(usize, String)> = None;
+    while let Some((depth, n)) = queue.pop_front() {
+        if n.is_element()
+            && tags.iter().any(|t| n.tag_name().name() == *t)
+            && let Some(text) = n.text().map(|t| t.trim()).filter(|t| !t.is_empty())
+        {
+            // 同深度按文档顺序取第一个，故只在严格更浅时替换
+            if best
+                .as_ref()
+                .is_none_or(|(best_depth, _)| depth < *best_depth)
+            {
+                best = Some((depth, text.to_string()));
+            }
+        }
+        for child in n.children() {
+            queue.push_back((depth + 1, child));
+        }
+    }
+    best.map(|(_, text)| text)
+}
+
+/// 一个通信周期有多少个宏节拍：gCycle = cycle / macrotick。
+/// 文件里没写 MACRO-PER-CYCLE 时用它补齐，界面上两行数值才对得上。
+pub fn cycle_macroticks(cycle_ms: f64, macrotick_us: f64) -> u32 {
+    if macrotick_us <= 0.0 {
+        return 0;
+    }
+    (cycle_ms * 1000.0 / macrotick_us).round() as u32
+}
+
 /// 解析整数文本（支持 10/16 进制）
 pub fn parse_u32(s: &str) -> Option<u32> {
     let s = s.trim();
@@ -155,20 +192,36 @@ mod tests {
 
         // EngineData 在 A/B 双通道 slot 1，重复周期 1
         let engine = fibex.get_frame("EngineData").unwrap();
-        assert_eq!(engine.triggering().slot_id, 1);
-        assert_eq!(engine.triggering().channel, FrChannel::Both);
-        assert_eq!(engine.triggering().cycle_repetition, 1);
+        assert_eq!(engine.triggerings().len(), 2, "A 与 B 各一条触发");
+        assert_eq!(engine.channel_label(), "A+B");
+        for ch in [FrChannel::A, FrChannel::B] {
+            let t = engine.channel_triggering(ch).unwrap();
+            assert_eq!(
+                (t.slot_id, t.cycle_repetition),
+                (1, 1),
+                "通道 {}",
+                ch.label()
+            );
+        }
         assert_eq!(engine.pdus().len(), 1);
         assert_eq!(engine.comment(), "Engine status, transmitted every cycle");
 
         // TransmissionData 仅 A 通道；ChassisStatus 仅 B 通道
         let trans = fibex.get_frame("TransmissionData").unwrap();
-        assert_eq!(trans.triggering().channel, FrChannel::A);
-        assert_eq!(trans.triggering().slot_id, 2);
+        assert_eq!(trans.channel_label(), "A");
+        assert_eq!(trans.channel_triggering(FrChannel::A).unwrap().slot_id, 2);
+        assert!(trans.channel_triggering(FrChannel::B).is_none());
         let chassis = fibex.get_frame("ChassisStatus").unwrap();
-        assert_eq!(chassis.triggering().channel, FrChannel::B);
-        assert_eq!(chassis.triggering().slot_id, 3);
-        assert_eq!(chassis.triggering().cycle_repetition, 4);
+        assert_eq!(chassis.channel_label(), "B");
+        assert_eq!(chassis.channel_triggering(FrChannel::B).unwrap().slot_id, 3);
+        assert_eq!(
+            chassis
+                .channel_triggering(FrChannel::B)
+                .unwrap()
+                .cycle_repetition,
+            4
+        );
+        assert!(chassis.channel_triggering(FrChannel::A).is_none());
 
         // DashInfo 复用 Eng_PDU 且带两个映射
         let dash = fibex.get_frame("DashInfo").unwrap();
@@ -230,15 +283,24 @@ mod tests {
 
         // EngineData 双通道（A+B）slot 1，startup
         let engine = fibex.get_frame("EngineData").unwrap();
-        assert_eq!(engine.triggering().slot_id, 1);
-        assert_eq!(engine.triggering().channel, FrChannel::Both);
-        assert_eq!(engine.triggering().cycle_repetition, 1);
-        assert!(engine.triggering().startup);
+        assert_eq!(engine.channel_label(), "A+B");
+        for ch in [FrChannel::A, FrChannel::B] {
+            let t = engine.channel_triggering(ch).unwrap();
+            assert_eq!((t.slot_id, t.cycle_repetition), (1, 1));
+            assert!(t.startup, "通道 {} 的触发应标为 Startup", ch.label());
+        }
 
         // ChassisStatus 只在 B 通道，重复周期 4
         let chassis = fibex.get_frame("ChassisStatus").unwrap();
-        assert_eq!(chassis.triggering().channel, FrChannel::B);
-        assert_eq!(chassis.triggering().cycle_repetition, 4);
+        assert_eq!(chassis.channel_label(), "B");
+        assert_eq!(
+            chassis
+                .channel_triggering(FrChannel::B)
+                .unwrap()
+                .cycle_repetition,
+            4
+        );
+        assert!(chassis.channel_triggering(FrChannel::A).is_none());
         assert_eq!(chassis.length(), 12);
 
         let eng_pdu = fibex.get_pdu("Eng_PDU").unwrap();

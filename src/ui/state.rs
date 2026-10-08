@@ -18,13 +18,11 @@ pub struct ConfirmDeleteDialog {
     pub was_open: bool,
 }
 
-
 #[derive(Default)]
 pub struct CloseConfirmDialog {
     pub show: bool,
     pub dbc_window_index: Option<usize>,
 }
-
 
 #[allow(dead_code)]
 /// 错误对话框状态
@@ -34,6 +32,13 @@ pub struct ErrorDialog {
     pub message: String,
 }
 
+/// 完成提示对话框：标题说明是哪件事，正文给出结果（如导出到的路径）
+#[derive(Default)]
+pub struct NoticeDialog {
+    pub show: bool,
+    pub title: String,
+    pub message: String,
+}
 
 #[derive(Default)]
 pub struct ValidationDialog {
@@ -41,14 +46,12 @@ pub struct ValidationDialog {
     pub issues: Vec<ValidationIssue>,
 }
 
-
 /// 剪贴板状态（用于复制/粘贴）
 #[derive(Default)]
 pub struct ClipboardState {
     pub copied_messages: Vec<EditableMessage>,
     pub copied_signals: Vec<EditableSignal>,
 }
-
 
 #[allow(dead_code)]
 /// 当前获得键盘焦点的窗口类型，Edit 菜单据此把操作分发到 DBC 或 FIBEX 窗口
@@ -67,6 +70,7 @@ pub struct UiState {
     pub show_about_dialog: bool,
     pub dbc_windows: Vec<DbcWindow>,
     pub error_dialog: ErrorDialog,
+    pub notice_dialog: NoticeDialog,
     pub validation_dialog: ValidationDialog,
     pub last_focused_dbc_index: Option<usize>,
     pub dbc_window_focus_request: Option<usize>,
@@ -88,6 +92,7 @@ impl Default for UiState {
             show_about_dialog: false,
             dbc_windows: Vec::new(),
             error_dialog: ErrorDialog::default(),
+            notice_dialog: NoticeDialog::default(),
             validation_dialog: ValidationDialog::default(),
             last_focused_dbc_index: None,
             dbc_window_focus_request: None,
@@ -129,6 +134,7 @@ impl UiState {
     /// 统一的文件打开入口（Ctrl+O / 拖放 / 命令行 / 最近文件都走这里）：
     /// - .dbc  → DBC 编辑窗口
     /// - .kcd  → 导入为 DBC 编辑窗口
+    /// - .xlsx → 按通信矩阵模板生成 DBC 编辑窗口
     /// - .arxml / .xml / .fibex / .fx → FIBEX / AUTOSAR 查看窗口
     ///
     /// 已打开的同一文件（按规范化路径比较）只会聚焦已有窗口，不会重复打开。
@@ -166,8 +172,25 @@ impl UiState {
                     self.error_dialog.show = true;
                 }
             },
-            // FIBEX XML / AUTOSAR ARXML（自动识别格式）→ FIBEX 查看窗口
+            "xlsx" => self.open_excel_matrix(norm_path, &path_str),
+            // FIBEX XML / AUTOSAR ARXML：按文件内容分流——CAN 快照进 DBC 编辑窗口，
+            // FlexRay（FIBEX 3.0 / AUTOSAR R4.x）进 FIBEX 查看窗口
             "arxml" | "xml" | "fibex" | "fx" => {
+                if is_can_snapshot(norm_path) {
+                    match crate::import::import_file(norm_path) {
+                        Ok(editable_dbc) => {
+                            let dbc_window = DbcWindow::new(&path_str, editable_dbc);
+                            self.add_recent_file(&path_str);
+                            self.dbc_windows.push(dbc_window);
+                            self.last_focused_dbc_index = Some(self.dbc_windows.len() - 1);
+                        }
+                        Err(e) => {
+                            self.error_dialog.message = format!("Import failed: {}", e);
+                            self.error_dialog.show = true;
+                        }
+                    }
+                    return;
+                }
                 self.fibex.open_file_path(norm_path);
                 if !self.fibex.error_dialog.show {
                     // 打开成功才计入最近文件
@@ -177,11 +200,44 @@ impl UiState {
             }
             _ => {
                 self.error_dialog.message = format!(
-                    "Unsupported file type: {} (expected .dbc / .arxml / .xml / .kcd)",
+                    "Unsupported file type: {} (expected .dbc / .arxml / .xml / .kcd / .xlsx)",
                     path_str
                 );
                 self.error_dialog.show = true;
             }
+        }
+    }
+
+    /// 按通信矩阵模板生成 DBC 编辑窗口。窗口记录的文件名改成同目录的 .dbc，
+    /// 保存时写 .dbc，不会覆盖 Excel 源文件；导入过程中被跳过或没有写入的列
+    /// 会在校验结果窗口里列出。
+    fn open_excel_matrix(&mut self, path: &std::path::Path, source_path: &str) {
+        let mut parsed = match crate::excel::read_matrix(path) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                self.error_dialog.message = e;
+                self.error_dialog.show = true;
+                return;
+            }
+        };
+        let dbc = crate::excel::to_dbc(&mut parsed);
+        let mut dbc_window = DbcWindow::new(&path.with_extension("dbc").to_string_lossy(), dbc);
+        // 还没有对应的 .dbc 文件，保存时才落盘
+        dbc_window.is_dirty = true;
+        self.add_recent_file(source_path);
+        self.dbc_windows.push(dbc_window);
+        self.last_focused_dbc_index = Some(self.dbc_windows.len() - 1);
+
+        if !parsed.report.is_empty() {
+            self.validation_dialog.issues = parsed
+                .report
+                .into_iter()
+                .map(|message| crate::editable_dbc::ValidationIssue {
+                    severity: crate::editable_dbc::Severity::Warning,
+                    message,
+                })
+                .collect();
+            self.validation_dialog.show = true;
         }
     }
 
@@ -224,20 +280,21 @@ impl UiState {
 
     pub fn load_recent_files(&mut self) {
         if let Some(path) = recent_files_path()
-            && let Ok(content) = std::fs::read_to_string(&path) {
-                let mut seen: Vec<String> = Vec::new();
-                for line in content.lines().filter(|l| !l.is_empty()) {
-                    let norm = normalize_path(line);
-                    if seen.contains(&norm) {
-                        continue;
-                    }
-                    seen.push(norm);
-                    if seen.len() >= 10 {
-                        break;
-                    }
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
+            let mut seen: Vec<String> = Vec::new();
+            for line in content.lines().filter(|l| !l.is_empty()) {
+                let norm = normalize_path(line);
+                if seen.contains(&norm) {
+                    continue;
                 }
-                self.recent_files = seen;
+                seen.push(norm);
+                if seen.len() >= 10 {
+                    break;
+                }
             }
+            self.recent_files = seen;
+        }
     }
 
     pub fn save_recent_files(&self) {
@@ -250,6 +307,17 @@ impl UiState {
             let _ = std::fs::write(path, content);
         }
     }
+}
+
+/// 文件内容是 CAN 通信快照（本工具导出的 ARXML）而不是 FlexRay：按元素名判断。
+/// 读不出文本时返回 false，交给 FIBEX 一侧去报错。
+fn is_can_snapshot(path: &std::path::Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let content = crate::file_encoding::decode_file_bytes(&bytes).text;
+    (content.contains("<CAN-FRAME>") || content.contains("<CAN-CLUSTER>"))
+        && !content.contains("FLEXRAY-CLUSTER")
 }
 
 /// 最近文件列表的存放位置：优先 %APPDATA%\roxy-dbc\recent_files.txt，

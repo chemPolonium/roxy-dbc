@@ -29,6 +29,22 @@ pub fn export_arxml(fibex: &EditableFibex) -> String {
         "          <FLEXRAY-COLDSTART-ATTEMPTS>{}</FLEXRAY-COLDSTART-ATTEMPTS>\n",
         p.coldstart_attempts
     ));
+    // 时间量以秒计（与导入侧一致）：µs -> s，ms -> s
+    out.push_str(&format!(
+        "          <FLEXRAY-GD-MACROTICK-DURATION>{}</FLEXRAY-GD-MACROTICK-DURATION>\n",
+        fmt_f64(p.macrotick_duration_us / 1_000_000.0)
+    ));
+    out.push_str(&format!(
+        "          <CYCLE>{}</CYCLE>\n",
+        fmt_f64(p.cycle_time_ms / 1000.0)
+    ));
+    // 位时间（秒/bit），由集群速率换算
+    if p.speed_kbps > 0 {
+        out.push_str(&format!(
+            "          <BIT>{}</BIT>\n",
+            fmt_f64(1.0 / (p.speed_kbps as f64 * 1000.0))
+        ));
+    }
     // FLEXRAY-CYCLE 以宏节拍数表示
     let cycle_mt = if p.macrotick_duration_us > 0.0 {
         (p.cycle_time_ms * 1000.0 / p.macrotick_duration_us).round() as u32
@@ -100,16 +116,15 @@ pub fn export_arxml(fibex: &EditableFibex) -> String {
             channel_name
         ));
 
-        let triggered: Vec<&EditableFrame> = fibex
+        let triggered: Vec<(&EditableFrame, FrameTriggering)> = fibex
             .frames()
             .iter()
-            .filter(|f| f.triggering().channel.covers(ch))
+            .filter_map(|f| f.channel_triggering(ch).map(|t| (f, t)))
             .collect();
 
         if !triggered.is_empty() {
             out.push_str("              <FRAME-TRIGGERINGS>\n");
-            for frame in &triggered {
-                let t = frame.triggering();
+            for (frame, t) in &triggered {
                 out.push_str("                <FLEXRAY-FRAME-TRIGGERING>\n");
                 out.push_str(&format!(
                     "                  <SHORT-NAME>{}_{}_Trigger</SHORT-NAME>\n",
@@ -137,6 +152,10 @@ pub fn export_arxml(fibex: &EditableFibex) -> String {
                     "                  <STARTUP-FRAME>{}</STARTUP-FRAME>\n",
                     if t.startup { "true" } else { "false" }
                 ));
+                out.push_str(&format!(
+                    "                  <PAYLOAD-PREAMBLE-INDICATOR>{}</PAYLOAD-PREAMBLE-INDICATOR>\n",
+                    if frame.payload_preamble() { "true" } else { "false" }
+                ));
                 out.push_str("                </FLEXRAY-FRAME-TRIGGERING>\n");
             }
             out.push_str("              </FRAME-TRIGGERINGS>\n");
@@ -156,14 +175,49 @@ pub fn export_arxml(fibex: &EditableFibex) -> String {
             "          <SHORT-NAME>{}</SHORT-NAME>\n",
             escape_xml(ecu)
         ));
+        // 关键时隙写在 ECU 的 FlexRay 控制器里，未配置时不写这一段
+        if let Some(slot) = fibex.ecu_key_slot(ecu) {
+            out.push_str("          <COMM-CONTROLLERS>\n");
+            out.push_str("            <FLEXRAY-COMMUNICATION-CONTROLLER>\n");
+            out.push_str(&format!(
+                "              <SHORT-NAME>{}</SHORT-NAME>\n",
+                escape_xml(ecu)
+            ));
+            out.push_str(
+                "              <FLEXRAY-COMMUNICATION-CONTROLLER-VARIANTS>\n                \
+                 <FLEXRAY-COMMUNICATION-CONTROLLER-CONDITIONAL>\n",
+            );
+            out.push_str(&format!(
+                "                  <KEY-SLOT-ID>{}</KEY-SLOT-ID>\n",
+                slot.slot_id
+            ));
+            out.push_str(&format!(
+                "                  <KEY-SLOT-USED-FOR-SYNC>{}</KEY-SLOT-USED-FOR-SYNC>\n",
+                slot.used_for_sync
+            ));
+            out.push_str(&format!(
+                "                  <KEY-SLOT-USED-FOR-START-UP>{}</KEY-SLOT-USED-FOR-START-UP>\n",
+                slot.used_for_startup
+            ));
+            out.push_str(
+                "                </FLEXRAY-COMMUNICATION-CONTROLLER-CONDITIONAL>\n              \
+                 </FLEXRAY-COMMUNICATION-CONTROLLER-VARIANTS>\n",
+            );
+            out.push_str("            </FLEXRAY-COMMUNICATION-CONTROLLER>\n");
+            out.push_str("          </COMM-CONTROLLERS>\n");
+        }
         out.push_str("        </ECU-INSTANCE>\n");
     }
 
     // ------------------------------------------------------------------
-    // I-SIGNAL-I-PDU（含 I-SIGNAL-TO-PDU-MAPPINGS）
+    // PDU（静态信号容器写 I-SIGNAL-I-PDU，动态/事件 PDU 写 N-PDU）
     // ------------------------------------------------------------------
     for pdu in fibex.pdus() {
-        out.push_str("        <I-SIGNAL-I-PDU>\n");
+        let element = match pdu.kind() {
+            PduKind::Static => "I-SIGNAL-I-PDU",
+            _ => "N-PDU",
+        };
+        out.push_str(&format!("        <{element}>\n"));
         out.push_str(&format!(
             "          <SHORT-NAME>{}</SHORT-NAME>\n",
             escape_xml(pdu.name())
@@ -207,31 +261,129 @@ pub fn export_arxml(fibex: &EditableFibex) -> String {
             }
             out.push_str("          </I-SIGNAL-TO-PDU-MAPPINGS>\n");
         }
-        out.push_str("        </I-SIGNAL-I-PDU>\n");
+        out.push_str(&format!("        </{element}>\n"));
     }
 
     // ------------------------------------------------------------------
-    // I-SIGNAL（含长度与符号）
+    // I-SIGNAL（含长度、符号与 COMPU-METHOD 引用）+ COMPU-METHOD
+    //
+    // 同名信号只写一份：AUTOSAR 同一 package 内 SHORT-NAME 必须唯一，
+    // 且导入侧也是按名字建索引，重复写会让后出现的定义覆盖先前的。
     // ------------------------------------------------------------------
+    let mut signals: Vec<&EditableSignal> = Vec::new();
+    let mut seen_signals: std::collections::HashSet<String> = std::collections::HashSet::new();
     for pdu in fibex.pdus() {
         for sig in pdu.signals() {
-            out.push_str("        <I-SIGNAL>\n");
+            if seen_signals.insert(sig.name().to_string()) {
+                signals.push(sig);
+            }
+        }
+    }
+
+    for sig in &signals {
+        out.push_str("        <I-SIGNAL>\n");
+        out.push_str(&format!(
+            "          <SHORT-NAME>{}</SHORT-NAME>\n",
+            escape_xml(sig.name())
+        ));
+        if !sig.comment().is_empty() {
             out.push_str(&format!(
-                "          <SHORT-NAME>{}</SHORT-NAME>\n",
+                "          <DESC><L-2 L=\"EN\">{}</L-2></DESC>\n",
+                escape_xml(sig.comment())
+            ));
+        }
+        out.push_str(&format!(
+            "          <LENGTH>{}</LENGTH>\n",
+            sig.length_bits()
+        ));
+        out.push_str(&format!(
+            "          <SIGN-CONVENTION>{}</SIGN-CONVENTION>\n",
+            match sig.value_type() {
+                ValueType::Signed => "TWOS_COMPLEMENT",
+                ValueType::Unsigned => "UNSIGNED",
+            }
+        ));
+        if has_compu(sig) {
+            out.push_str(&format!(
+                "          <COMPU-METHOD-REF DEST=\"COMPU-METHOD\">/{}/COMPU_{} </COMPU-METHOD-REF>\n",
+                PKG,
                 escape_xml(sig.name())
             ));
-            if !sig.comment().is_empty() {
-                out.push_str(&format!(
-                    "          <DESC><L-2 L=\"EN\">{}</L-2></DESC>\n",
-                    escape_xml(sig.comment())
-                ));
-            }
-            out.push_str(&format!(
-                "          <LENGTH>{}</LENGTH>\n",
-                sig.length_bits()
-            ));
-            out.push_str("        </I-SIGNAL>\n");
         }
+        out.push_str("        </I-SIGNAL>\n");
+    }
+
+    for sig in &signals {
+        if !has_compu(sig) {
+            continue;
+        }
+        out.push_str("        <COMPU-METHOD>\n");
+        out.push_str(&format!(
+            "          <SHORT-NAME>COMPU_{}</SHORT-NAME>\n",
+            escape_xml(sig.name())
+        ));
+        out.push_str(&format!(
+            "          <CATEGORY>{}</CATEGORY>\n",
+            if sig.value_descriptions().is_empty() {
+                "LINEAR"
+            } else {
+                "TEXTTABLE"
+            }
+        ));
+        out.push_str("          <COMPU-INTERNAL-TO-PHYS>\n");
+        out.push_str("            <COMPU-SCALES>\n");
+        // 线性刻度在前：导入侧取第一条无 COMPU-CONST 的刻度读量程与因子
+        out.push_str("              <COMPU-SCALE>\n");
+        if sig.min() != 0.0 || sig.max() != 0.0 {
+            out.push_str(&format!(
+                "                <LOWER-LIMIT INTERVAL-TYPE=\"CLOSED\">{}</LOWER-LIMIT>\n",
+                fmt_f64(sig.min())
+            ));
+            out.push_str(&format!(
+                "                <UPPER-LIMIT INTERVAL-TYPE=\"CLOSED\">{}</UPPER-LIMIT>\n",
+                fmt_f64(sig.max())
+            ));
+        }
+        out.push_str("                <COMPU-RATIONAL-COEFFS>\n");
+        out.push_str("                  <COMPU-NUMERATOR>\n");
+        out.push_str(&format!(
+            "                    <V>{}</V>\n                    <V>{}</V>\n",
+            fmt_f64(sig.offset()),
+            fmt_f64(sig.factor())
+        ));
+        out.push_str("                  </COMPU-NUMERATOR>\n");
+        out.push_str("                  <COMPU-DENOMINATOR>\n                    <V>1</V>\n                  </COMPU-DENOMINATOR>\n");
+        out.push_str("                </COMPU-RATIONAL-COEFFS>\n");
+        if !sig.unit().is_empty() {
+            out.push_str(&format!(
+                "                <UNIT>{}</UNIT>\n",
+                escape_xml(sig.unit())
+            ));
+        }
+        out.push_str("              </COMPU-SCALE>\n");
+        for (value, desc) in sig.value_descriptions() {
+            out.push_str("              <COMPU-SCALE>\n");
+            out.push_str(&format!(
+                "                <INTERNAL-LOWER-LIMIT>{value}</INTERNAL-LOWER-LIMIT>\n"
+            ));
+            out.push_str(&format!(
+                "                <INTERNAL-UPPER-LIMIT>{value}</INTERNAL-UPPER-LIMIT>\n"
+            ));
+            out.push_str(&format!(
+                "                <LOWER-LIMIT INTERVAL-TYPE=\"CLOSED\">{value}</LOWER-LIMIT>\n"
+            ));
+            out.push_str(&format!(
+                "                <UPPER-LIMIT INTERVAL-TYPE=\"CLOSED\">{value}</UPPER-LIMIT>\n"
+            ));
+            out.push_str(&format!(
+                "                <COMPU-CONST><VT>{}</VT></COMPU-CONST>\n",
+                escape_xml(desc)
+            ));
+            out.push_str("              </COMPU-SCALE>\n");
+        }
+        out.push_str("            </COMPU-SCALES>\n");
+        out.push_str("          </COMPU-INTERNAL-TO-PHYS>\n");
+        out.push_str("        </COMPU-METHOD>\n");
     }
 
     // ------------------------------------------------------------------
@@ -255,7 +407,11 @@ pub fn export_arxml(fibex: &EditableFibex) -> String {
         ));
         out.push_str(&format!(
             "          <PAYLOAD-PREAMBLE>{}</PAYLOAD-PREAMBLE>\n",
-            if frame.payload_preamble() { "true" } else { "false" }
+            if frame.payload_preamble() {
+                "true"
+            } else {
+                "false"
+            }
         ));
         if !frame.pdus().is_empty() {
             out.push_str("          <FRAME-PDU-MAPPINGS>\n");
@@ -267,7 +423,8 @@ pub fn export_arxml(fibex: &EditableFibex) -> String {
                 ));
                 out.push_str(&format!(
                     "              <START-POSITION>{}</START-POSITION>\n",
-                    m.start_position
+                    // 模型按字节记录，ARXML 侧以位计
+                    m.start_position * 8
                 ));
                 out.push_str(&format!(
                     "              <PDU-REF DEST=\"I-SIGNAL-I-PDU\">/{}/{} </PDU-REF>\n",
@@ -286,6 +443,16 @@ pub fn export_arxml(fibex: &EditableFibex) -> String {
     out.push_str("  </AR-PACKAGES>\n");
     out.push_str("</AUTOSAR>\n");
     out
+}
+
+/// 该信号是否需要写 COMPU-METHOD（物理换算、量程或值表）
+fn has_compu(sig: &EditableSignal) -> bool {
+    sig.factor() != 1.0
+        || sig.offset() != 0.0
+        || !sig.unit().is_empty()
+        || !sig.value_descriptions().is_empty()
+        || sig.min() != 0.0
+        || sig.max() != 0.0
 }
 
 fn fmt_f64(v: f64) -> String {
@@ -335,13 +502,13 @@ mod tests {
             "Drivetrain_Frame".to_string(),
             8,
             false,
-            FrameTriggering {
+            vec![FrameTriggering {
                 channel: FrChannel::A,
                 slot_id: 3,
                 base_cycle: 0,
                 cycle_repetition: 4,
                 startup: false,
-            },
+            }],
             vec![FramePduMapping::new("Drivetrain_PDU", 0)],
             String::new(),
         );
@@ -362,8 +529,11 @@ mod tests {
         let f = &imported.frames()[0];
         assert_eq!(f.name(), "Drivetrain_Frame");
         assert_eq!(f.length(), 8);
-        assert_eq!(f.triggering().slot_id, 3);
-        assert_eq!(f.triggering().cycle_repetition, 4);
+        assert_eq!(f.channel_triggering(FrChannel::A).unwrap().slot_id, 3);
+        assert_eq!(
+            f.channel_triggering(FrChannel::A).unwrap().cycle_repetition,
+            4
+        );
         assert_eq!(f.pdus().len(), 1);
         assert_eq!(f.pdus()[0].pdu_name, "Drivetrain_PDU");
 
@@ -390,9 +560,15 @@ mod tests {
         assert_eq!(imported.frames().len(), 1);
         let f = &imported.frames()[0];
         assert_eq!(f.name(), "Drivetrain_Frame");
-        assert_eq!(f.triggering().slot_id, 3);
-        assert_eq!(f.triggering().cycle_repetition, 4);
-        assert_eq!(f.triggering().channel, FrChannel::A);
+        assert_eq!(f.channel_triggering(FrChannel::A).unwrap().slot_id, 3);
+        assert_eq!(
+            f.channel_triggering(FrChannel::A).unwrap().cycle_repetition,
+            4
+        );
+        assert_eq!(
+            f.channel_triggering(FrChannel::A).unwrap().channel,
+            FrChannel::A
+        );
         assert_eq!(f.pdus().len(), 1);
 
         assert_eq!(imported.pdus().len(), 1);
@@ -402,7 +578,10 @@ mod tests {
         assert_eq!(s.length_bits(), 16);
         assert_eq!(s.byte_order(), ByteOrder::BigEndian);
 
-        assert_eq!(imported.ecus(), &vec!["ECU_A".to_string(), "ECU_B".to_string()]);
+        assert_eq!(
+            imported.ecus(),
+            &vec!["ECU_A".to_string(), "ECU_B".to_string()]
+        );
     }
 
     #[test]

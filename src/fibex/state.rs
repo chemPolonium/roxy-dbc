@@ -3,7 +3,7 @@
 //! 从 roxy-fibex 整合而来，作为 roxy-dbc `UiState` 的一个组成部分。
 //! 最近文件列表由上层（roxy-dbc 的 `UiState`）统一管理，这里不再维护。
 
-use crate::fibex::editable_fibex::{EditableFrame, EditableSignal, ValidationIssue};
+use crate::fibex::editable_fibex::{EditableFrame, EditablePdu, EditableSignal, ValidationIssue};
 use crate::fibex::ui::ecu_window::EcuWindow;
 use crate::fibex::ui::fibex_window::FibexWindow;
 use crate::ui::state::normalize_path;
@@ -49,6 +49,7 @@ pub struct ValidationDialog {
 #[derive(Default)]
 pub struct ClipboardState {
     pub copied_frames: Vec<EditableFrame>,
+    pub copied_pdus: Vec<EditablePdu>,
     pub copied_signals: Vec<EditableSignal>,
 }
 
@@ -89,6 +90,10 @@ impl Default for FibexUiState {
 impl FibexUiState {
     pub fn has_clipboard_frame(&self) -> bool {
         !self.clipboard.copied_frames.is_empty()
+    }
+
+    pub fn has_clipboard_pdu(&self) -> bool {
+        !self.clipboard.copied_pdus.is_empty()
     }
 
     /// 打开文件：已打开（按规范化路径比较）则聚焦对应窗口，否则载入新窗口。

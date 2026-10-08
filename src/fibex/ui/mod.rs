@@ -2,6 +2,7 @@
 
 pub mod bit_layout;
 pub mod cluster_window;
+pub mod comm_matrix;
 pub mod ecu_window;
 pub mod fibex_window;
 pub mod frame_edit_window;

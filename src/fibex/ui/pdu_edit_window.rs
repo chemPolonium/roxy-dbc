@@ -1,6 +1,6 @@
 use dear_imgui_rs::{Condition, Ui, WindowFlags};
 
-use crate::fibex::editable_fibex::{EditablePdu, EditableFibex, PduKind};
+use crate::fibex::editable_fibex::{EditableFibex, EditablePdu, PduKind};
 
 #[derive(Clone, Debug)]
 pub enum PduEditEvent {
@@ -43,7 +43,10 @@ impl PduEditWindowState {
         }
 
         let mut event = PduEditEvent::None;
-        let title = format!("Edit PDU - {}###PDUEdit_{}", self.pdu_old_name, self.pdu_old_name);
+        let title = format!(
+            "Edit PDU - {}###PDUEdit_{}",
+            self.pdu_old_name, self.pdu_old_name
+        );
 
         let mut window = ui
             .window(&title)

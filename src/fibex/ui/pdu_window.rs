@@ -47,7 +47,12 @@ impl PduWindow {
         }
     }
 
-    pub fn render(&mut self, ui: &Ui, fibex: &EditableFibex, has_clipboard: bool) -> PduWindowEvent {
+    pub fn render(
+        &mut self,
+        ui: &Ui,
+        fibex: &EditableFibex,
+        has_clipboard: bool,
+    ) -> PduWindowEvent {
         let mut event = PduWindowEvent::None;
 
         let Some(pdu) = fibex.get_pdu(&self.pdu_name) else {
@@ -100,8 +105,14 @@ impl PduWindow {
                     2 => a.length_bits().cmp(&b.length_bits()),
                     3 => format!("{:?}", a.byte_order()).cmp(&format!("{:?}", b.byte_order())),
                     4 => format!("{:?}", a.value_type()).cmp(&format!("{:?}", b.value_type())),
-                    5 => a.factor().partial_cmp(&b.factor()).unwrap_or(std::cmp::Ordering::Equal),
-                    6 => a.offset().partial_cmp(&b.offset()).unwrap_or(std::cmp::Ordering::Equal),
+                    5 => a
+                        .factor()
+                        .partial_cmp(&b.factor())
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                    6 => a
+                        .offset()
+                        .partial_cmp(&b.offset())
+                        .unwrap_or(std::cmp::Ordering::Equal),
                     7 => a.unit().cmp(b.unit()),
                     8 => a.receivers().join(",").cmp(&b.receivers().join(",")),
                     9 => a.comment().cmp(b.comment()),
@@ -188,20 +199,38 @@ impl PduWindow {
             // 信号表占满窗口剩余高度
             let avail = ui.content_region_avail();
             ui.table("pdu_signal_table")
-                .flags(TableFlags::RESIZABLE | TableFlags::BORDERS | TableFlags::SCROLL_X | TableFlags::SCROLL_Y | TableFlags::SORTABLE | TableFlags::ROW_BG)
+                .flags(
+                    TableFlags::RESIZABLE
+                        | TableFlags::BORDERS
+                        | TableFlags::SCROLL_X
+                        | TableFlags::SCROLL_Y
+                        | TableFlags::SORTABLE
+                        | TableFlags::ROW_BG,
+                )
                 .sizing_policy(TableSizingPolicy::FixedFit)
                 .freeze(0, 1)
                 .outer_size([0.0, avail[1].max(120.0)])
-                .column("Name").done()
-                .column("Start").done()
-                .column("Bits").done()
-                .column("Byte Order").done()
-                .column("Type").done()
-                .column("Factor").done()
-                .column("Offset").done()
-                .column("Unit").done()
-                .column("Receivers").done()
-                .column("Comment").weight(1.0).done()
+                .column("Name")
+                .done()
+                .column("Start")
+                .done()
+                .column("Bits")
+                .done()
+                .column("Byte Order")
+                .done()
+                .column("Type")
+                .done()
+                .column("Factor")
+                .done()
+                .column("Offset")
+                .done()
+                .column("Unit")
+                .done()
+                .column("Receivers")
+                .done()
+                .column("Comment")
+                .weight(1.0)
+                .done()
                 .headers(true)
                 .build(|ui| {
                     if let Some(mut specs) = ui.table_get_sort_specs()
@@ -219,10 +248,7 @@ impl PduWindow {
 
                         ui.table_next_row();
 
-                        let is_selected = self
-                            .selected_signal_names
-                            .iter()
-                            .any(|n| n == &sig_name);
+                        let is_selected = self.selected_signal_names.iter().any(|n| n == &sig_name);
 
                         ui.table_set_column_index(0);
                         if ui
@@ -296,9 +322,11 @@ impl PduWindow {
                                 event = PduWindowEvent::CutSignal(selected_names.clone());
                             }
                             ui.separator();
-                            if ui
-                                .menu_item_enabled_selected_no_shortcut("Paste", false, has_clipboard)
-                            {
+                            if ui.menu_item_enabled_selected_no_shortcut(
+                                "Paste",
+                                false,
+                                has_clipboard,
+                            ) {
                                 event = PduWindowEvent::PasteSignal;
                             }
                             ui.separator();

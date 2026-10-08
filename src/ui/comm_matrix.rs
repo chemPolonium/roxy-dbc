@@ -90,11 +90,7 @@ pub fn render_comm_matrix(ui: &Ui, dbc: &mut EditableDbc, is_dirty: &mut bool) {
 
             ui.table_next_row();
             ui.table_set_column_index(0);
-            let tree = ui.tree_node(format!(
-                "{}##msg_{}",
-                msg.message_name(),
-                msg.message_id()
-            ));
+            let tree = ui.tree_node(format!("{}##msg_{}", msg.message_name(), msg.message_id()));
 
             for (node_idx, mark) in &marks {
                 let col = node_idx + 1;
@@ -107,21 +103,18 @@ pub fn render_comm_matrix(ui: &Ui, dbc: &mut EditableDbc, is_dirty: &mut bool) {
                 let cell_start = ui.cursor_screen_pos();
                 ui.text_colored(color, label);
                 if let Mark::RxPartial { received, total } = mark
-                    && ui.is_item_hovered() {
-                        ui.set_tooltip(format!(
-                            "Receives {} of {} signals (partial)",
-                            received, total
-                        ));
-                    }
+                    && ui.is_item_hovered()
+                {
+                    ui.set_tooltip(format!(
+                        "Receives {} of {} signals (partial)",
+                        received, total
+                    ));
+                }
 
                 // 整格点击区：消息行点击 = 切换发送节点
                 ui.set_cursor_screen_pos(cell_start);
                 let w = ui.content_region_avail()[0].max(30.0);
-                let id = format!(
-                    "##cmtx_{}_{}",
-                    msg.message_id(),
-                    nodes[*node_idx]
-                );
+                let id = format!("##cmtx_{}_{}", msg.message_id(), nodes[*node_idx]);
                 if ui.invisible_button(&id, [w, ui.frame_height()]) {
                     let new_tx = if msg.transmitter() == nodes[*node_idx] {
                         "Vector__XXX"
@@ -153,12 +146,7 @@ pub fn render_comm_matrix(ui: &Ui, dbc: &mut EditableDbc, is_dirty: &mut bool) {
                         // 整格点击区：信号行点击 = 切换接收
                         ui.set_cursor_screen_pos(cell_start);
                         let w = ui.content_region_avail()[0].max(30.0);
-                        let id = format!(
-                            "##cmrx_{}_{}_{}",
-                            msg.message_id(),
-                            sig.name(),
-                            node
-                        );
+                        let id = format!("##cmrx_{}_{}_{}", msg.message_id(), sig.name(), node);
                         if ui.invisible_button(&id, [w, ui.frame_height()]) {
                             let mut receivers = sig.receivers().clone();
                             if let Some(pos) = receivers.iter().position(|r| r == node) {

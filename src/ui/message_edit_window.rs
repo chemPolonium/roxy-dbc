@@ -1,4 +1,5 @@
 use crate::editable_dbc::{EditableDbc, EditableMessage, FrameFormat};
+use crate::ui::attributes::AttributeFields;
 use dear_imgui_rs::{Ui, WindowFlags};
 
 /// 经典 CAN 最大 DLC
@@ -32,6 +33,8 @@ pub struct MessageEditWindowState {
     pub comment_buffer: String,
     pub frame_format_is_extended: bool,
     pub frame_format_is_fd: bool,
+    /// 报文属性（周期时间、发送类型等），行由文件里的 BA_DEF_ 决定
+    pub attributes: AttributeFields,
     /// 应用失败时的提示（如 ID 非法或重复）
     pub error_message: String,
 }
@@ -48,7 +51,12 @@ pub fn parse_message_id(s: &str) -> Option<u32> {
 
 #[allow(dead_code)]
 impl MessageEditWindowState {
-    pub fn open(msg: &EditableMessage, window_key: &str, nodes: Vec<String>) -> Self {
+    pub fn open(
+        dbc: &EditableDbc,
+        msg: &EditableMessage,
+        window_key: &str,
+        nodes: Vec<String>,
+    ) -> Self {
         // 发送节点从节点列表中选择；当前值不在列表中（如 Vector__XXX 或已删除节点）时兜底追加，
         // 保证原有值不会静默丢失
         let mut transmitter_options = nodes;
@@ -77,6 +85,7 @@ impl MessageEditWindowState {
             comment_buffer: msg.comment().to_string(),
             frame_format_is_extended: msg.frame_format().is_extended(),
             frame_format_is_fd: msg.frame_format().is_fd(),
+            attributes: AttributeFields::for_message(dbc, msg),
             error_message: String::new(),
         }
     }
@@ -102,7 +111,11 @@ impl MessageEditWindowState {
             return Some(format!(
                 "ID 0x{:X} exceeds {} frame limit of 0x{:X}",
                 id,
-                if new_format.is_extended() { "extended" } else { "standard" },
+                if new_format.is_extended() {
+                    "extended"
+                } else {
+                    "standard"
+                },
                 id_limit
             ));
         }
@@ -120,7 +133,11 @@ impl MessageEditWindowState {
                 return Some(format!(
                     "DLC {} exceeds {} limit of {}",
                     size,
-                    if new_format.is_fd() { "CAN FD" } else { "classic CAN" },
+                    if new_format.is_fd() {
+                        "CAN FD"
+                    } else {
+                        "classic CAN"
+                    },
                     max
                 ));
             }
@@ -142,11 +159,12 @@ impl MessageEditWindowState {
 
         // ID 修改优先应用，后续属性编辑使用新 ID
         if let Some(new_id) = parse_message_id(&self.id_buffer)
-            && new_id != msg_id {
-                dbc.set_message_id(msg_id, new_id);
-                self.current_id = new_id;
-                change_count += 1;
-            }
+            && new_id != msg_id
+        {
+            dbc.set_message_id(msg_id, new_id);
+            self.current_id = new_id;
+            change_count += 1;
+        }
 
         let active_id = self.current_id;
 
@@ -162,10 +180,11 @@ impl MessageEditWindowState {
         }
 
         if let Ok(size) = self.size_buffer.trim().parse::<u64>()
-            && size != self.original_message.message_size() {
-                dbc.set_message_size(active_id, size);
-                change_count += 1;
-            }
+            && size != self.original_message.message_size()
+        {
+            dbc.set_message_size(active_id, size);
+            change_count += 1;
+        }
 
         if self.transmitter_buffer.trim() != self.original_message.transmitter() {
             dbc.set_message_transmitter(active_id, self.transmitter_buffer.trim());
@@ -177,17 +196,24 @@ impl MessageEditWindowState {
             change_count += 1;
         }
 
+        let attr_changes = self.attributes.changed_message(dbc, active_id);
+        if attr_changes > 0 {
+            self.attributes.apply_to_message(dbc, active_id);
+            change_count += attr_changes;
+        }
+
         if change_count > 1 {
             dbc.merge_last_compounds(change_count);
         }
 
         if let Some(msg) = dbc.get_message(active_id) {
             self.original_message = msg.clone();
+            self.attributes = AttributeFields::for_message(dbc, msg);
         }
         self.id_buffer = format!("0x{:03X}", self.current_id);
     }
 
-    pub fn render(&mut self, ui: &Ui) -> MessageEditEvent {
+    pub fn render(&mut self, ui: &Ui, dbc: &EditableDbc) -> MessageEditEvent {
         let mut event = MessageEditEvent::None;
 
         let title = format!(
@@ -202,7 +228,8 @@ impl MessageEditWindowState {
             .build(|| {
                 ui.input_text("ID##msg_edit", &mut self.id_buffer).build();
 
-                ui.input_text("Name##msg_edit", &mut self.name_buffer).build();
+                ui.input_text("Name##msg_edit", &mut self.name_buffer)
+                    .build();
 
                 if ui.radio_button("Standard##ff", !self.frame_format_is_extended) {
                     self.frame_format_is_extended = false;
@@ -214,22 +241,24 @@ impl MessageEditWindowState {
                 ui.same_line();
                 ui.checkbox("CAN FD##ff", &mut self.frame_format_is_fd);
 
-                ui.input_text("Size##msg_edit", &mut self.size_buffer).build();
+                ui.input_text("Size##msg_edit", &mut self.size_buffer)
+                    .build();
 
                 // 发送节点从 Node List 下拉选择
-                if ui
-                    .combo_simple_string(
-                        "Transmitter##msg_edit",
-                        &mut self.transmitter_sel,
-                        &self.transmitter_options,
-                    )
-                {
+                if ui.combo_simple_string(
+                    "Transmitter##msg_edit",
+                    &mut self.transmitter_sel,
+                    &self.transmitter_options,
+                ) {
                     self.transmitter_buffer =
                         self.transmitter_options[self.transmitter_sel].clone();
                 }
 
                 ui.input_text("Comment##msg_edit", &mut self.comment_buffer)
                     .build();
+
+                self.attributes
+                    .render(ui, dbc, crate::editable_dbc::AttrTarget::Message);
 
                 if !self.error_message.is_empty() {
                     ui.text_colored([1.0, 0.3, 0.3, 1.0], &self.error_message);

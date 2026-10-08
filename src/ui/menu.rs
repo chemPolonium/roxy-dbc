@@ -25,12 +25,21 @@ fn render_file_menu(ui: &Ui, ui_state: &mut UiState) {
         if ui.menu_item_with_shortcut("New DBC", "Ctrl+N") {
             handle_new_dbc(ui_state);
         }
+        if ui.menu_item_with_shortcut("New FIBEX", "Ctrl+Shift+N") {
+            handle_new_fibex(ui_state);
+        }
         ui.separator();
         if ui.menu_item_with_shortcut("Load File", "Ctrl+O") {
             handle_load_file(ui_state);
         }
         if ui.menu_item("Import as DBC...") {
             handle_import_file(ui_state);
+        }
+        if ui.menu_item("Import Excel Matrix...") {
+            handle_import_excel(ui_state);
+        }
+        if ui.menu_item("Export Excel Template...") {
+            handle_export_excel_template(ui_state);
         }
         if !ui_state.recent_files.is_empty() {
             ui.menu("Recent Files", || {
@@ -93,7 +102,12 @@ fn render_file_menu(ui: &Ui, ui_state: &mut UiState) {
         }
 
         if ui.is_key_pressed_with_repeat(Key::N, false) {
-            handle_new_dbc(ui_state);
+            // Ctrl+N 新建 DBC，Ctrl+Shift+N 新建 FlexRay 数据库
+            if shift {
+                handle_new_fibex(ui_state);
+            } else {
+                handle_new_dbc(ui_state);
+            }
         }
     }
 }
@@ -120,14 +134,16 @@ fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
         {
             if ui.is_key_pressed_with_repeat(Key::Z, false)
                 && let Some(win) = ui_state.dbc_windows.get_mut(idx)
-                    && let Err(e) = win.dbc.undo() {
-                        eprintln!("Undo failed: {}", e);
-                    }
+                && let Err(e) = win.dbc.undo()
+            {
+                eprintln!("Undo failed: {}", e);
+            }
             if ui.is_key_pressed_with_repeat(Key::Y, false)
                 && let Some(win) = ui_state.dbc_windows.get_mut(idx)
-                    && let Err(e) = win.dbc.redo() {
-                        eprintln!("Redo failed: {}", e);
-                    }
+                && let Err(e) = win.dbc.redo()
+            {
+                eprintln!("Redo failed: {}", e);
+            }
             if ui.is_key_pressed_with_repeat(Key::C, false) {
                 edit_copy_message(ui_state, idx);
             }
@@ -138,6 +154,24 @@ fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
                 edit_paste_message(ui_state, idx);
             }
         }
+        // FIBEX 的撤销/重做：与 DBC 一样按焦点分发
+        if ui_state.focus == crate::ui::state::FocusTarget::Fibex
+            && let Some(idx) = ui_state.fibex.last_focused_fibex_index
+            && ui_state.fibex.fibex_windows.get(idx).is_some()
+        {
+            if ui.is_key_pressed_with_repeat(Key::Z, false)
+                && let Some(win) = ui_state.fibex.fibex_windows.get_mut(idx)
+                && let Err(e) = win.fibex.undo()
+            {
+                eprintln!("Undo failed: {}", e);
+            }
+            if ui.is_key_pressed_with_repeat(Key::Y, false)
+                && let Some(win) = ui_state.fibex.fibex_windows.get_mut(idx)
+                && let Err(e) = win.fibex.redo()
+            {
+                eprintln!("Redo failed: {}", e);
+            }
+        }
     }
 
     // Del 删除选中的消息（无需 Ctrl）；只在焦点位于 DBC 窗口时生效，
@@ -146,11 +180,11 @@ fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
         && ui_state.confirm_delete_dialog.target.is_none()
         && ui_state.focus == crate::ui::state::FocusTarget::Dbc
         && let Some(idx) = ui_state.last_focused_dbc_index
-            && ui_state.dbc_windows.get(idx).is_some()
-                && ui.is_key_pressed_with_repeat(Key::Delete, false)
-            {
-                edit_delete_message(ui_state, idx);
-            }
+        && ui_state.dbc_windows.get(idx).is_some()
+        && ui.is_key_pressed_with_repeat(Key::Delete, false)
+    {
+        edit_delete_message(ui_state, idx);
+    }
 }
 
 /// DBC 窗口的编辑菜单项
@@ -161,14 +195,16 @@ fn render_dbc_edit_items(ui: &Ui, ui_state: &mut UiState) {
             let can_redo = win.dbc.can_redo();
 
             if ui.menu_item_enabled_selected_with_shortcut("Undo", "Ctrl+Z", false, can_undo)
-                && let Err(e) = win.dbc.undo() {
-                    eprintln!("Undo failed: {}", e);
-                }
+                && let Err(e) = win.dbc.undo()
+            {
+                eprintln!("Undo failed: {}", e);
+            }
 
             if ui.menu_item_enabled_selected_with_shortcut("Redo", "Ctrl+Y", false, can_redo)
-                && let Err(e) = win.dbc.redo() {
-                    eprintln!("Redo failed: {}", e);
-                }
+                && let Err(e) = win.dbc.redo()
+            {
+                eprintln!("Redo failed: {}", e);
+            }
 
             ui.separator();
 
@@ -181,7 +217,8 @@ fn render_dbc_edit_items(ui: &Ui, ui_state: &mut UiState) {
             if ui.menu_item_enabled_selected_with_shortcut("Cut", "Ctrl+X", false, has_selection) {
                 edit_cut_message(ui_state, idx);
             }
-            if ui.menu_item_enabled_selected_with_shortcut("Paste", "Ctrl+V", false, has_clipboard) {
+            if ui.menu_item_enabled_selected_with_shortcut("Paste", "Ctrl+V", false, has_clipboard)
+            {
                 edit_paste_message(ui_state, idx);
             }
             ui.separator();
@@ -209,13 +246,15 @@ fn render_fibex_edit_items(ui: &Ui, ui_state: &mut UiState) {
             let can_redo = win.fibex.can_redo();
 
             if ui.menu_item_enabled_selected_no_shortcut("Undo", false, can_undo)
-                && let Err(e) = win.fibex.undo() {
-                    eprintln!("Undo failed: {}", e);
-                }
+                && let Err(e) = win.fibex.undo()
+            {
+                eprintln!("Undo failed: {}", e);
+            }
             if ui.menu_item_enabled_selected_no_shortcut("Redo", false, can_redo)
-                && let Err(e) = win.fibex.redo() {
-                    eprintln!("Redo failed: {}", e);
-                }
+                && let Err(e) = win.fibex.redo()
+            {
+                eprintln!("Redo failed: {}", e);
+            }
 
             ui.separator();
 
@@ -342,16 +381,34 @@ fn render_view_menu(ui: &Ui, ui_state: &mut UiState) {
 
 /// 渲染工具菜单
 fn render_tools_menu(ui: &Ui, ui_state: &mut UiState) {
-    let has_dbc = !ui_state.dbc_windows.is_empty();
+    let has_windows = !ui_state.dbc_windows.is_empty() || !ui_state.fibex.fibex_windows.is_empty();
 
     ui.menu("Tools", || {
-        if ui.menu_item_enabled_selected_no_shortcut("Validate", false, has_dbc)
-            && let Some(idx) = ui_state.last_focused_dbc_index
-                && let Some(win) = ui_state.dbc_windows.get(idx) {
-                    ui_state.validation_dialog.issues = win.dbc.validate();
-                    ui_state.validation_dialog.show = true;
-                }
+        if ui.menu_item_enabled_selected_no_shortcut("Validate", false, has_windows) {
+            validate_focused_window(ui_state);
+        }
     });
+}
+
+/// 校验焦点所在的数据库窗口，结果写入该窗口自己的校验对话框
+fn validate_focused_window(ui_state: &mut UiState) {
+    if ui_state.focus == crate::ui::state::FocusTarget::Fibex {
+        if let Some(idx) = ui_state.fibex.last_focused_fibex_index
+            && let Some(win) = ui_state.fibex.fibex_windows.get(idx)
+        {
+            let issues = win.fibex.validate();
+            ui_state.fibex.validation_dialog.issues = issues;
+            ui_state.fibex.validation_dialog.show = true;
+        }
+        return;
+    }
+    if let Some(idx) = ui_state.last_focused_dbc_index
+        && let Some(win) = ui_state.dbc_windows.get(idx)
+    {
+        let issues = win.dbc.validate();
+        ui_state.validation_dialog.issues = issues;
+        ui_state.validation_dialog.show = true;
+    }
 }
 
 /// 渲染帮助菜单
@@ -369,6 +426,22 @@ fn handle_new_dbc(ui_state: &mut UiState) {
     let dbc_window = DbcWindow::new("Untitled.dbc", editable_dbc);
     ui_state.dbc_windows.push(dbc_window);
     ui_state.last_focused_dbc_index = Some(ui_state.dbc_windows.len() - 1);
+}
+
+/// 新建空的 FlexRay 数据库（集群参数取默认值）。新建时还没有对应文件，保存时会弹出另存为。
+fn handle_new_fibex(ui_state: &mut UiState) {
+    let fibex = crate::fibex::editable_fibex::EditableFibex::new();
+    let state = &mut ui_state.fibex;
+    let id = state.next_fibex_id;
+    state.next_fibex_id += 1;
+    state
+        .fibex_windows
+        .push(crate::fibex::ui::fibex_window::FibexWindow::new(
+            id,
+            "Untitled.fibex",
+            fibex,
+        ));
+    state.last_focused_fibex_index = Some(state.fibex_windows.len() - 1);
 }
 
 /// 保存当前聚焦的 FIBEX 窗口（按扩展名选择 FIBEX / ARXML 格式，按原编码写出）
@@ -429,13 +502,13 @@ fn handle_save_fibex(ui_state: &mut UiState, save_as: bool) {
     }
 }
 
-/// 处理加载文件（Ctrl+O）：按扩展名分流——dbc/kcd 进 DBC 编辑窗口，
+/// 处理加载文件（Ctrl+O）：按扩展名分流——dbc/kcd/xlsx 进 DBC 编辑窗口，
 /// xml/arxml（含 FIBEX 格式的 XML）进 FIBEX 查看窗口，格式按文件内容自动识别
 fn handle_load_file(ui_state: &mut UiState) {
     let Some(path) = rfd::FileDialog::new()
         .add_filter(
-            "Database files (dbc, xml, arxml, kcd)",
-            &["dbc", "xml", "arxml", "kcd"],
+            "Database files (dbc, xml, arxml, kcd, xlsx)",
+            &["dbc", "xml", "arxml", "kcd", "xlsx"],
         )
         .add_filter("All files", &["*"])
         .pick_file()
@@ -444,6 +517,44 @@ fn handle_load_file(ui_state: &mut UiState) {
     };
 
     ui_state.open_path(&path);
+}
+
+/// 处理从 Excel 通信矩阵模板生成 DBC
+fn handle_import_excel(ui_state: &mut UiState) {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Excel files", &["xlsx"])
+        .pick_file()
+    else {
+        return;
+    };
+
+    ui_state.open_path(&path);
+}
+
+/// 处理导出空白 Excel 通信矩阵模板（只有表头，供填写）
+fn handle_export_excel_template(ui_state: &mut UiState) {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Excel files", &["xlsx"])
+        .set_file_name("CanMatrix.xlsx")
+        .save_file()
+    else {
+        return;
+    };
+
+    match crate::excel::write_template(&path, None) {
+        Ok(()) => {
+            ui_state.notice_dialog.show = true;
+            ui_state.notice_dialog.title = "Excel Template".to_string();
+            ui_state.notice_dialog.message = format!(
+                "模板已导出到 {}\n填写后从 File - Import Excel Matrix 打开",
+                path.to_string_lossy()
+            );
+        }
+        Err(e) => {
+            ui_state.error_dialog.message = e;
+            ui_state.error_dialog.show = true;
+        }
+    }
 }
 
 /// 处理导入 ARXML/KCD 文件
@@ -506,9 +617,15 @@ fn handle_save_dbc(ui_state: &mut UiState, save_as: bool) {
     let needs_dialog = save_as || !std::path::Path::new(file_path).exists();
 
     let save_path = if needs_dialog {
+        // 默认沿用窗口当前的文件名（从 Excel 生成的 DBC 因此默认同名 .dbc）
+        let default_name = std::path::Path::new(&ui_state.dbc_windows[idx].file_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("output.dbc")
+            .to_string();
         let Some(path) = rfd::FileDialog::new()
             .add_filter("DBC files", &["dbc"])
-            .set_file_name("output.dbc")
+            .set_file_name(default_name)
             .save_file()
         else {
             return;

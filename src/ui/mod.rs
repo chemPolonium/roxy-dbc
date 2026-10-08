@@ -8,6 +8,7 @@
 //! - `menu`: 菜单栏和文件操作
 
 pub mod all_signals_window;
+pub mod attributes;
 pub mod bit_layout;
 pub mod comm_matrix;
 pub mod dbc_window;
@@ -34,9 +35,14 @@ pub fn render_ui(ui: &Ui, ui_state: &mut UiState) {
     menu::render_main_menu_bar(ui, ui_state);
     dbc_window::render_dbc_windows(ui, ui_state);
     crate::fibex::ui::fibex_window::render_fibex_windows(ui, &mut ui_state.fibex);
+    // FIBEX 窗口在 DBC 之后渲染，故本帧的焦点声明覆盖 DBC 的设置
+    if ui_state.fibex.focus_claimed {
+        ui_state.focus = crate::ui::state::FocusTarget::Fibex;
+    }
 
     render_about_dialog(ui, ui_state);
     render_error_dialog(ui, ui_state);
+    render_notice_dialog(ui, ui_state);
 
     if ui_state.file_hovering {
         render_drop_zone_overlay(ui);
@@ -85,6 +91,32 @@ fn render_error_dialog(ui: &Ui, ui_state: &mut UiState) {
 
     if !is_open {
         ui_state.error_dialog.show = false;
+    }
+}
+
+/// 完成提示：标题写明这件事，正文给出结果
+fn render_notice_dialog(ui: &Ui, ui_state: &mut UiState) {
+    let dialog = &mut ui_state.notice_dialog;
+    if !dialog.show {
+        return;
+    }
+
+    let mut is_open = true;
+    let title = dialog.title.clone();
+    let message = dialog.message.clone();
+    ui.window(title.as_str())
+        .flags(WindowFlags::ALWAYS_AUTO_RESIZE)
+        .opened(&mut is_open)
+        .build(|| {
+            ui.text(&message);
+            ui.separator();
+            if ui.button("OK") {
+                dialog.show = false;
+            }
+        });
+
+    if !is_open {
+        dialog.show = false;
     }
 }
 

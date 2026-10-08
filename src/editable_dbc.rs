@@ -11,6 +11,47 @@ fn numeric_to_f64(v: &can_dbc::NumericValue) -> f64 {
     }
 }
 
+fn numeric_to_i64(v: &can_dbc::NumericValue) -> i64 {
+    match v {
+        can_dbc::NumericValue::Uint(n) => *n as i64,
+        can_dbc::NumericValue::Int(n) => *n,
+        can_dbc::NumericValue::Double(n) => *n as i64,
+    }
+}
+
+/// 帧格式与总线类型由 FrameFormat 自己写出 BA_，不走通用属性通道，避免重复声明
+fn is_format_attribute(name: &str) -> bool {
+    name == "VFrameFormat" || name == "BusType"
+}
+
+fn convert_attr_type(t: &AttributeValueType) -> AttrType {
+    match t {
+        AttributeValueType::Int(min, max) => AttrType::Int {
+            min: numeric_to_i64(min),
+            max: numeric_to_i64(max),
+        },
+        AttributeValueType::Hex(min, max) => AttrType::Hex {
+            min: numeric_to_i64(min),
+            max: numeric_to_i64(max),
+        },
+        AttributeValueType::Float(min, max) => AttrType::Float {
+            min: numeric_to_f64(min),
+            max: numeric_to_f64(max),
+        },
+        AttributeValueType::String => AttrType::String,
+        AttributeValueType::Enum(values) => AttrType::Enum(values.clone()),
+    }
+}
+
+fn convert_attr_value(v: &can_dbc::AttributeValue) -> AttrValue {
+    match v {
+        can_dbc::AttributeValue::Uint(n) => AttrValue::Int(*n as i64),
+        can_dbc::AttributeValue::Int(n) => AttrValue::Int(*n),
+        can_dbc::AttributeValue::Double(n) => AttrValue::Float(*n),
+        can_dbc::AttributeValue::String(s) => AttrValue::Text(s.clone()),
+    }
+}
+
 #[derive(Clone)]
 pub enum Severity {
     Error,
@@ -159,6 +200,19 @@ pub enum Operation {
         old_descriptions: Vec<(i64, String)>,
         new_descriptions: Vec<(i64, String)>,
     },
+    SetMessageAttribute {
+        message_id: u32,
+        name: String,
+        old_value: Option<AttrValue>,
+        new_value: Option<AttrValue>,
+    },
+    SetSignalAttribute {
+        message_id: u32,
+        signal_name: String,
+        name: String,
+        old_value: Option<AttrValue>,
+        new_value: Option<AttrValue>,
+    },
     AddMessage {
         message: EditableMessage,
     },
@@ -190,14 +244,15 @@ pub enum Operation {
 pub struct EditableDbc {
     nodes: Vec<String>,
     messages: Vec<EditableMessage>,
+    /// 文件里声明过的属性（`BA_DEF_` / `BA_DEF_DEF_`），保存时原样写回
+    attribute_definitions: Vec<AttrDef>,
     history: Vec<Operation>,
     compound_counts: Vec<usize>,
     redo_history: Vec<Operation>,
     redo_compound_counts: Vec<usize>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum FrameFormat {
     #[default]
     Standard,
@@ -207,7 +262,6 @@ pub enum FrameFormat {
     /// CAN FD 帧，29 位扩展 ID
     ExtendedFd,
 }
-
 
 impl FrameFormat {
     /// 是否为 29 位扩展 ID 寻址
@@ -268,6 +322,112 @@ impl FrameFormat {
     }
 }
 
+/// 属性挂在什么对象上（DBC 里 `BA_DEF_` 的目标关键字）
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttrTarget {
+    /// `BO_` 报文属性
+    Message,
+    /// `SG_` 信号属性
+    Signal,
+    /// `BU_` 节点属性
+    Node,
+    /// 没有目标，作用于整个数据库
+    Network,
+}
+
+impl AttrTarget {
+    /// `BA_DEF_` / `BA_` 里写的对象关键字；数据库级为空
+    pub fn keyword(self) -> &'static str {
+        match self {
+            AttrTarget::Message => "BO_",
+            AttrTarget::Signal => "SG_",
+            AttrTarget::Node => "BU_",
+            AttrTarget::Network => "",
+        }
+    }
+}
+
+/// `BA_DEF_` 声明的属性类型
+#[derive(Clone, Debug, PartialEq)]
+pub enum AttrType {
+    Int { min: i64, max: i64 },
+    Hex { min: i64, max: i64 },
+    Float { min: f64, max: f64 },
+    Enum(Vec<String>),
+    String,
+}
+
+/// 一个属性取值。枚举值就是列表里的一个字符串
+#[derive(Clone, Debug, PartialEq)]
+pub enum AttrValue {
+    Int(i64),
+    Float(f64),
+    Text(String),
+}
+
+impl AttrValue {
+    /// 写进 DBC 文本：文本带引号，数字不带
+    pub fn to_dbc_text(&self) -> String {
+        match self {
+            AttrValue::Int(v) => v.to_string(),
+            AttrValue::Float(v) => {
+                if v.is_finite() && (v - v.round()).abs() < f64::EPSILON {
+                    format!("{:.1}", v)
+                } else {
+                    format!("{}", v)
+                }
+            }
+            AttrValue::Text(v) => format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\"")),
+        }
+    }
+
+    /// 界面与 Excel 里显示的文本
+    pub fn display(&self) -> String {
+        match self {
+            AttrValue::Int(v) => v.to_string(),
+            AttrValue::Float(v) => {
+                if v.is_finite() && (v - v.round()).abs() < f64::EPSILON {
+                    format!("{}", *v as i64)
+                } else {
+                    format!("{}", v)
+                }
+            }
+            AttrValue::Text(v) => v.clone(),
+        }
+    }
+
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            AttrValue::Int(v) => Some(*v as f64),
+            AttrValue::Float(v) => Some(*v),
+            AttrValue::Text(v) => v.trim().parse::<f64>().ok(),
+        }
+    }
+}
+
+/// 一条属性声明（`BA_DEF_` + 可选的 `BA_DEF_DEF_` 默认值）
+#[derive(Clone, Debug, PartialEq)]
+pub struct AttrDef {
+    pub name: String,
+    pub target: AttrTarget,
+    pub kind: AttrType,
+    pub default: Option<AttrValue>,
+}
+
+/// Vector 工具链常用的属性名，界面与 Excel 模板按这些名字读写
+pub mod attr_names {
+    pub const MSG_TYPE: &str = "GenMsgType";
+    pub const MSG_SEND_TYPE: &str = "GenMsgSendType";
+    pub const MSG_CYCLE_TIME: &str = "GenMsgCycleTime";
+    pub const MSG_CYCLE_TIME_FAST: &str = "GenMsgCycleTimeFast";
+    pub const MSG_NR_OF_REPETITION: &str = "GenMsgNrOfRepetition";
+    pub const MSG_DELAY_TIME: &str = "GenMsgDelayTime";
+    pub const SIG_SEND_TYPE: &str = "GenSigSendType";
+    pub const SIG_START_VALUE: &str = "GenSigStartValue";
+    pub const SIG_INVALID_VALUE: &str = "GenSigInvalidValue";
+    pub const SIG_INACTIVE_VALUE: &str = "GenSigInactiveValue";
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct EditableMessage {
@@ -278,6 +438,8 @@ pub struct EditableMessage {
     transmitter: String,
     signals: Vec<EditableSignal>,
     comment: String,
+    /// 报文级属性：属性名 -> 值（`BA_ "x" BO_ <id> ...`）
+    attributes: Vec<(String, AttrValue)>,
 }
 
 #[allow(dead_code)]
@@ -297,6 +459,8 @@ pub struct EditableSignal {
     receivers: Vec<String>,
     comment: String,
     value_descriptions: Vec<(i64, String)>,
+    /// 信号级属性：属性名 -> 值（`BA_ "x" SG_ <id> <信号名> ...`）
+    attributes: Vec<(String, AttrValue)>,
 }
 
 #[allow(dead_code)]
@@ -305,6 +469,7 @@ impl EditableDbc {
         Self {
             nodes: Vec::new(),
             messages: Vec::new(),
+            attribute_definitions: Vec::new(),
             history: Vec::new(),
             compound_counts: Vec::new(),
             redo_history: Vec::new(),
@@ -316,10 +481,83 @@ impl EditableDbc {
         Self {
             nodes,
             messages,
+            attribute_definitions: Vec::new(),
             history: Vec::new(),
             compound_counts: Vec::new(),
             redo_history: Vec::new(),
             redo_compound_counts: Vec::new(),
+        }
+    }
+
+    /// 登记一批属性声明（导入时用，不进撤销历史）；同名同目标的定义只保留第一条
+    pub fn import_attribute_definitions(&mut self, defs: Vec<AttrDef>) {
+        for def in defs {
+            self.upsert_attribute_definition(&def.name, def.target, def.kind, def.default);
+        }
+    }
+
+    pub fn attribute_definitions(&self) -> &[AttrDef] {
+        &self.attribute_definitions
+    }
+
+    /// 某类对象上的全部定义，按名字排序稳定输出
+    pub fn attribute_definitions_for(&self, target: AttrTarget) -> Vec<&AttrDef> {
+        let mut out: Vec<&AttrDef> = self
+            .attribute_definitions
+            .iter()
+            .filter(|d| d.target == target)
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
+    }
+
+    pub fn attribute_definition(&self, name: &str, target: AttrTarget) -> Option<&AttrDef> {
+        self.attribute_definitions
+            .iter()
+            .find(|d| d.name == name && d.target == target)
+    }
+
+    /// 新增或替换一条属性定义。界面与导入侧都走这里，保证类型与枚举列表不丢。
+    pub fn upsert_attribute_definition(
+        &mut self,
+        name: &str,
+        target: AttrTarget,
+        kind: AttrType,
+        default: Option<AttrValue>,
+    ) {
+        match self
+            .attribute_definitions
+            .iter_mut()
+            .find(|d| d.name == name && d.target == target)
+        {
+            Some(existing) => {
+                existing.kind = kind;
+                if default.is_some() {
+                    existing.default = default;
+                }
+            }
+            None => self.attribute_definitions.push(AttrDef {
+                name: name.to_string(),
+                target,
+                kind,
+                default,
+            }),
+        }
+    }
+
+    /// 按取值推断类型：整数用 INT，带小数用 FLOAT，其余用 STRING。
+    /// 范围取到能容下这个值，避免自己造出来的声明反过来报越界。
+    pub fn default_type_for(value: &AttrValue) -> AttrType {
+        match value {
+            AttrValue::Int(v) => AttrType::Int {
+                min: (*v).min(0),
+                max: (*v).max(1),
+            },
+            AttrValue::Float(v) => AttrType::Float {
+                min: if *v < 0.0 { *v } else { 0.0 },
+                max: if *v > 1.0 { *v } else { 1.0 },
+            },
+            AttrValue::Text(_) => AttrType::String,
         }
     }
 
@@ -336,7 +574,9 @@ impl EditableDbc {
             return;
         }
         self.nodes.push(name.to_string());
-        self.push_compound(Operation::AddNode { name: name.to_string() });
+        self.push_compound(Operation::AddNode {
+            name: name.to_string(),
+        });
     }
 
     pub fn delete_node(&mut self, name: &str) {
@@ -344,7 +584,9 @@ impl EditableDbc {
             return;
         }
         self.nodes.retain(|n| n != name);
-        self.push_compound(Operation::DeleteNode { name: name.to_string() });
+        self.push_compound(Operation::DeleteNode {
+            name: name.to_string(),
+        });
     }
 
     pub fn rename_node(&mut self, old_name: &str, new_name: &str) {
@@ -384,7 +626,13 @@ impl EditableDbc {
                 if receivers.iter().any(|r| r == old_name) {
                     let new_receivers: Vec<String> = receivers
                         .iter()
-                        .map(|r| if r == old_name { new_name.to_string() } else { r.clone() })
+                        .map(|r| {
+                            if r == old_name {
+                                new_name.to_string()
+                            } else {
+                                r.clone()
+                            }
+                        })
                         .collect();
                     self.set_signal_receivers(msg_id, &sig_name, new_receivers);
                     changes += 1;
@@ -430,7 +678,8 @@ impl EditableDbc {
         let mut issues = Vec::new();
 
         let mut seen_ids: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
-        let mut seen_names: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        let mut seen_names: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
 
         // 节点名须为合法 DBC 标识符
         for node in &self.nodes {
@@ -538,7 +787,11 @@ impl EditableDbc {
                         "Message '{}' ID 0x{:03X} exceeds {} frame limit of 0x{:X}",
                         msg.message_name,
                         msg.message_id,
-                        if msg.frame_format.is_extended() { "extended" } else { "standard" },
+                        if msg.frame_format.is_extended() {
+                            "extended"
+                        } else {
+                            "standard"
+                        },
                         id_limit
                     ),
                 });
@@ -559,11 +812,13 @@ impl EditableDbc {
             }
 
             let max_bits = msg.message_size * 8;
-            let mut seen_signals: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            let mut seen_signals: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
 
             for (sig_idx, sig) in msg.signals.iter().enumerate() {
                 // 按实际字节序计算占用的位（Motorola 起始位是 MSB，不能简单相加）
-                let positions = get_signal_bit_positions(sig.start_bit, sig.signal_size, &sig.byte_order);
+                let positions =
+                    get_signal_bit_positions(sig.start_bit, sig.signal_size, &sig.byte_order);
                 let overflow = positions.iter().any(|&b| b >= max_bits as usize);
                 if overflow {
                     issues.push(ValidationIssue {
@@ -652,7 +907,84 @@ impl EditableDbc {
             }
         }
 
+        // 属性取值是否落在声明的范围内 / 枚举列表里
+        for msg in &self.messages {
+            self.validate_attribute_values(
+                &mut issues,
+                &format!("message '{}'", msg.message_name),
+                AttrTarget::Message,
+                msg.attributes(),
+            );
+            for sig in msg.signals() {
+                self.validate_attribute_values(
+                    &mut issues,
+                    &format!("signal '{}' of message '{}'", sig.name, msg.message_name),
+                    AttrTarget::Signal,
+                    sig.attributes(),
+                );
+            }
+        }
+
         issues
+    }
+
+    fn validate_attribute_values(
+        &self,
+        issues: &mut Vec<ValidationIssue>,
+        what: &str,
+        target: AttrTarget,
+        values: &[(String, AttrValue)],
+    ) {
+        for (name, value) in values {
+            let Some(def) = self.attribute_definition(name, target) else {
+                continue;
+            };
+            match (&def.kind, value) {
+                (AttrType::Int { min, max } | AttrType::Hex { min, max }, AttrValue::Int(v)) => {
+                    if *v < *min || *v > *max {
+                        issues.push(ValidationIssue {
+                            severity: Severity::Warning,
+                            message: format!(
+                                "Attribute '{}' of {} is {}, outside the declared {}..{}",
+                                name, what, v, min, max
+                            ),
+                        });
+                    }
+                }
+                (AttrType::Float { min, max }, v @ (AttrValue::Int(_) | AttrValue::Float(_))) => {
+                    if let Some(x) = v.as_f64()
+                        && (x < *min || x > *max)
+                    {
+                        issues.push(ValidationIssue {
+                            severity: Severity::Warning,
+                            message: format!(
+                                "Attribute '{}' of {} is {}, outside the declared {}..{}",
+                                name,
+                                what,
+                                v.display(),
+                                AttrValue::Float(*min).display(),
+                                AttrValue::Float(*max).display()
+                            ),
+                        });
+                    }
+                }
+                (AttrType::Enum(options), AttrValue::Text(v))
+                    if !options.iter().any(|o| o == v) =>
+                {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Warning,
+                        message: format!(
+                            "Attribute '{}' of {} is \"{}\", which is not one of the declared values {}",
+                            name,
+                            what,
+                            v,
+                            options.join("/")
+                        ),
+                    });
+                }
+                _ => {}
+            }
+        }
     }
 
     pub fn from_dbc(dbc: &Dbc) -> Self {
@@ -681,10 +1013,89 @@ impl EditableDbc {
                     if let Some(comment) = dbc.signal_comment(msg.id, &sig.name) {
                         sig.comment = comment.to_string();
                     }
+                    let sig_attrs: Vec<(String, AttrValue)> = dbc
+                        .attribute_values_signal
+                        .iter()
+                        .filter(|a| a.message_id == msg.id && a.signal_name == sig.name)
+                        .map(|a| (a.name.clone(), convert_attr_value(&a.value)))
+                        .collect();
+                    for (name, value) in sig_attrs {
+                        sig.apply_attribute(&name, Some(value));
+                    }
+                }
+                for a in dbc
+                    .attribute_values_message
+                    .iter()
+                    .filter(|a| a.message_id == msg.id)
+                {
+                    if is_format_attribute(&a.name) {
+                        continue;
+                    }
+                    em.apply_attribute(&a.name, Some(convert_attr_value(&a.value)));
                 }
                 em
             })
             .collect();
+
+        // 属性声明与默认值：VFrameFormat / BusType 由帧格式自己写出，不重复登记
+        editable_dbc.attribute_definitions = dbc
+            .attribute_definitions
+            .iter()
+            .filter_map(|def| match def {
+                AttributeDefinition::Message(name, t) => Some(AttrDef {
+                    name: name.clone(),
+                    target: AttrTarget::Message,
+                    kind: convert_attr_type(t),
+                    default: None,
+                }),
+                AttributeDefinition::Signal(name, t) => Some(AttrDef {
+                    name: name.clone(),
+                    target: AttrTarget::Signal,
+                    kind: convert_attr_type(t),
+                    default: None,
+                }),
+                AttributeDefinition::Node(name, t) => Some(AttrDef {
+                    name: name.clone(),
+                    target: AttrTarget::Node,
+                    kind: convert_attr_type(t),
+                    default: None,
+                }),
+                AttributeDefinition::Plain(name, t) => Some(AttrDef {
+                    name: name.clone(),
+                    target: AttrTarget::Network,
+                    kind: convert_attr_type(t),
+                    default: None,
+                }),
+                AttributeDefinition::EnvironmentVariable(_, _) => None,
+            })
+            .filter(|d| !is_format_attribute(&d.name))
+            .collect();
+        for d in &dbc.attribute_defaults {
+            if is_format_attribute(&d.name) {
+                continue;
+            }
+            let value = convert_attr_value(&d.value);
+            let target = editable_dbc
+                .attribute_definitions
+                .iter()
+                .find(|a| a.name == d.name)
+                .map(|a| a.target)
+                .unwrap_or(AttrTarget::Network);
+            if let Some(def) = editable_dbc
+                .attribute_definitions
+                .iter_mut()
+                .find(|a| a.name == d.name && a.target == target)
+            {
+                def.default = Some(value);
+            } else {
+                editable_dbc.attribute_definitions.push(AttrDef {
+                    name: d.name.clone(),
+                    target,
+                    kind: EditableDbc::default_type_for(&value),
+                    default: Some(value),
+                });
+            }
+        }
 
         editable_dbc
     }
@@ -715,9 +1126,10 @@ impl EditableDbc {
         signal_name: &str,
     ) -> Option<(usize, usize)> {
         if let Some(msg_idx) = self.find_message_index(message_id)
-            && let Some(sig_idx) = self.find_index_signal_index(msg_idx, signal_name) {
-                return Some((msg_idx, sig_idx));
-            }
+            && let Some(sig_idx) = self.find_index_signal_index(msg_idx, signal_name)
+        {
+            return Some((msg_idx, sig_idx));
+        }
         None
     }
 
@@ -1143,6 +1555,155 @@ impl EditableDbc {
         });
     }
 
+    /// 报文属性取值；没有显式赋值时回落到 `BA_DEF_DEF_` 的默认值
+    pub fn message_attribute(&self, message_id: u32, name: &str) -> Option<AttrValue> {
+        let explicit = self
+            .messages
+            .iter()
+            .find(|m| m.message_id == message_id)
+            .and_then(|m| m.attribute(name))
+            .cloned();
+        explicit.or_else(|| {
+            self.attribute_definition(name, AttrTarget::Message)
+                .and_then(|d| d.default.clone())
+        })
+    }
+
+    /// 周期时间的属性名，按优先级：Vector 约定的 `GenMsgCycleTime`，
+    /// 有些矩阵用 `CycleTime`
+    pub const CYCLE_TIME_ALIASES: [&'static str; 2] = [attr_names::MSG_CYCLE_TIME, "CycleTime"];
+
+    /// 报文的周期时间：在几个常见名字里取第一个文件声明过且有取值的
+    pub fn message_cycle_time(&self, message_id: u32) -> Option<AttrValue> {
+        Self::CYCLE_TIME_ALIASES
+            .iter()
+            .filter(|name| {
+                self.attribute_definition(name, AttrTarget::Message)
+                    .is_some()
+            })
+            .find_map(|name| self.message_attribute(message_id, name))
+    }
+
+    /// 信号属性取值，同样回落到默认值
+    pub fn signal_attribute(
+        &self,
+        message_id: u32,
+        signal_name: &str,
+        name: &str,
+    ) -> Option<AttrValue> {
+        let explicit = self
+            .messages
+            .iter()
+            .find(|m| m.message_id == message_id)
+            .and_then(|m| m.signals().iter().find(|s| s.name() == signal_name))
+            .and_then(|s| s.attribute(name))
+            .cloned();
+        explicit.or_else(|| {
+            self.attribute_definition(name, AttrTarget::Signal)
+                .and_then(|d| d.default.clone())
+        })
+    }
+
+    /// 设置报文属性并记一步撤销；没有该定义时按取值补一条声明。
+    /// 传 None 等于删除该属性。
+    pub fn set_message_attribute(&mut self, message_id: u32, name: &str, value: Option<AttrValue>) {
+        let old = {
+            let Some(msg) = self
+                .messages
+                .iter_mut()
+                .find(|m| m.message_id == message_id)
+            else {
+                return;
+            };
+            let old = msg.attribute(name).cloned();
+            if old == value {
+                return;
+            }
+            msg.apply_attribute(name, value.clone());
+            old
+        };
+        if let Some(v) = &value {
+            self.ensure_definition(name, AttrTarget::Message, v);
+        }
+        self.push_compound(Operation::SetMessageAttribute {
+            message_id,
+            name: name.to_string(),
+            old_value: old,
+            new_value: value,
+        });
+    }
+
+    pub fn set_signal_attribute(
+        &mut self,
+        message_id: u32,
+        signal_name: &str,
+        name: &str,
+        value: Option<AttrValue>,
+    ) {
+        let old = {
+            let Some(msg) = self
+                .messages
+                .iter_mut()
+                .find(|m| m.message_id == message_id)
+            else {
+                return;
+            };
+            let Some(sig) = msg.signals.iter_mut().find(|s| s.name == signal_name) else {
+                return;
+            };
+            let old = sig.attribute(name).cloned();
+            if old == value {
+                return;
+            }
+            sig.apply_attribute(name, value.clone());
+            old
+        };
+        if let Some(v) = &value {
+            self.ensure_definition(name, AttrTarget::Signal, v);
+        }
+        self.push_compound(Operation::SetSignalAttribute {
+            message_id,
+            signal_name: signal_name.to_string(),
+            name: name.to_string(),
+            old_value: old,
+            new_value: value,
+        });
+    }
+
+    /// 属性值要能写回文件，就得有声明；缺了按取值类型补一条
+    fn ensure_definition(&mut self, name: &str, target: AttrTarget, value: &AttrValue) {
+        let known = self
+            .attribute_definitions
+            .iter()
+            .any(|d| d.name == name && d.target == target);
+        if !known {
+            let kind = Self::default_type_for(value);
+            self.upsert_attribute_definition(name, target, kind, None);
+        }
+    }
+
+    /// 给所有已挂上的属性补齐声明。绕过 setter 直接写值的导入路径（Excel 模板、
+    /// 外部构造）调用它，否则保存时只有 `BA_` 没有 `BA_DEF_`。
+    pub fn ensure_definitions_for_used_attributes(&mut self) {
+        let used: Vec<(String, AttrTarget, AttrValue)> = self
+            .messages
+            .iter()
+            .flat_map(|m| {
+                m.attributes()
+                    .iter()
+                    .map(|(n, v)| (n.clone(), AttrTarget::Message, v.clone()))
+                    .chain(m.signals().iter().flat_map(|s| {
+                        s.attributes()
+                            .iter()
+                            .map(|(n, v)| (n.clone(), AttrTarget::Signal, v.clone()))
+                    }))
+            })
+            .collect();
+        for (name, target, value) in used {
+            self.ensure_definition(&name, target, &value);
+        }
+    }
+
     pub fn add_message(&mut self, message: &EditableMessage) {
         self.messages.push(message.clone());
         self.push_compound(Operation::AddMessage {
@@ -1233,132 +1794,329 @@ impl EditableDbc {
                 }
                 Ok(())
             }
-            Operation::SetMessageFrameFormat { message_id, old_format, new_format: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id) {
+            Operation::SetMessageFrameFormat {
+                message_id,
+                old_format,
+                new_format: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
                     msg.frame_format = *old_format;
                 }
                 Ok(())
             }
-            Operation::SetMessageName { message_id, old_name, new_name: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id) {
+            Operation::SetMessageName {
+                message_id,
+                old_name,
+                new_name: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
                     msg.message_name = old_name.clone();
                 }
                 Ok(())
             }
-            Operation::SetMessageSize { message_id, old_size, new_size: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id) {
+            Operation::SetMessageSize {
+                message_id,
+                old_size,
+                new_size: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
                     msg.message_size = *old_size;
                 }
                 Ok(())
             }
-            Operation::SetMessageTransmitter { message_id, old_transmitter, new_transmitter: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id) {
+            Operation::SetMessageTransmitter {
+                message_id,
+                old_transmitter,
+                new_transmitter: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
                     msg.transmitter = old_transmitter.clone();
                 }
                 Ok(())
             }
-            Operation::SetMessageComment { message_id, old_comment, new_comment: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id) {
+            Operation::SetMessageComment {
+                message_id,
+                old_comment,
+                new_comment: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
                     msg.comment = old_comment.clone();
                 }
                 Ok(())
             }
-            Operation::SetSignalName { message_id, signal_old_name, signal_new_name } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_new_name) {
-                        sig.name = signal_old_name.clone();
-                    }
+            Operation::SetSignalName {
+                message_id,
+                signal_old_name,
+                signal_new_name,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_new_name)
+                {
+                    sig.name = signal_old_name.clone();
+                }
                 Ok(())
             }
-            Operation::SetSignalMultiplexerIndicator { message_id, signal_name, old_indicator, new_indicator: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.multiplexer_indicator = *old_indicator;
-                    }
+            Operation::SetSignalMultiplexerIndicator {
+                message_id,
+                signal_name,
+                old_indicator,
+                new_indicator: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.multiplexer_indicator = *old_indicator;
+                }
                 Ok(())
             }
-            Operation::SetSignalStartBit { message_id, signal_name, old_start_bit, new_start_bit: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.start_bit = *old_start_bit;
-                    }
+            Operation::SetSignalStartBit {
+                message_id,
+                signal_name,
+                old_start_bit,
+                new_start_bit: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.start_bit = *old_start_bit;
+                }
                 Ok(())
             }
-            Operation::SetSignalSize { message_id, signal_name, old_size, new_size: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.signal_size = *old_size;
-                    }
+            Operation::SetSignalSize {
+                message_id,
+                signal_name,
+                old_size,
+                new_size: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.signal_size = *old_size;
+                }
                 Ok(())
             }
-            Operation::SetSignalByteOrder { message_id, signal_name, old_byte_order, new_byte_order: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.byte_order = *old_byte_order;
-                    }
+            Operation::SetSignalByteOrder {
+                message_id,
+                signal_name,
+                old_byte_order,
+                new_byte_order: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.byte_order = *old_byte_order;
+                }
                 Ok(())
             }
-            Operation::SetSignalValueType { message_id, signal_name, old_value_type, new_value_type: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.value_type = *old_value_type;
-                    }
+            Operation::SetSignalValueType {
+                message_id,
+                signal_name,
+                old_value_type,
+                new_value_type: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.value_type = *old_value_type;
+                }
                 Ok(())
             }
-            Operation::SetSignalFactor { message_id, signal_name, old_factor, new_factor: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.factor = *old_factor;
-                    }
+            Operation::SetSignalFactor {
+                message_id,
+                signal_name,
+                old_factor,
+                new_factor: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.factor = *old_factor;
+                }
                 Ok(())
             }
-            Operation::SetSignalOffset { message_id, signal_name, old_offset, new_offset: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.offset = *old_offset;
-                    }
+            Operation::SetSignalOffset {
+                message_id,
+                signal_name,
+                old_offset,
+                new_offset: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.offset = *old_offset;
+                }
                 Ok(())
             }
-            Operation::SetSignalMin { message_id, signal_name, old_min, new_min: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.min = *old_min;
-                    }
+            Operation::SetSignalMin {
+                message_id,
+                signal_name,
+                old_min,
+                new_min: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.min = *old_min;
+                }
                 Ok(())
             }
-            Operation::SetSignalMax { message_id, signal_name, old_max, new_max: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.max = *old_max;
-                    }
+            Operation::SetSignalMax {
+                message_id,
+                signal_name,
+                old_max,
+                new_max: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.max = *old_max;
+                }
                 Ok(())
             }
-            Operation::SetSignalUnit { message_id, signal_name, old_unit, new_unit: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.unit = old_unit.clone();
-                    }
+            Operation::SetSignalUnit {
+                message_id,
+                signal_name,
+                old_unit,
+                new_unit: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.unit = old_unit.clone();
+                }
                 Ok(())
             }
-            Operation::SetSignalReceivers { message_id, signal_name, old_receivers, new_receivers: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.receivers = old_receivers.clone();
-                    }
+            Operation::SetSignalReceivers {
+                message_id,
+                signal_name,
+                old_receivers,
+                new_receivers: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.receivers = old_receivers.clone();
+                }
                 Ok(())
             }
-            Operation::SetSignalComment { message_id, signal_name, old_comment, new_comment: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.comment = old_comment.clone();
-                    }
+            Operation::SetSignalComment {
+                message_id,
+                signal_name,
+                old_comment,
+                new_comment: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.comment = old_comment.clone();
+                }
                 Ok(())
             }
-            Operation::SetSignalValueDescriptions { message_id, signal_name, old_descriptions, new_descriptions: _ } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.value_descriptions = old_descriptions.clone();
-                    }
+            Operation::SetSignalValueDescriptions {
+                message_id,
+                signal_name,
+                old_descriptions,
+                new_descriptions: _,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.value_descriptions = old_descriptions.clone();
+                }
+                Ok(())
+            }
+            Operation::SetMessageAttribute {
+                message_id,
+                name,
+                old_value,
+                ..
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
+                    msg.apply_attribute(name, old_value.clone());
+                }
+                Ok(())
+            }
+            Operation::SetSignalAttribute {
+                message_id,
+                signal_name,
+                name,
+                old_value,
+                ..
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.apply_attribute(name, old_value.clone());
+                }
                 Ok(())
             }
             Operation::AddMessage { message } => {
@@ -1370,13 +2128,21 @@ impl EditableDbc {
                 Ok(())
             }
             Operation::AddSignal { message_id, signal } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id) {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
                     msg.signals.retain(|s| s.name != signal.name);
                 }
                 Ok(())
             }
             Operation::DeleteSignal { message_id, signal } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id) {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
                     msg.signals.push(signal.clone());
                 }
                 Ok(())
@@ -1390,7 +2156,11 @@ impl EditableDbc {
                 Ok(())
             }
             Operation::RenameNode { old_name, new_name } => {
-                if let Some(node) = self.nodes.iter_mut().find(|n| n.as_str() == new_name.as_str()) {
+                if let Some(node) = self
+                    .nodes
+                    .iter_mut()
+                    .find(|n| n.as_str() == new_name.as_str())
+                {
                     *node = old_name.clone();
                 }
                 Ok(())
@@ -1406,132 +2176,329 @@ impl EditableDbc {
                 }
                 Ok(())
             }
-            Operation::SetMessageFrameFormat { message_id, old_format: _, new_format } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id) {
+            Operation::SetMessageFrameFormat {
+                message_id,
+                old_format: _,
+                new_format,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
                     msg.frame_format = *new_format;
                 }
                 Ok(())
             }
-            Operation::SetMessageName { message_id, old_name: _, new_name } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id) {
+            Operation::SetMessageName {
+                message_id,
+                old_name: _,
+                new_name,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
                     msg.message_name = new_name.clone();
                 }
                 Ok(())
             }
-            Operation::SetMessageSize { message_id, old_size: _, new_size } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id) {
+            Operation::SetMessageSize {
+                message_id,
+                old_size: _,
+                new_size,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
                     msg.message_size = *new_size;
                 }
                 Ok(())
             }
-            Operation::SetMessageTransmitter { message_id, old_transmitter: _, new_transmitter } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id) {
+            Operation::SetMessageTransmitter {
+                message_id,
+                old_transmitter: _,
+                new_transmitter,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
                     msg.transmitter = new_transmitter.clone();
                 }
                 Ok(())
             }
-            Operation::SetMessageComment { message_id, old_comment: _, new_comment } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id) {
+            Operation::SetMessageComment {
+                message_id,
+                old_comment: _,
+                new_comment,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
                     msg.comment = new_comment.clone();
                 }
                 Ok(())
             }
-            Operation::SetSignalName { message_id, signal_old_name, signal_new_name } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_old_name) {
-                        sig.name = signal_new_name.clone();
-                    }
+            Operation::SetSignalName {
+                message_id,
+                signal_old_name,
+                signal_new_name,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_old_name)
+                {
+                    sig.name = signal_new_name.clone();
+                }
                 Ok(())
             }
-            Operation::SetSignalMultiplexerIndicator { message_id, signal_name, old_indicator: _, new_indicator } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.multiplexer_indicator = *new_indicator;
-                    }
+            Operation::SetSignalMultiplexerIndicator {
+                message_id,
+                signal_name,
+                old_indicator: _,
+                new_indicator,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.multiplexer_indicator = *new_indicator;
+                }
                 Ok(())
             }
-            Operation::SetSignalStartBit { message_id, signal_name, old_start_bit: _, new_start_bit } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.start_bit = *new_start_bit;
-                    }
+            Operation::SetSignalStartBit {
+                message_id,
+                signal_name,
+                old_start_bit: _,
+                new_start_bit,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.start_bit = *new_start_bit;
+                }
                 Ok(())
             }
-            Operation::SetSignalSize { message_id, signal_name, old_size: _, new_size } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.signal_size = *new_size;
-                    }
+            Operation::SetSignalSize {
+                message_id,
+                signal_name,
+                old_size: _,
+                new_size,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.signal_size = *new_size;
+                }
                 Ok(())
             }
-            Operation::SetSignalByteOrder { message_id, signal_name, old_byte_order: _, new_byte_order } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.byte_order = *new_byte_order;
-                    }
+            Operation::SetSignalByteOrder {
+                message_id,
+                signal_name,
+                old_byte_order: _,
+                new_byte_order,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.byte_order = *new_byte_order;
+                }
                 Ok(())
             }
-            Operation::SetSignalValueType { message_id, signal_name, old_value_type: _, new_value_type } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.value_type = *new_value_type;
-                    }
+            Operation::SetSignalValueType {
+                message_id,
+                signal_name,
+                old_value_type: _,
+                new_value_type,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.value_type = *new_value_type;
+                }
                 Ok(())
             }
-            Operation::SetSignalFactor { message_id, signal_name, old_factor: _, new_factor } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.factor = *new_factor;
-                    }
+            Operation::SetSignalFactor {
+                message_id,
+                signal_name,
+                old_factor: _,
+                new_factor,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.factor = *new_factor;
+                }
                 Ok(())
             }
-            Operation::SetSignalOffset { message_id, signal_name, old_offset: _, new_offset } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.offset = *new_offset;
-                    }
+            Operation::SetSignalOffset {
+                message_id,
+                signal_name,
+                old_offset: _,
+                new_offset,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.offset = *new_offset;
+                }
                 Ok(())
             }
-            Operation::SetSignalMin { message_id, signal_name, old_min: _, new_min } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.min = *new_min;
-                    }
+            Operation::SetSignalMin {
+                message_id,
+                signal_name,
+                old_min: _,
+                new_min,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.min = *new_min;
+                }
                 Ok(())
             }
-            Operation::SetSignalMax { message_id, signal_name, old_max: _, new_max } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.max = *new_max;
-                    }
+            Operation::SetSignalMax {
+                message_id,
+                signal_name,
+                old_max: _,
+                new_max,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.max = *new_max;
+                }
                 Ok(())
             }
-            Operation::SetSignalUnit { message_id, signal_name, old_unit: _, new_unit } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.unit = new_unit.clone();
-                    }
+            Operation::SetSignalUnit {
+                message_id,
+                signal_name,
+                old_unit: _,
+                new_unit,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.unit = new_unit.clone();
+                }
                 Ok(())
             }
-            Operation::SetSignalReceivers { message_id, signal_name, old_receivers: _, new_receivers } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.receivers = new_receivers.clone();
-                    }
+            Operation::SetSignalReceivers {
+                message_id,
+                signal_name,
+                old_receivers: _,
+                new_receivers,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.receivers = new_receivers.clone();
+                }
                 Ok(())
             }
-            Operation::SetSignalComment { message_id, signal_name, old_comment: _, new_comment } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.comment = new_comment.clone();
-                    }
+            Operation::SetSignalComment {
+                message_id,
+                signal_name,
+                old_comment: _,
+                new_comment,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.comment = new_comment.clone();
+                }
                 Ok(())
             }
-            Operation::SetSignalValueDescriptions { message_id, signal_name, old_descriptions: _, new_descriptions } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id)
-                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name) {
-                        sig.value_descriptions = new_descriptions.clone();
-                    }
+            Operation::SetSignalValueDescriptions {
+                message_id,
+                signal_name,
+                old_descriptions: _,
+                new_descriptions,
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.value_descriptions = new_descriptions.clone();
+                }
+                Ok(())
+            }
+            Operation::SetMessageAttribute {
+                message_id,
+                name,
+                new_value,
+                ..
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
+                    msg.apply_attribute(name, new_value.clone());
+                }
+                Ok(())
+            }
+            Operation::SetSignalAttribute {
+                message_id,
+                signal_name,
+                name,
+                new_value,
+                ..
+            } => {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                    && let Some(sig) = msg.signals.iter_mut().find(|s| s.name == *signal_name)
+                {
+                    sig.apply_attribute(name, new_value.clone());
+                }
                 Ok(())
             }
             Operation::AddMessage { message } => {
@@ -1543,13 +2510,21 @@ impl EditableDbc {
                 Ok(())
             }
             Operation::AddSignal { message_id, signal } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id) {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
                     msg.signals.push(signal.clone());
                 }
                 Ok(())
             }
             Operation::DeleteSignal { message_id, signal } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id == *message_id) {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id == *message_id)
+                {
                     msg.signals.retain(|s| s.name != signal.name);
                 }
                 Ok(())
@@ -1563,7 +2538,11 @@ impl EditableDbc {
                 Ok(())
             }
             Operation::RenameNode { old_name, new_name } => {
-                if let Some(node) = self.nodes.iter_mut().find(|n| n.as_str() == old_name.as_str()) {
+                if let Some(node) = self
+                    .nodes
+                    .iter_mut()
+                    .find(|n| n.as_str() == old_name.as_str())
+                {
                     *node = new_name.clone();
                 }
                 Ok(())
@@ -1592,10 +2571,7 @@ impl EditableDbc {
             let raw_id = msg.frame_format.raw_id(msg.message_id);
             out.push_str(&format!(
                 "BO_ {} {}: {} {}\n",
-                raw_id,
-                msg.message_name,
-                msg.message_size,
-                msg.transmitter
+                raw_id, msg.message_name, msg.message_size, msg.transmitter
             ));
 
             for sig in &msg.signals {
@@ -1668,7 +2644,13 @@ impl EditableDbc {
                     let entries: Vec<String> = sig
                         .value_descriptions
                         .iter()
-                        .map(|(val, desc)| format!("{} \"{}\"", val, desc.replace('\\', "\\\\").replace('"', "\\\"")))
+                        .map(|(val, desc)| {
+                            format!(
+                                "{} \"{}\"",
+                                val,
+                                desc.replace('\\', "\\\\").replace('"', "\\\"")
+                            )
+                        })
                         .collect();
                     out.push_str(&format!(
                         "VAL_ {} {} {} ;\n",
@@ -1704,17 +2686,120 @@ impl EditableDbc {
             }
         }
 
+        // 属性：BA_DEF_ 声明 -> BA_DEF_DEF_ 默认值 -> BA_ 取值。
+        // 只写用到的声明（有取值或有默认值），没被引用的空声明不落盘。
+        let used_names = |target: AttrTarget| -> std::collections::HashSet<String> {
+            let mut names = std::collections::HashSet::new();
+            match target {
+                AttrTarget::Message => {
+                    for m in &self.messages {
+                        for (name, _) in m.attributes() {
+                            names.insert(name.clone());
+                        }
+                    }
+                }
+                AttrTarget::Signal => {
+                    for m in &self.messages {
+                        for s in m.signals() {
+                            for (name, _) in s.attributes() {
+                                names.insert(name.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            names
+        };
+        let mut wrote_any = false;
+        for target in [
+            AttrTarget::Message,
+            AttrTarget::Signal,
+            AttrTarget::Node,
+            AttrTarget::Network,
+        ] {
+            let used = used_names(target);
+            for def in self
+                .attribute_definitions
+                .iter()
+                .filter(|d| d.target == target && (used.contains(&d.name) || d.default.is_some()))
+            {
+                wrote_any = true;
+                let keyword = if def.target == AttrTarget::Network {
+                    String::new()
+                } else {
+                    format!("{} ", def.target.keyword())
+                };
+                let type_text = match &def.kind {
+                    AttrType::Int { min, max } => format!("INT {min} {max}"),
+                    AttrType::Hex { min, max } => format!("HEX {min} {max}"),
+                    AttrType::Float { min, max } => format!(
+                        "FLOAT {} {}",
+                        AttrValue::Float(*min).display(),
+                        AttrValue::Float(*max).display()
+                    ),
+                    AttrType::String => "STRING".to_string(),
+                    AttrType::Enum(values) => format!(
+                        "ENUM {}",
+                        values
+                            .iter()
+                            .map(|v| format!("\"{}\"", v.replace('"', "\\\"")))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ),
+                };
+                out.push_str(&format!(
+                    "BA_DEF_ {}\"{}\" {};\n",
+                    keyword, def.name, type_text
+                ));
+            }
+        }
+        for def in self
+            .attribute_definitions
+            .iter()
+            .filter(|d| d.default.is_some())
+        {
+            out.push_str(&format!(
+                "BA_DEF_DEF_ \"{}\" {};\n",
+                def.name,
+                def.default
+                    .as_ref()
+                    .map(|v| v.to_dbc_text())
+                    .unwrap_or_default()
+            ));
+        }
+        if wrote_any {
+            for msg in &self.messages {
+                let raw_id = msg.frame_format.raw_id(msg.message_id);
+                for (name, value) in msg.attributes() {
+                    out.push_str(&format!(
+                        "BA_ \"{}\" BO_ {} {};\n",
+                        name,
+                        raw_id,
+                        value.to_dbc_text()
+                    ));
+                }
+                for sig in msg.signals() {
+                    for (name, value) in sig.attributes() {
+                        out.push_str(&format!(
+                            "BA_ \"{}\" SG_ {} {} {};\n",
+                            name,
+                            raw_id,
+                            sig.name(),
+                            value.to_dbc_text()
+                        ));
+                    }
+                }
+            }
+        }
+
         out
     }
 }
 
 /// 计算 DBC 信号占用的绝对位号（起始位为字节内位号，bit N = 字节 N/8 的第 N%8 位）。
 /// Intel（小端）位号线性递增；Motorola（大端）字节内递减、跨字节折行。
-pub fn get_signal_bit_positions(
-    start_bit: u64,
-    size: u64,
-    byte_order: &ByteOrder,
-) -> Vec<usize> {
+pub fn get_signal_bit_positions(start_bit: u64, size: u64, byte_order: &ByteOrder) -> Vec<usize> {
     match byte_order {
         ByteOrder::LittleEndian => (start_bit..start_bit + size).map(|b| b as usize).collect(),
         ByteOrder::BigEndian => {
@@ -1739,8 +2824,7 @@ pub fn get_signal_bit_positions(
 /// 从 `start` 起找第一个未占用的消息 ID；超过 29 位扩展上限则从 1 开始找空洞
 pub fn next_free_message_id(dbc: &EditableDbc, start: u32) -> u32 {
     const MAX_ID: u32 = 0x1FFF_FFFF;
-    let used: std::collections::HashSet<u32> =
-        dbc.messages.iter().map(|m| m.message_id).collect();
+    let used: std::collections::HashSet<u32> = dbc.messages.iter().map(|m| m.message_id).collect();
     for cand in start..=MAX_ID {
         if !used.contains(&cand) {
             return cand;
@@ -1781,10 +2865,11 @@ fn parse_frame_format(dbc: &Dbc, msg: &Message) -> FrameFormat {
             _ => None,
         })
         .and_then(|values| {
-            dbc.message_attribute(msg.id, "VFrameFormat").and_then(|v| match v {
-                can_dbc::AttributeValue::Uint(idx) => values.get(*idx as usize).cloned(),
-                _ => None,
-            })
+            dbc.message_attribute(msg.id, "VFrameFormat")
+                .and_then(|v| match v {
+                    can_dbc::AttributeValue::Uint(idx) => values.get(*idx as usize).cloned(),
+                    _ => None,
+                })
         })
         .and_then(|s| FrameFormat::from_vframe_format(&s));
 
@@ -1805,6 +2890,7 @@ impl EditableMessage {
             transmitter: "Vector__XXX".to_string(),
             signals: Vec::new(),
             comment: String::new(),
+            attributes: Vec::new(),
         }
     }
 
@@ -1825,6 +2911,7 @@ impl EditableMessage {
             transmitter,
             signals,
             comment,
+            attributes: Vec::new(),
         }
     }
 
@@ -1837,6 +2924,7 @@ impl EditableMessage {
             transmitter: self.transmitter.clone(),
             signals: Vec::new(),
             comment: self.comment.clone(),
+            attributes: self.attributes.clone(),
         }
     }
 
@@ -1852,9 +2940,13 @@ impl EditableMessage {
             frame_format,
             message_name: msg.name.clone(),
             message_size: msg.size,
-            transmitter: msg.transmitter.clone().unwrap_or_else(|| "Vector__XXX".to_string()),
+            transmitter: msg
+                .transmitter
+                .clone()
+                .unwrap_or_else(|| "Vector__XXX".to_string()),
             signals,
             comment: comment.to_string(),
+            attributes: Vec::new(),
         }
     }
 
@@ -1885,6 +2977,26 @@ impl EditableMessage {
     }
     pub fn comment(&self) -> &str {
         &self.comment
+    }
+
+    /// 报文级属性列表（属性名 -> 值）
+    pub fn attributes(&self) -> &[(String, AttrValue)] {
+        &self.attributes
+    }
+
+    pub fn attribute(&self, name: &str) -> Option<&AttrValue> {
+        self.attributes
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v)
+    }
+
+    /// 直接写入属性值，不进撤销历史（撤销由 EditableDbc 的 setter 负责）
+    pub(crate) fn apply_attribute(&mut self, name: &str, value: Option<AttrValue>) {
+        self.attributes.retain(|(k, _)| k != name);
+        if let Some(v) = value {
+            self.attributes.push((name.to_string(), v));
+        }
     }
 
     pub fn set_message_id(&mut self, id: u32) {
@@ -1920,6 +3032,7 @@ impl EditableSignal {
             receivers: Vec::new(),
             comment: String::new(),
             value_descriptions: Vec::new(),
+            attributes: Vec::new(),
         }
     }
 
@@ -1953,6 +3066,7 @@ impl EditableSignal {
             receivers,
             comment,
             value_descriptions,
+            attributes: Vec::new(),
         }
     }
 
@@ -1972,6 +3086,7 @@ impl EditableSignal {
             receivers: sig.receivers.clone(),
             comment: String::new(),
             value_descriptions: Vec::new(),
+            attributes: Vec::new(),
         }
     }
     pub fn name(&self) -> &str {
@@ -2009,6 +3124,25 @@ impl EditableSignal {
     }
     pub fn comment(&self) -> &str {
         &self.comment
+    }
+
+    /// 信号级属性列表（属性名 -> 值）
+    pub fn attributes(&self) -> &[(String, AttrValue)] {
+        &self.attributes
+    }
+
+    pub fn attribute(&self, name: &str) -> Option<&AttrValue> {
+        self.attributes
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v)
+    }
+
+    pub(crate) fn apply_attribute(&mut self, name: &str, value: Option<AttrValue>) {
+        self.attributes.retain(|(k, _)| k != name);
+        if let Some(v) = value {
+            self.attributes.push((name.to_string(), v));
+        }
     }
 
     pub fn set_name(&mut self, name: &str) {
@@ -2133,8 +3267,15 @@ SIG_VALTYPE_ 2000 Signal_8 : 1;
         let editable = EditableDbc::from_dbc(&dbc);
 
         let msg = editable.get_message(1840).unwrap();
-        let sig = msg.signals().iter().find(|s| s.name() == "Signal_4").unwrap();
-        assert!(sig.comment().contains("asaklfjlsdfjlsdfgls"), "signal comment should be imported");
+        let sig = msg
+            .signals()
+            .iter()
+            .find(|s| s.name() == "Signal_4")
+            .unwrap();
+        assert!(
+            sig.comment().contains("asaklfjlsdfjlsdfgls"),
+            "signal comment should be imported"
+        );
     }
 
     /// EditableDbc -> String -> Dbc -> EditableDbc 回环
@@ -2203,7 +3344,10 @@ SIG_VALTYPE_ 2000 Signal_8 : 1;
         dbc.add_message(&std_fd);
 
         let text = dbc.to_dbc_string();
-        assert!(text.contains("BA_DEF_ BO_ \"VFrameFormat\" ENUM"), "must emit VFrameFormat enum");
+        assert!(
+            text.contains("BA_DEF_ BO_ \"VFrameFormat\" ENUM"),
+            "must emit VFrameFormat enum"
+        );
         assert!(text.contains("BA_ \"BusType\" \"CAN FD\";"));
 
         let re = round_trip(&dbc);
@@ -2289,10 +3433,18 @@ SIG_VALTYPE_ 2000 Signal_8 : 1;
 
         let issues = dbc.validate();
         let messages: Vec<&str> = issues.iter().map(|i| i.message.as_str()).collect();
-        assert!(messages.iter().any(|m| m.contains("exceeds classic CAN limit")));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("exceeds classic CAN limit"))
+        );
         assert!(messages.iter().any(|m| m.contains("factor 0")));
         assert!(messages.iter().any(|m| m.contains("min 10 > max 0")));
-        assert!(messages.iter().any(|m| m.contains("not defined in the node list")));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("not defined in the node list"))
+        );
 
         // 改为 CAN FD 后 DLC 12 合法
         dbc.set_message_frame_format(0x200, FrameFormat::StandardFd);
@@ -2339,7 +3491,11 @@ VAL_ 100 Sig1 1 "开启" 0 "关闭";
         );
 
         // 保存回 GBK 应能还原为原始字节
-        let out = crate::file_encoding::encode_to_bytes(&editable.to_dbc_string(), encoding_rs::GBK, false);
+        let out = crate::file_encoding::encode_to_bytes(
+            &editable.to_dbc_string(),
+            encoding_rs::GBK,
+            false,
+        );
         let redecoded = crate::file_encoding::decode_file_bytes(&out);
         assert!(redecoded.text.contains("测试消息1"));
         assert_eq!(decoded.encoding, redecoded.encoding);
@@ -2377,11 +3533,210 @@ VAL_ 100 Sig1 1 "开启" 0 "关闭";
 
         // start_bit + size = 23 > 8 会误报；按实际位号 7..0 + 15..8 判断同样越界
         let issues = dbc.validate();
-        assert!(issues.iter().any(|i| i.message.contains("exceeds message size")));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("exceeds message size"))
+        );
 
         // 2 字节消息中不越界（即使 start_bit + size = 23 > 16）
         dbc.set_message_size(0x300, 2);
         let issues = dbc.validate();
-        assert!(!issues.iter().any(|i| i.message.contains("exceeds message size")));
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.message.contains("exceeds message size"))
+        );
+    }
+
+    /// 带属性声明与取值的 DBC 文本
+    const ATTR_DBC: &str = r#"
+VERSION "0.1"
+NS_ :
+    CM_
+    BA_DEF_
+    BA_
+    VAL_
+    BA_DEF_DEF_
+BS_:
+BU_: ECU1 ECU2
+BO_ 100 Msg1: 1 ECU1
+    SG_ Sig1 : 0|8@1+ (1,0) [0|255] "" ECU2
+
+BA_DEF_ BO_  "CycleTime" INT 5 1000;
+BA_DEF_ BO_  "GenMsgSendType" ENUM  "CeaseTransmission","Cycle","Event","IfActive","NotUsed";
+BA_DEF_ SG_  "GenSigSendType" ENUM  "ACCOND","CYCLE","EVENT","NOT_USED";
+BA_DEF_DEF_  "CycleTime" 100;
+BA_ "CycleTime" BO_ 100 133;
+BA_ "GenMsgSendType" BO_ 100 "Cycle";
+BA_ "GenSigSendType" SG_ 100 Sig1 "EVENT";
+"#;
+
+    fn load(text: &str) -> EditableDbc {
+        EditableDbc::from_dbc(&Dbc::try_from(text).expect("dbc text should parse"))
+    }
+
+    #[test]
+    fn reads_attribute_definitions_and_values() {
+        let dbc = load(ATTR_DBC);
+
+        let def = dbc
+            .attribute_definition("CycleTime", AttrTarget::Message)
+            .expect("CycleTime 声明应被读到");
+        assert_eq!(def.kind, AttrType::Int { min: 5, max: 1000 });
+        assert_eq!(def.default, Some(AttrValue::Int(100)));
+
+        // 没显式赋值的报文回落到默认值
+        assert_eq!(
+            dbc.message_attribute(100, "CycleTime"),
+            Some(AttrValue::Int(133))
+        );
+        assert_eq!(
+            dbc.signal_attribute(100, "Sig1", "GenSigSendType"),
+            Some(AttrValue::Text("EVENT".to_string()))
+        );
+        assert_eq!(
+            dbc.attribute_definition("GenMsgSendType", AttrTarget::Message)
+                .map(|d| d.kind.clone()),
+            Some(AttrType::Enum(vec![
+                "CeaseTransmission".to_string(),
+                "Cycle".to_string(),
+                "Event".to_string(),
+                "IfActive".to_string(),
+                "NotUsed".to_string()
+            ]))
+        );
+    }
+
+    #[test]
+    fn attributes_survive_save_and_reload() {
+        let dbc = load(ATTR_DBC);
+        let text = dbc.to_dbc_string();
+        assert!(text.contains("BA_DEF_ BO_ \"CycleTime\" INT 5 1000;"));
+        assert!(text.contains("BA_ \"CycleTime\" BO_ 100 133;"));
+        assert!(text.contains("BA_ \"GenMsgSendType\" BO_ 100 \"Cycle\";"));
+        assert!(text.contains("BA_ \"GenSigSendType\" SG_ 100 Sig1 \"EVENT\";"));
+
+        let back = load(&text);
+        assert_eq!(
+            back.message_attribute(100, "CycleTime"),
+            Some(AttrValue::Int(133))
+        );
+        assert_eq!(
+            back.message_attribute(100, "GenMsgSendType"),
+            Some(AttrValue::Text("Cycle".to_string()))
+        );
+        assert_eq!(
+            back.signal_attribute(100, "Sig1", "GenSigSendType"),
+            Some(AttrValue::Text("EVENT".to_string()))
+        );
+        assert_eq!(
+            back.attribute_definition("CycleTime", AttrTarget::Message)
+                .map(|d| d.default.clone()),
+            Some(Some(AttrValue::Int(100))),
+            "BA_DEF_DEF_ 的默认值要留住"
+        );
+    }
+
+    /// 两个周期属性名同时声明时，取 Vector 约定的 GenMsgCycleTime
+    const BOTH_CYCLE_DBC: &str = r#"
+VERSION "0.1"
+NS_ :
+    CM_
+    BA_DEF_
+    BA_
+    VAL_
+    BA_DEF_DEF_
+BS_:
+BU_: ECU1
+BO_ 100 Msg1: 1 ECU1
+    SG_ Sig1 : 0|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BA_DEF_ BO_  "GenMsgCycleTime" INT 0 100000;
+BA_DEF_ BO_  "CycleTime" INT 5 1000;
+BA_ "GenMsgCycleTime" BO_ 100 20;
+BA_ "CycleTime" BO_ 100 133;
+"#;
+
+    #[test]
+    fn cycle_time_prefers_genmsgcycletime_then_falls_back_to_cycletime() {
+        // 只声明 CycleTime 的文件（motbus.dbc 那种）也能取到
+        let only_legacy = load(ATTR_DBC);
+        assert_eq!(
+            only_legacy.message_cycle_time(100),
+            Some(AttrValue::Int(133)),
+            "文件只有 CycleTime 时应退到它"
+        );
+
+        let both = load(BOTH_CYCLE_DBC);
+        assert_eq!(
+            both.message_cycle_time(100),
+            Some(AttrValue::Int(20)),
+            "两个都声明时应取 GenMsgCycleTime"
+        );
+
+        // 谁都没声明时不给值，界面上显示 "-"
+        let none = load(SAMPLE_DBC);
+        assert_eq!(none.message_cycle_time(2000), None);
+    }
+
+    #[test]
+    fn setting_an_attribute_synthesizes_a_definition_and_undoes() {
+        let mut dbc = load(SAMPLE_DBC);
+        dbc.set_message_attribute(
+            2000,
+            attr_names::MSG_CYCLE_TIME,
+            Some(AttrValue::Float(20.0)),
+        );
+        assert_eq!(
+            dbc.message_attribute(2000, attr_names::MSG_CYCLE_TIME),
+            Some(AttrValue::Float(20.0))
+        );
+        assert!(
+            dbc.attribute_definition(attr_names::MSG_CYCLE_TIME, AttrTarget::Message)
+                .is_some(),
+            "没声明过的属性被赋值时应补一条 BA_DEF_"
+        );
+        assert!(
+            dbc.to_dbc_string()
+                .contains("BA_DEF_ BO_ \"GenMsgCycleTime\"")
+        );
+
+        dbc.undo().unwrap();
+        assert_eq!(
+            dbc.message_attribute(2000, attr_names::MSG_CYCLE_TIME),
+            None
+        );
+        dbc.redo().unwrap();
+        assert_eq!(
+            dbc.message_attribute(2000, attr_names::MSG_CYCLE_TIME),
+            Some(AttrValue::Float(20.0))
+        );
+    }
+
+    #[test]
+    fn validate_flags_attribute_values_outside_the_declaration() {
+        let mut dbc = load(ATTR_DBC);
+        // 2000 超出 CycleTime 声明的 5..1000，"Nope" 不在 GenMsgSendType 枚举里
+        dbc.set_message_attribute(100, "CycleTime", Some(AttrValue::Int(2000)));
+        dbc.set_message_attribute(
+            100,
+            "GenMsgSendType",
+            Some(AttrValue::Text("Nope".to_string())),
+        );
+        let issues = dbc.validate();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("CycleTime") && i.message.contains("outside")),
+            "范围外的整数属性值应报出来: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("GenMsgSendType") && i.message.contains("not one of")),
+            "枚举外的取值应报出来"
+        );
     }
 }

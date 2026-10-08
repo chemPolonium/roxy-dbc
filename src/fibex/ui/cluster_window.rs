@@ -22,33 +22,150 @@ pub fn render_cluster_content(ui: &Ui, fibex: &mut EditableFibex) {
 
     ui.separator_with_text("Timing");
 
-    f64_field(ui, label_w, "Cycle Time (ms)", &mut params.cycle_time_ms, ClusterParam::CycleTimeMs, fibex);
-    f64_field(ui, label_w, "Macrotick Duration (µs)", &mut params.macrotick_duration_us, ClusterParam::MacrotickDurationUs, fibex);
-    u32_field(ui, label_w, "Coldstart Attempts (g)", &mut params.coldstart_attempts, ClusterParam::ColdstartAttempts, fibex);
-    u32_field(ui, label_w, "Action Point Offset (gd)", &mut params.action_point_offset, ClusterParam::ActionPointOffset, fibex);
-    u32_field(ui, label_w, "Offset Correction Start (g)", &mut params.offset_correction_start, ClusterParam::OffsetCorrectionStart, fibex);
-    u32_field(ui, label_w, "Minor Version (gd)", &mut params.minor_version, ClusterParam::MinorVersion, fibex);
+    f64_field(
+        ui,
+        label_w,
+        "Cycle Time (ms)",
+        &mut params.cycle_time_ms,
+        ClusterParam::CycleTimeMs,
+        fibex,
+    );
+    f64_field(
+        ui,
+        label_w,
+        "Macrotick Duration (µs)",
+        &mut params.macrotick_duration_us,
+        ClusterParam::MacrotickDurationUs,
+        fibex,
+    );
+    // 一个周期多少个宏节拍：由上面两项换算，只读，改它等于改周期
+    ui.align_text_to_frame_padding();
+    ui.text("Macroticks per Cycle (gCycle)");
+    ui.same_line_with_pos(label_w);
+    ui.text_disabled(format!("{}", params.macro_per_cycle));
+    u32_field(
+        ui,
+        label_w,
+        "Coldstart Attempts (g)",
+        &mut params.coldstart_attempts,
+        ClusterParam::ColdstartAttempts,
+        fibex,
+    );
+    u32_field(
+        ui,
+        label_w,
+        "Action Point Offset (gd)",
+        &mut params.action_point_offset,
+        ClusterParam::ActionPointOffset,
+        fibex,
+    );
+    u32_field(
+        ui,
+        label_w,
+        "Offset Correction Start (g)",
+        &mut params.offset_correction_start,
+        ClusterParam::OffsetCorrectionStart,
+        fibex,
+    );
+    u32_field(
+        ui,
+        label_w,
+        "Minor Version (gd)",
+        &mut params.minor_version,
+        ClusterParam::MinorVersion,
+        fibex,
+    );
 
     ui.separator_with_text("Static Segment");
 
-    u32_field(ui, label_w, "Number of Static Slots (g)", &mut params.number_of_static_slots, ClusterParam::NumberOfStaticSlots, fibex);
-    u32_field(ui, label_w, "Static Slot Duration (gd)", &mut params.static_slot_duration, ClusterParam::StaticSlotDuration, fibex);
+    u32_field(
+        ui,
+        label_w,
+        "Number of Static Slots (g)",
+        &mut params.number_of_static_slots,
+        ClusterParam::NumberOfStaticSlots,
+        fibex,
+    );
+    u32_field(
+        ui,
+        label_w,
+        "Static Slot Duration (gd)",
+        &mut params.static_slot_duration,
+        ClusterParam::StaticSlotDuration,
+        fibex,
+    );
 
     ui.separator_with_text("Dynamic Segment");
 
-    u32_field(ui, label_w, "Number of Minislots (g)", &mut params.number_of_minislots, ClusterParam::NumberOfMinislots, fibex);
-    u32_field(ui, label_w, "Minislot Duration (gd)", &mut params.minislot_duration, ClusterParam::MinislotDuration, fibex);
-    u32_field(ui, label_w, "Minislot Action Point Offset (gd)", &mut params.minislot_action_point_offset, ClusterParam::MinislotActionPointOffset, fibex);
-    u32_field(ui, label_w, "Dynamic Slot Idle Phase (gd)", &mut params.dynamic_slot_idle_phase, ClusterParam::DynamicSlotIdlePhase, fibex);
+    u32_field(
+        ui,
+        label_w,
+        "Number of Minislots (g)",
+        &mut params.number_of_minislots,
+        ClusterParam::NumberOfMinislots,
+        fibex,
+    );
+    u32_field(
+        ui,
+        label_w,
+        "Minislot Duration (gd)",
+        &mut params.minislot_duration,
+        ClusterParam::MinislotDuration,
+        fibex,
+    );
+    u32_field(
+        ui,
+        label_w,
+        "Minislot Action Point Offset (gd)",
+        &mut params.minislot_action_point_offset,
+        ClusterParam::MinislotActionPointOffset,
+        fibex,
+    );
+    u32_field(
+        ui,
+        label_w,
+        "Dynamic Slot Idle Phase (gd)",
+        &mut params.dynamic_slot_idle_phase,
+        ClusterParam::DynamicSlotIdlePhase,
+        fibex,
+    );
 
     ui.separator_with_text("Symbol Window / NIT");
 
-    u32_field(ui, label_w, "Symbol Window (gd)", &mut params.symbol_window, ClusterParam::SymbolWindow, fibex);
-    u32_field(ui, label_w, "Symbol Window Idle Phase (gd)", &mut params.symbol_window_idle_phase, ClusterParam::SymbolWindowIdlePhase, fibex);
-    u32_field(ui, label_w, "Network Idle Time (gd NIT)", &mut params.network_idle_time, ClusterParam::NetworkIdleTime, fibex);
+    u32_field(
+        ui,
+        label_w,
+        "Symbol Window (gd)",
+        &mut params.symbol_window,
+        ClusterParam::SymbolWindow,
+        fibex,
+    );
+    u32_field(
+        ui,
+        label_w,
+        "Symbol Window Idle Phase (gd)",
+        &mut params.symbol_window_idle_phase,
+        ClusterParam::SymbolWindowIdlePhase,
+        fibex,
+    );
+    u32_field(
+        ui,
+        label_w,
+        "Network Idle Time (gd NIT)",
+        &mut params.network_idle_time,
+        ClusterParam::NetworkIdleTime,
+        fibex,
+    );
 
     ui.separator();
-    u32_field(ui, label_w, "Speed (kbit/s)", &mut params.speed_kbps, ClusterParam::SpeedKbps, fibex);
+    u32_field(
+        ui,
+        label_w,
+        "Speed (kbit/s)",
+        &mut params.speed_kbps,
+        ClusterParam::SpeedKbps,
+        fibex,
+    );
 }
 
 fn u32_field(

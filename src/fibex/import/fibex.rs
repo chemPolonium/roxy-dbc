@@ -10,8 +10,8 @@
 //!   结构：PROJECT/ECUS + ELEMENTS(CLUSTER/CHANNEL/FRAME-TRIGGERING/FRAME/PDU/SIGNAL/CODING)
 
 use super::{
-    collect_elements_by_tag, find_text_candidates, get_short_name, parse_cycle_repetition,
-    parse_f64, parse_u32,
+    collect_elements_by_tag, cycle_macroticks, find_text_candidates, get_short_name,
+    parse_cycle_repetition, parse_f64, parse_u32,
 };
 use crate::fibex::editable_fibex::*;
 
@@ -23,7 +23,10 @@ fn get_ref(node: &roxmltree::Node, tag: &str) -> Option<String> {
     if let Some(id_ref) = child.attribute("ID-REF") {
         return Some(id_ref.to_string());
     }
-    child.text().map(|t| t.trim().to_string()).filter(|t| !t.is_empty())
+    child
+        .text()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
 }
 
 /// 解析节点下的 SIGNAL-INSTANCE 列表：返回 (SIGNAL-REF ID, 起始位, 大端)
@@ -141,7 +144,9 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
             .map(|t| {
                 let u = t.to_uppercase();
                 // 注意 "UNSIGNED" 也包含 "SIGNED"，需排除
-                u.contains("TWOS") || u.contains("SYMMETRIC") || (u.contains("SIGNED") && !u.starts_with("UN"))
+                u.contains("TWOS")
+                    || u.contains("SYMMETRIC")
+                    || (u.contains("SIGNED") && !u.starts_with("UN"))
             })
             .unwrap_or(false);
         if !signed {
@@ -302,7 +307,8 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
             .to_uppercase()
             .as_str()
         {
-            "DYNAMIC-PDU" | "EVENT-PDU" => PduKind::Dynamic,
+            "DYNAMIC-PDU" | "N-PDU" => PduKind::Dynamic,
+            "EVENT-PDU" => PduKind::Event,
             _ => PduKind::Static,
         };
         let comment = find_text_candidates(pdu, &["DESC", "DESCRIPTION"]).unwrap_or_default();
@@ -371,10 +377,10 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
     //    - CHANNEL/SLOT/FRAME-TRIGGERINGS/FRAME-TRIGGERING（SLOT-ID 在 SLOT 上）
     //    - CHANNEL/FRAME-TRIGGERINGS/FRAME-TRIGGERING（Vector，SLOT-ID 在触发内部的
     //      TIMINGS/ABSOLUTELY-SCHEDULED-TIMING 里）
-    //    同一帧在两个通道都出现 -> FrChannel::Both
+    //    同一帧在两个通道都出现时各留一条触发，两个通道的时隙可以不同
     // ------------------------------------------------------------------
-    let mut triggerings: std::collections::HashMap<String, FrameTriggering> =
-        std::collections::HashMap::new(); // FRAME-REF ID -> triggering
+    let mut triggerings: std::collections::HashMap<String, Vec<FrameTriggering>> =
+        std::collections::HashMap::new(); // FRAME-REF ID -> 每通道一条触发
 
     let mut channel_nodes = Vec::new();
     collect_elements_by_tag(&root, "CHANNEL", &mut channel_nodes);
@@ -410,21 +416,17 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
                 .map(|t| t.eq_ignore_ascii_case("true"))
                 .unwrap_or(false);
 
-            let trig = triggerings.entry(frame_ref).or_insert(FrameTriggering {
-                channel: ch,
-                slot_id,
-                base_cycle: base,
-                cycle_repetition: rep.max(1),
-                startup,
-            });
-            // 同一帧在另一个通道也出现 -> Both
-            if trig.channel != ch {
-                trig.channel = FrChannel::Both;
+            let list = triggerings.entry(frame_ref).or_default();
+            // 同一帧在同一通道上重复出现时以第一条为准
+            if !list.iter().any(|t| t.channel == ch) {
+                list.push(FrameTriggering {
+                    channel: ch,
+                    slot_id,
+                    base_cycle: base,
+                    cycle_repetition: rep.max(1),
+                    startup,
+                });
             }
-            trig.slot_id = slot_id;
-            trig.base_cycle = base;
-            trig.cycle_repetition = rep.max(1);
-            trig.startup = startup;
         }
     }
 
@@ -440,6 +442,34 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
     let mut ecus: Vec<String> = ecu_nodes.iter().map(|n| get_short_name(n)).collect();
     ecus.retain(|n| !n.is_empty() && n != "Unnamed");
 
+    // 关键时隙写在 ECU 的 CONTROLLER 里：Vector 把同步与冷启动合并成 STARTUP-SYNC，
+    // 分开写时用 SYNC-SLOT / STARTUP-SLOT；格子里的数字就是时隙号
+    let mut key_slots: Vec<(String, EcuKeySlot)> = Vec::new();
+    for ecu_node in &ecu_nodes {
+        let name = get_short_name(ecu_node);
+        if name.is_empty() || name == "Unnamed" {
+            continue;
+        }
+        let slot_of = |tags: &[&str]| {
+            find_text_candidates(ecu_node, tags)
+                .and_then(|t| parse_u32(&t))
+                .filter(|v| *v > 0)
+        };
+        let (slot_id, both) = match slot_of(&["STARTUP-SYNC"]) {
+            Some(v) => (Some(v), true),
+            None => (slot_of(&["SYNC-SLOT", "STARTUP-SLOT"]), false),
+        };
+        let Some(slot_id) = slot_id else { continue };
+        key_slots.push((
+            name,
+            EcuKeySlot {
+                slot_id,
+                used_for_sync: both || slot_of(&["SYNC-SLOT"]).is_some(),
+                used_for_startup: both || slot_of(&["STARTUP-SLOT"]).is_some(),
+            },
+        ));
+    }
+
     // ------------------------------------------------------------------
     // 6. 收集 Cluster 参数
     // ------------------------------------------------------------------
@@ -453,7 +483,8 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
     if let Some(cluster_node) = cluster_nodes.first() {
         cluster.name = get_short_name(cluster_node);
         let p = &mut cluster.params;
-        if let Some(v) = find_text_candidates(cluster_node, &["SPEED"]).and_then(|t| parse_u32(&t)) {
+        if let Some(v) = find_text_candidates(cluster_node, &["SPEED"]).and_then(|t| parse_u32(&t))
+        {
             // 单位不统一：Vector 按 bit/s 写 10000000，也有工具按 kbit/s 写 10000
             p.speed_kbps = if v >= 100_000 { v / 1000 } else { v };
         }
@@ -464,8 +495,8 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
         .and_then(|t| parse_f64(&t))
         {
             p.cycle_time_ms = v;
-        } else if let Some(v) = find_text_candidates(cluster_node, &["CYCLE"])
-            .and_then(|t| parse_f64(&t))
+        } else if let Some(v) =
+            find_text_candidates(cluster_node, &["CYCLE"]).and_then(|t| parse_f64(&t))
         {
             // flexray:CYCLE 以微秒计（如 5000 = 5ms）
             p.cycle_time_ms = v / 1000.0;
@@ -479,6 +510,10 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
             // MACROTICK-DURATION 通常为毫秒（如 0.005）；flexray:MACROTICK 本身为微秒（如 1.375）
             p.macrotick_duration_us = if v < 0.1 { v * 1000.0 } else { v };
         }
+        // gCycle 的宏节拍数：文件里没写就按周期与宏节拍换算
+        p.macro_per_cycle = find_text_candidates(cluster_node, &["MACRO-PER-CYCLE"])
+            .and_then(|t| parse_u32(&t))
+            .unwrap_or_else(|| cycle_macroticks(p.cycle_time_ms, p.macrotick_duration_us));
         if let Some(v) = find_text_candidates(
             cluster_node,
             &[
@@ -519,11 +554,8 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
         {
             p.dynamic_slot_idle_phase = v;
         }
-        if let Some(v) = find_text_candidates(
-            cluster_node,
-            &["MINOR-VERSION", "GD-MINOR-VERSION"],
-        )
-        .and_then(|t| parse_u32(&t))
+        if let Some(v) = find_text_candidates(cluster_node, &["MINOR-VERSION", "GD-MINOR-VERSION"])
+            .and_then(|t| parse_u32(&t))
         {
             p.minor_version = v;
         }
@@ -567,11 +599,8 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
         {
             p.static_slot_duration = v;
         }
-        if let Some(v) = find_text_candidates(
-            cluster_node,
-            &["SYMBOL-WINDOW", "GD-SYMBOL-WINDOW"],
-        )
-        .and_then(|t| parse_u32(&t))
+        if let Some(v) = find_text_candidates(cluster_node, &["SYMBOL-WINDOW", "GD-SYMBOL-WINDOW"])
+            .and_then(|t| parse_u32(&t))
         {
             p.symbol_window = v;
         }
@@ -649,7 +678,9 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
                 coding.map(|c| c.max).unwrap_or(0.0),
                 coding.map(|c| c.unit.clone()).unwrap_or_default(),
                 Vec::new(),
-                coding.map(|c| c.value_descriptions.clone()).unwrap_or_default(),
+                coding
+                    .map(|c| c.value_descriptions.clone())
+                    .unwrap_or_default(),
                 sig_comment.clone(),
             ));
         }
@@ -677,12 +708,12 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
             };
             pdus_in_frame.push(FramePduMapping::new(&pdu_raw.name, *start));
         }
-        let triggering = triggerings.get(frame_id).copied().unwrap_or_default();
+        let triggerings = triggerings.get(frame_id).cloned().unwrap_or_default();
         frames.push(EditableFrame::build(
             raw.name.clone(),
             raw.length,
             raw.payload_preamble,
-            triggering,
+            triggerings,
             pdus_in_frame,
             raw.comment.clone(),
         ));
@@ -692,7 +723,11 @@ pub fn parse_fibex_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
     dedup_names(&mut pdus, |p| &p.name);
     dedup_names(&mut frames, |f| &f.name);
 
-    Ok(EditableFibex::from_imported(cluster, ecus, pdus, frames))
+    let mut fibex = EditableFibex::from_imported(cluster, ecus, pdus, frames);
+    for (ecu, slot) in key_slots {
+        fibex.import_ecu_key_slot(&ecu, slot);
+    }
+    Ok(fibex)
 }
 
 fn dedup_names<T, F: Fn(&T) -> &str>(items: &mut Vec<T>, name_of: F) {
@@ -999,11 +1034,19 @@ mod tests {
         // ECU：取 fx:ECU 的 SHORT-NAME（而非内层 CONTROLLER 名）
         assert_eq!(fibex.ecus(), &vec!["ESP".to_string(), "Engine".to_string()]);
 
-        // 触发：无 SLOT 包装层，SLOT-ID 在 TIMINGS 内；双通道 -> Both
+        // 触发：无 SLOT 包装层，SLOT-ID 在 TIMINGS 内；两通道各一条触发
         let frame1 = fibex.get_frame("CrankTorqueInfo").unwrap();
-        assert_eq!(frame1.triggering().slot_id, 13);
-        assert_eq!(frame1.triggering().channel, FrChannel::Both);
-        assert_eq!(frame1.triggering().cycle_repetition, 2);
+        assert_eq!(frame1.triggerings().len(), 2, "A 与 B 各一条");
+        assert_eq!(frame1.channel_label(), "A+B");
+        for ch in [FrChannel::A, FrChannel::B] {
+            let t = frame1.channel_triggering(ch).unwrap();
+            assert_eq!(
+                (t.slot_id, t.cycle_repetition),
+                (13, 2),
+                "通道 {}",
+                ch.label()
+            );
+        }
         assert_eq!(frame1.length(), 6);
 
         // PDU-INSTANCE/BIT-POSITION（位计）挂帧：32 bit -> 字节 4
@@ -1039,8 +1082,9 @@ mod tests {
 
         // 信号直挂帧（无 PDU 层）：合成同名 PDU，起始位来自 BIT-POSITION
         let frame2 = fibex.get_frame("BrakeInfo").unwrap();
-        assert_eq!(frame2.triggering().channel, FrChannel::A);
-        assert_eq!(frame2.triggering().slot_id, 14);
+        let brake = frame2.channel_triggering(FrChannel::A).unwrap();
+        assert_eq!((brake.channel, brake.slot_id), (FrChannel::A, 14));
+        assert!(frame2.channel_triggering(FrChannel::B).is_none());
         assert_eq!(frame2.pdus().len(), 1);
         assert_eq!(frame2.pdus()[0].pdu_name, "BrakeInfo");
         assert_eq!(frame2.pdus()[0].start_position, 0);

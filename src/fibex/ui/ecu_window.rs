@@ -34,12 +34,23 @@ impl EcuWindow {
         let mut to_rename: Option<(String, String)> = None;
 
         ui.table("ecu_table")
-            .flags(TableFlags::RESIZABLE | TableFlags::BORDERS | TableFlags::SCROLL_X | TableFlags::SCROLL_Y | TableFlags::ROW_BG)
+            .flags(
+                TableFlags::RESIZABLE
+                    | TableFlags::BORDERS
+                    | TableFlags::SCROLL_X
+                    | TableFlags::SCROLL_Y
+                    | TableFlags::ROW_BG,
+            )
             .sizing_policy(TableSizingPolicy::FixedFit)
             .freeze(0, 1)
             .outer_size([0.0, avail[1].max(120.0)])
-            .column("ECU Name").weight(1.0).done()
-            .column("Actions").done()
+            .column("ECU Name")
+            .weight(1.0)
+            .done()
+            .column("Key Slot")
+            .done()
+            .column("Actions")
+            .done()
             .headers(true)
             .build(|ui| {
                 for ecu_name in &ecus {
@@ -48,12 +59,31 @@ impl EcuWindow {
                     ui.table_set_column_index(0);
                     if self.rename_target.as_deref() == Some(ecu_name.as_str()) {
                         ui.set_next_item_width(-70.0);
-                        ui.input_text("##rename_input", &mut self.rename_buffer).build();
+                        ui.input_text("##rename_input", &mut self.rename_buffer)
+                            .build();
                     } else {
                         ui.text(ecu_name);
                     }
 
                     ui.table_set_column_index(1);
+                    match fibex.ecu_key_slot(ecu_name) {
+                        Some(slot) => {
+                            let uses = match (slot.used_for_sync, slot.used_for_startup) {
+                                (true, true) => "sync + startup",
+                                (true, false) => "sync",
+                                (false, true) => "startup",
+                                (false, false) => "",
+                            };
+                            if uses.is_empty() {
+                                ui.text(format!("{}", slot.slot_id));
+                            } else {
+                                ui.text(format!("{} ({})", slot.slot_id, uses));
+                            }
+                        }
+                        None => ui.text_disabled("-"),
+                    }
+
+                    ui.table_set_column_index(2);
                     if self.rename_target.as_deref() == Some(ecu_name.as_str()) {
                         if ui.small_button(format!("OK##{}", ecu_name)) {
                             let new_name = self.rename_buffer.trim().to_string();

@@ -1,11 +1,12 @@
 //! AUTOSAR ARXML (R4.x 风格) FlexRay 数据库解析
 //!
 //! 宽容解析：支持 FLEXRAY-CLUSTER / FLEXRAY-PHYSICAL-CHANNEL / FLEXRAY-FRAME-TRIGGERING /
-//! FLEXRAY-FRAME / I-SIGNAL-I-PDU(或 FLEXRAY-I-PDU) / I-SIGNAL / ECU-INSTANCE。
+//! FLEXRAY-FRAME / I-SIGNAL-I-PDU(或 FLEXRAY-I-PDU、N-PDU) / I-SIGNAL / COMPU-METHOD /
+//! PDU-TRIGGERING / I-SIGNAL-TRIGGERING / ECU-INSTANCE。
 
 use super::{
-    collect_elements_by_tag, find_text_candidates, get_short_name, parse_cycle_repetition,
-    parse_f64, parse_u32, ref_short_name,
+    collect_elements_by_tag, cycle_macroticks, find_shallowest_text, find_text_candidates,
+    get_short_name, parse_cycle_repetition, parse_f64, parse_u32, ref_short_name,
 };
 use crate::fibex::editable_fibex::*;
 
@@ -35,12 +36,18 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
             .unwrap_or(1);
         let signed = find_text_candidates(
             sig,
-            &["SIGN-CONVENTION", "I-SIGNAL-TYPE", "NETWORK-REPRESENTATION-PROPS"],
+            &[
+                "SIGN-CONVENTION",
+                "I-SIGNAL-TYPE",
+                "NETWORK-REPRESENTATION-PROPS",
+            ],
         )
         .map(|t| {
             let u = t.to_uppercase();
             // 注意 "UNSIGNED" 也包含 "SIGNED"，需排除
-            u.contains("TWOS") || u.contains("SYMMETRIC") || (u.contains("SIGNED") && !u.starts_with("UN"))
+            u.contains("TWOS")
+                || u.contains("SYMMETRIC")
+                || (u.contains("SIGNED") && !u.starts_with("UN"))
         })
         .unwrap_or(false);
         let comment = find_text_candidates(sig, &["L-2", "DESC"]).unwrap_or_default();
@@ -55,11 +62,23 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
     }
 
     // ------------------------------------------------------------------
-    // 2. PDU 定义（I-SIGNAL-I-PDU / FLEXRAY-I-PDU）
+    // 2. PDU 定义（I-SIGNAL-I-PDU / FLEXRAY-I-PDU / N-PDU / NM-PDU）
+    //
+    // N-PDU 是 FlexRay 传输层（TP）用的普通 PDU，NM-PDU 是网络管理 PDU，
+    // 两者都没有信号映射、只有长度，却会被帧引用；早先只认 I-SIGNAL-I-PDU
+    // 会让这些引用悬空（帧里列着 PDU，PDU 列表却找不到它）。
     // ------------------------------------------------------------------
-    let mut pdu_nodes = Vec::new();
-    for tag in ["I-SIGNAL-I-PDU", "FLEXRAY-I-PDU"] {
-        collect_elements_by_tag(&root, tag, &mut pdu_nodes);
+    let mut pdu_nodes: Vec<(&'static str, roxmltree::Node)> = Vec::new();
+    for tag in [
+        "I-SIGNAL-I-PDU",
+        "FLEXRAY-I-PDU",
+        "N-PDU",
+        "NM-PDU",
+        "N-FUNCTIOND-PDU",
+    ] {
+        let mut found = Vec::new();
+        collect_elements_by_tag(&root, tag, &mut found);
+        pdu_nodes.extend(found.into_iter().map(|n| (tag, n)));
     }
 
     struct PduMappingRaw {
@@ -78,22 +97,27 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
     }
 
     let mut pdu_raws: Vec<(String, PduRaw)> = Vec::new(); // (PDU short name, raw)
-    for pdu in &pdu_nodes {
+    for (pdu_tag, pdu) in &pdu_nodes {
         let name = get_short_name(pdu);
         let length = find_text_candidates(pdu, &["LENGTH"])
             .and_then(|t| parse_u32(&t))
             .unwrap_or(4);
         let comment = find_text_candidates(pdu, &["L-2", "DESC"]).unwrap_or_default();
 
-        // PDU 类型：FLEXRAY-I-PDU 里的 PDU-TYPE 或 I-PDU-TYPE
-        let kind = match find_text_candidates(pdu, &["PDU-TYPE", "I-PDU-TYPE"])
+        // PDU 类型：显式 PDU-TYPE 优先，其次按元素类型
+        let pdu_type = find_text_candidates(pdu, &["PDU-TYPE", "I-PDU-TYPE"])
             .unwrap_or_default()
-            .to_uppercase()
-            .as_str()
-        {
-            t if t.contains("DYNAMIC") => PduKind::Dynamic,
-            t if t.contains("EVENT") || t.contains("GENERAL-PURPOSE") => PduKind::Event,
-            _ => PduKind::Static,
+            .to_uppercase();
+        let kind = if pdu_type.contains("DYNAMIC") || pdu_type.contains("N-PDU") {
+            PduKind::Dynamic
+        } else if pdu_type.contains("EVENT") || pdu_type.contains("GENERAL-PURPOSE") {
+            PduKind::Event
+        } else if matches!(*pdu_tag, "N-PDU" | "N-FUNCTIOND-PDU") {
+            // TP / 功能 PDU 占用动态段
+            PduKind::Dynamic
+        } else {
+            // NM-PDU 等仍落在静态段
+            PduKind::Static
         };
 
         let mut mappings = Vec::new();
@@ -113,12 +137,14 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
             let length_bits = find_text_candidates(m, &["LENGTH"])
                 .and_then(|t| parse_u32(&t))
                 .unwrap_or(1);
-            let big_endian = matches!(
-                find_text_candidates(m, &["PACKING-BYTE-ORDER"])
-                    .unwrap_or_default()
-                    .to_uppercase(),
-                t if t.contains("MOST-SIGNIFICANT-BYTE-FIRST") || t.contains("BIG-ENDIAN")
-            );
+            let big_endian = match find_text_candidates(m, &["PACKING-BYTE-ORDER"]) {
+                Some(t) => {
+                    let u = t.to_uppercase();
+                    u.contains("MOST-SIGNIFICANT-BYTE-FIRST") || u.contains("BIG-ENDIAN")
+                }
+                // FlexRay PDU 负载按 MSB-first 约定排列，缺省与 FIBEX 侧保持一致
+                None => true,
+            };
             mappings.push(PduMappingRaw {
                 signal_name,
                 start_bit,
@@ -145,6 +171,9 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
     struct CompuMethod {
         factor: f64,
         offset: f64,
+        min: Option<f64>,
+        max: Option<f64>,
+        unit: String,
         value_descriptions: Vec<(i64, String)>,
     }
 
@@ -157,6 +186,13 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
         let mut method = CompuMethod {
             factor: 1.0,
             offset: 0.0,
+            min: None,
+            max: None,
+            unit: find_text_candidates(
+                cm,
+                &["DISPLAY-NAME", "UNIT-DISPLAY-NAME", "UNIT", "UNIT-REF"],
+            )
+            .unwrap_or_default(),
             value_descriptions: Vec::new(),
         };
 
@@ -182,11 +218,22 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
 
             // 枚举值表：LOWER/UPPER 限定的 COMPU-CONST 文本
             if let Some(vt) = find_text_candidates(scale, &["COMPU-CONST", "VT"]) {
-                let lower = find_text_candidates(scale, &["LOWER-LIMIT"])
-                    .and_then(|t| parse_u32(&t));
+                let lower =
+                    find_text_candidates(scale, &["LOWER-LIMIT"]).and_then(|t| parse_u32(&t));
                 if let Some(lower) = lower {
                     method.value_descriptions.push((lower as i64, vt));
                 }
+                continue;
+            }
+
+            // 线性量程：无 COMPU-CONST 的刻度对给出物理上下限
+            if method.min.is_none() {
+                method.min = find_text_candidates(scale, &["LOWER-LIMIT"])
+                    .as_deref()
+                    .and_then(parse_f64);
+                method.max = find_text_candidates(scale, &["UPPER-LIMIT"])
+                    .as_deref()
+                    .and_then(parse_f64);
             }
         }
 
@@ -304,9 +351,10 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
         let length = find_text_candidates(frame, &["FRAME-LENGTH"])
             .and_then(|t| parse_u32(&t))
             .unwrap_or(8);
-        let payload_preamble = find_text_candidates(frame, &["PAYLOAD-PREAMBLE", "PADDING-ACTIVATION"])
-            .map(|t| t.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
+        let payload_preamble =
+            find_text_candidates(frame, &["PAYLOAD-PREAMBLE", "PADDING-ACTIVATION"])
+                .map(|t| t.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
         let comment = find_text_candidates(frame, &["L-2", "DESC"]).unwrap_or_default();
 
         let mut pdu_mappings = Vec::new();
@@ -318,9 +366,13 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
             let Some(pdu_ref) = find_text_candidates(m, &["PDU-REF"]) else {
                 continue;
             };
-            let start = find_text_candidates(m, &["START-POSITION", "START-BIT-POSITION"])
-                .and_then(|t| parse_u32(&t))
-                .unwrap_or(0);
+            // START-POSITION / BIT-POSITION 均以位计（FlexRay PDU 字节对齐），
+            // 模型里的 start_position 是字节号，故除以 8
+            let start =
+                find_text_candidates(m, &["START-POSITION", "START-BIT-POSITION", "BIT-POSITION"])
+                    .and_then(|t| parse_u32(&t))
+                    .unwrap_or(0)
+                    / 8;
             pdu_mappings.push((ref_short_name(&pdu_ref).to_string(), start));
         }
 
@@ -342,8 +394,11 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
     let mut channel_nodes = Vec::new();
     collect_elements_by_tag(&root, "FLEXRAY-PHYSICAL-CHANNEL", &mut channel_nodes);
 
-    // (frame short name -> triggering)
-    let mut triggerings: std::collections::HashMap<String, FrameTriggering> =
+    // (frame short name -> 每通道一条触发)
+    let mut triggerings: std::collections::HashMap<String, Vec<FrameTriggering>> =
+        std::collections::HashMap::new();
+    // payload preamble 标志在部分方言里挂在 triggering 上而非帧上
+    let mut preamble_by_frame: std::collections::HashMap<String, bool> =
         std::collections::HashMap::new();
     for (ch_idx, channel) in channel_nodes.iter().enumerate() {
         let ch_name = get_short_name(channel).to_uppercase();
@@ -373,21 +428,22 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
                 .map(|t| t.eq_ignore_ascii_case("true"))
                 .unwrap_or(false);
 
-            let trig = triggerings.entry(frame_name).or_insert(FrameTriggering {
-                channel: ch,
-                slot_id,
-                base_cycle,
-                cycle_repetition: cycle_repetition.max(1),
-                startup,
-            });
-            // 同一帧在两个通道都出现 -> Both
-            if trig.channel != ch {
-                trig.channel = FrChannel::Both;
+            if let Some(t) = find_text_candidates(ft, &["PAYLOAD-PREAMBLE-INDICATOR"]) {
+                *preamble_by_frame.entry(frame_name.clone()).or_default() |=
+                    t.eq_ignore_ascii_case("true") || t == "1";
             }
-            trig.slot_id = slot_id;
-            trig.base_cycle = base_cycle;
-            trig.cycle_repetition = cycle_repetition.max(1);
-            trig.startup = startup;
+
+            let list = triggerings.entry(frame_name).or_default();
+            // 同一帧在同一通道上重复出现时以第一条为准
+            if !list.iter().any(|t| t.channel == ch) {
+                list.push(FrameTriggering {
+                    channel: ch,
+                    slot_id,
+                    base_cycle,
+                    cycle_repetition: cycle_repetition.max(1),
+                    startup,
+                });
+            }
         }
     }
 
@@ -405,59 +461,111 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
         cluster.name = get_short_name(cluster_node);
         let p = &mut cluster.params;
         let get_u32 = |tags: &[&str]| -> Option<u32> {
-            find_text_candidates(cluster_node, tags).and_then(|t| parse_u32(&t))
+            find_shallowest_text(cluster_node, tags).and_then(|t| parse_u32(&t))
         };
         let get_f64 = |tags: &[&str]| -> Option<f64> {
-            find_text_candidates(cluster_node, tags).and_then(|t| parse_f64(&t))
+            find_shallowest_text(cluster_node, tags).and_then(|t| parse_f64(&t))
         };
 
-        if let Some(v) = get_u32(&["FLEXRAY-COLDSTART-ATTEMPTS", "GD-COLDSTART-ATTEMPTS"]) {
+        // AUTOSAR 的时间量以秒计（如 MACROTICK-DURATION 1.375E-06），模型存 µs / ms；
+        // 标签名同时接受 Vector FIBEX 风格的 FLEXRAY-GD-* / G-* 前缀与无前缀写法。
+        if let Some(v) = get_u32(&[
+            "COLD-START-ATTEMPTS",
+            "FLEXRAY-COLDSTART-ATTEMPTS",
+            "GD-COLDSTART-ATTEMPTS",
+        ]) {
             p.coldstart_attempts = v;
         }
-        let macrotick = get_f64(&["FLEXRAY-GD-MACROTICK-DURATION", "GD-MACROTICK-DURATION"]);
-        let cycle_mt = get_u32(&["FLEXRAY-CYCLE", "GD-CYCLE"]);
-        if let Some(mt) = macrotick {
-            p.macrotick_duration_us = mt;
+        if let Some(mt) = get_f64(&[
+            "MACROTICK-DURATION",
+            "FLEXRAY-GD-MACROTICK-DURATION",
+            "GD-MACROTICK-DURATION",
+        ]) {
+            p.macrotick_duration_us = normalize_us(mt);
         }
-        if let Some(mt) = cycle_mt {
+        // 周期：CYCLE 可能是秒、毫秒或宏节拍数，按量级归一
+        if let Some(cycle) = get_f64(&["CYCLE"]) {
+            p.cycle_time_ms = normalize_ms(cycle, p.macrotick_duration_us);
+        } else if let Some(macros) = get_u32(&["MACRO-PER-CYCLE"]) {
+            p.cycle_time_ms = macros as f64 * p.macrotick_duration_us / 1000.0;
+        } else if let Some(mt) = get_u32(&["FLEXRAY-CYCLE", "GD-CYCLE"]) {
             p.cycle_time_ms = mt as f64 * p.macrotick_duration_us / 1000.0;
-        } else if let Some(ms) = get_f64(&["FLEXRAY-CYCLE-TIME-MS"]) {
-            p.cycle_time_ms = ms;
         }
-        if let Some(v) = get_u32(&["FLEXRAY-GD-ACTION-POINT-OFFSET"]) {
+        // gCycle 的宏节拍数：文件里没写就按周期与宏节拍换算，保证界面两行数值一致
+        p.macro_per_cycle = get_u32(&[
+            "MACRO-PER-CYCLE",
+            "FLEXRAY-CYCLE",
+            "FLEXRAY-GD-CYCLE",
+            "GD-CYCLE",
+        ])
+        .unwrap_or_else(|| cycle_macroticks(p.cycle_time_ms, p.macrotick_duration_us));
+        if let Some(v) = get_u32(&["SPEED", "FLEXRAY-SPEED"]) {
+            p.speed_kbps = v;
+        }
+        if let Some(bit_seconds) = get_f64(&["BIT"])
+            && (1e-9..1e-3).contains(&bit_seconds)
+        {
+            p.speed_kbps = (1.0 / bit_seconds / 1000.0).round() as u32;
+        }
+        if let Some(v) = get_u32(&["ACTION-POINT-OFFSET", "FLEXRAY-GD-ACTION-POINT-OFFSET"]) {
             p.action_point_offset = v;
         }
-        if let Some(v) = get_u32(&["FLEXRAY-GD-MINISLOT-ACTION-POINT-OFFSET"]) {
+        if let Some(v) = get_u32(&[
+            "MINISLOT-ACTION-POINT-OFFSET",
+            "FLEXRAY-GD-MINISLOT-ACTION-POINT-OFFSET",
+        ]) {
             p.minislot_action_point_offset = v;
         }
-        if let Some(v) = get_u32(&["FLEXRAY-GD-DYNAMIC-SLOT-IDLE-PHASE"]) {
+        if let Some(v) = get_u32(&[
+            "DYNAMIC-SLOT-IDLE-PHASE",
+            "FLEXRAY-GD-DYNAMIC-SLOT-IDLE-PHASE",
+        ]) {
             p.dynamic_slot_idle_phase = v;
         }
-        if let Some(v) = get_u32(&["FLEXRAY-GD-MINOR-VERSION"]) {
+        if let Some(v) = get_u32(&["MINOR-VERSION", "FLEXRAY-GD-MINOR-VERSION"]) {
             p.minor_version = v;
         }
-        if let Some(v) = get_u32(&["FLEXRAY-GD-NIT", "FLEXRAY-NETWORK-IDLE-TIME"]) {
+        if let Some(v) = get_u32(&[
+            "NETWORK-IDLE-TIME",
+            "FLEXRAY-GD-NIT",
+            "FLEXRAY-NETWORK-IDLE-TIME",
+        ]) {
             p.network_idle_time = v;
         }
-        if let Some(v) = get_u32(&["FLEXRAY-G-NUMBER-OF-MINISLOTS", "G-NUMBER-OF-MINISLOTS"]) {
+        if let Some(v) = get_u32(&[
+            "NUMBER-OF-MINISLOTS",
+            "FLEXRAY-G-NUMBER-OF-MINISLOTS",
+            "G-NUMBER-OF-MINISLOTS",
+        ]) {
             p.number_of_minislots = v;
         }
-        if let Some(v) = get_u32(&["FLEXRAY-G-NUMBER-OF-STATIC-SLOTS", "G-NUMBER-OF-STATIC-SLOTS"]) {
+        if let Some(v) = get_u32(&[
+            "NUMBER-OF-STATIC-SLOTS",
+            "FLEXRAY-G-NUMBER-OF-STATIC-SLOTS",
+            "G-NUMBER-OF-STATIC-SLOTS",
+        ]) {
             p.number_of_static_slots = v;
         }
-        if let Some(v) = get_u32(&["FLEXRAY-GD-MINISLOT"]) {
+        if let Some(v) = get_u32(&["MINISLOT-DURATION", "FLEXRAY-GD-MINISLOT"]) {
             p.minislot_duration = v;
         }
-        if let Some(v) = get_u32(&["FLEXRAY-GD-STATIC-SLOT"]) {
+        if let Some(v) = get_u32(&["STATIC-SLOT-DURATION", "FLEXRAY-GD-STATIC-SLOT"]) {
             p.static_slot_duration = v;
         }
-        if let Some(v) = get_u32(&["FLEXRAY-GD-SYMBOL-WINDOW"]) {
+        if let Some(v) = get_u32(&["SYMBOL-WINDOW", "FLEXRAY-GD-SYMBOL-WINDOW"]) {
             p.symbol_window = v;
         }
-        if let Some(v) = get_u32(&["FLEXRAY-GD-SYMBOL-WINDOW-IDLE-PHASE"]) {
+        if let Some(v) = get_u32(&[
+            "SYMBOL-WINDOW-IDLE-PHASE",
+            "FLEXRAY-GD-SYMBOL-WINDOW-IDLE-PHASE",
+        ]) {
             p.symbol_window_idle_phase = v;
         }
-        if let Some(v) = get_u32(&["FLEXRAY-OFFSET-CORRECTION-START", "G-OFFSET-CORRECTION-START"]) {
+        if let Some(v) = get_u32(&[
+            "OFFSET-CORRECTION-START",
+            "FLEXRAY-OFFSET-CORRECTION-START",
+            "G-OFFSET-CORRECTION-START",
+        ]) {
             p.offset_correction_start = v;
         }
     }
@@ -469,6 +577,31 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
     collect_elements_by_tag(&root, "ECU-INSTANCE", &mut ecu_nodes);
     let mut ecus: Vec<String> = ecu_nodes.iter().map(|n| get_short_name(n)).collect();
     ecus.retain(|n| !n.is_empty() && n != "Unnamed");
+
+    // 关键时隙写在 ECU 的 FlexRay 控制器里（FLEXRAY-COMMUNICATION-CONTROLLER-CONDITIONAL）
+    let mut key_slots: Vec<(String, EcuKeySlot)> = Vec::new();
+    for ecu_node in &ecu_nodes {
+        let name = get_short_name(ecu_node);
+        if name.is_empty() || name == "Unnamed" {
+            continue;
+        }
+        let Some(slot_id) =
+            find_shallowest_text(ecu_node, &["KEY-SLOT-ID"]).and_then(|t| parse_u32(&t))
+        else {
+            continue;
+        };
+        let flag = |tags: &[&str]| {
+            find_shallowest_text(ecu_node, tags).is_some_and(|t| t.eq_ignore_ascii_case("true"))
+        };
+        key_slots.push((
+            name,
+            EcuKeySlot {
+                slot_id,
+                used_for_sync: flag(&["KEY-SLOT-USED-FOR-SYNC"]),
+                used_for_startup: flag(&["KEY-SLOT-USED-FOR-START-UP"]),
+            },
+        ));
+    }
 
     // ------------------------------------------------------------------
     // 7. 组装
@@ -512,9 +645,9 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
                 },
                 factor,
                 offset,
-                0.0,
-                0.0,
-                String::new(),
+                compu.and_then(|c| c.min).unwrap_or(0.0),
+                compu.and_then(|c| c.max).unwrap_or(0.0),
+                compu.map(|c| c.unit.clone()).unwrap_or_default(),
                 sig_rx.get(signal_name).cloned().unwrap_or_default(),
                 value_descriptions,
                 def.map(|d| d.comment.clone()).unwrap_or_default(),
@@ -543,12 +676,14 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
         for (pdu_name, start) in &raw.pdu_mappings {
             pdus_in_frame.push(FramePduMapping::new(pdu_name, *start));
         }
-        let triggering = triggerings.get(name).copied().unwrap_or_default();
+        let triggerings = triggerings.get(name).cloned().unwrap_or_default();
+        let payload_preamble =
+            raw.payload_preamble || preamble_by_frame.get(name).copied().unwrap_or(false);
         frames.push(EditableFrame::build(
             raw.name.clone(),
             raw.length,
-            raw.payload_preamble,
-            triggering,
+            payload_preamble,
+            triggerings,
             pdus_in_frame,
             raw.comment.clone(),
         ));
@@ -558,7 +693,11 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
     dedup_names(&mut pdus, |p| &p.name);
     dedup_names(&mut frames, |f| &f.name);
 
-    Ok(EditableFibex::from_imported(cluster, ecus, pdus, frames))
+    let mut fibex = EditableFibex::from_imported(cluster, ecus, pdus, frames);
+    for (ecu, slot) in key_slots {
+        fibex.import_ecu_key_slot(&ecu, slot);
+    }
+    Ok(fibex)
 }
 
 fn dedup_names<T, F: Fn(&T) -> &str>(items: &mut Vec<T>, name_of: F) {
@@ -573,4 +712,27 @@ fn dedup_names<T, F: Fn(&T) -> &str>(items: &mut Vec<T>, name_of: F) {
             true
         }
     });
+}
+
+/// 工具导出的 ARXML 里时间量单位不统一（秒 / 毫秒 / 微秒都出现过），按量级归一到 µs。
+/// FlexRay 的宏节拍在 1..6 µs，故 <1e-3 视为秒、<1 视为毫秒。
+fn normalize_us(v: f64) -> f64 {
+    if v < 1e-3 {
+        v * 1_000_000.0
+    } else if v < 1.0 {
+        v * 1_000.0
+    } else {
+        v
+    }
+}
+
+/// 同上归一到 ms；FlexRay 周期不超过 25 ms，故大于 100 的量按宏节拍数换算
+fn normalize_ms(v: f64, macrotick_us: f64) -> f64 {
+    if v < 0.2 {
+        v * 1_000.0
+    } else if v < 100.0 || macrotick_us <= 0.0 {
+        v
+    } else {
+        v * macrotick_us / 1_000.0
+    }
 }

@@ -25,13 +25,12 @@ pub struct ValidationIssue {
     pub message: String,
 }
 
-/// FlexRay 通道。A / B / 双通道同时发送
+/// FlexRay 通道。一帧在两个通道上各有一条触发，所以这里只有单通道。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FrChannel {
     #[default]
     A,
     B,
-    Both,
 }
 
 impl FrChannel {
@@ -39,13 +38,7 @@ impl FrChannel {
         match self {
             FrChannel::A => "A",
             FrChannel::B => "B",
-            FrChannel::Both => "A+B",
         }
-    }
-
-    /// 该通道选择是否覆盖通道 `ch`
-    pub fn covers(self, ch: FrChannel) -> bool {
-        self == FrChannel::Both || self == ch
     }
 }
 
@@ -179,7 +172,9 @@ pub struct EditableFrame {
     /// 字节长度 0..=254
     length: u32,
     payload_preamble: bool,
-    triggering: FrameTriggering,
+    /// 每通道一条触发（channel 只会是 A 或 B）。帧在两个通道上各有一个时隙，
+    /// 所以这里可以有两项；只在一个通道上发送时只有一项。
+    triggerings: Vec<FrameTriggering>,
     pdus: Vec<FramePduMapping>,
     comment: String,
 }
@@ -220,6 +215,8 @@ pub struct ClusterParams {
     pub symbol_window_idle_phase: u32,
     /// gOffsetCorrectionStart
     pub offset_correction_start: u32,
+    /// gCycle 的宏节拍数：一个通信周期包含多少个宏节拍（MACRO-PER-CYCLE）
+    pub macro_per_cycle: u32,
 }
 
 impl Default for ClusterParams {
@@ -242,8 +239,22 @@ impl Default for ClusterParams {
             symbol_window: 1,
             symbol_window_idle_phase: 1,
             offset_correction_start: 233,
+            macro_per_cycle: 1000,
         }
     }
+}
+
+/// 某个 ECU 的 FlexRay 控制器在静态段里使用的关键时隙（key slot）。
+/// 关键时隙是允许被用作同步/冷启动接收时隙的那几个静态时隙。
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct EcuKeySlot {
+    /// 关键时隙号（1..=gNumberOfStaticSlots）
+    pub slot_id: u32,
+    /// gKeySlotUsedForSync：用于同步
+    pub used_for_sync: bool,
+    /// gKeySlotUsedForStartup：用于冷启动
+    pub used_for_startup: bool,
 }
 
 #[allow(dead_code)]
@@ -258,6 +269,8 @@ pub struct EditableCluster {
 pub struct EditableFibex {
     cluster: EditableCluster,
     ecus: Vec<String>,
+    /// ECU 名 -> 该 ECU 控制器的关键时隙；只登记配置了关键时隙的 ECU
+    ecu_key_slots: Vec<(String, EcuKeySlot)>,
     pdus: Vec<EditablePdu>,
     frames: Vec<EditableFrame>,
     history: Vec<Operation>,
@@ -423,8 +436,11 @@ pub enum Operation {
     },
     SetFrameTriggering {
         frame_name: String,
-        old_triggering: FrameTriggering,
-        new_triggering: FrameTriggering,
+        channel: FrChannel,
+        /// None 表示改动前该通道不发送这帧
+        old_triggering: Option<FrameTriggering>,
+        /// None 表示改动后该通道不再发送这帧
+        new_triggering: Option<FrameTriggering>,
     },
     AddFramePdu {
         frame_name: String,
@@ -483,6 +499,7 @@ impl EditableFibex {
                 params: ClusterParams::default(),
             },
             ecus: Vec::new(),
+            ecu_key_slots: Vec::new(),
             pdus: Vec::new(),
             frames: Vec::new(),
             history: Vec::new(),
@@ -501,6 +518,7 @@ impl EditableFibex {
         Self {
             cluster,
             ecus,
+            ecu_key_slots: Vec::new(),
             pdus,
             frames,
             history: Vec::new(),
@@ -516,6 +534,27 @@ impl EditableFibex {
 
     pub fn ecus(&self) -> &Vec<String> {
         &self.ecus
+    }
+
+    /// 配置了关键时隙的 ECU 列表（按登记顺序）
+    pub fn ecu_key_slots(&self) -> &[(String, EcuKeySlot)] {
+        &self.ecu_key_slots
+    }
+
+    /// 该 ECU 控制器配置的关键时隙；未配置时返回 None
+    pub fn ecu_key_slot(&self, ecu: &str) -> Option<EcuKeySlot> {
+        self.ecu_key_slots
+            .iter()
+            .find(|(n, _)| n == ecu)
+            .map(|(_, slot)| *slot)
+    }
+
+    /// 导入时登记关键时隙。界面里不提供编辑，因此不进撤销历史。
+    pub fn import_ecu_key_slot(&mut self, ecu: &str, slot: EcuKeySlot) {
+        match self.ecu_key_slots.iter_mut().find(|(n, _)| n == ecu) {
+            Some(entry) => entry.1 = slot,
+            None => self.ecu_key_slots.push((ecu.to_string(), slot)),
+        }
     }
 
     pub fn pdus(&self) -> &Vec<EditablePdu> {
@@ -614,7 +653,10 @@ impl EditableFibex {
                 self.pdus.retain(|p| p.name != pdu.name);
                 Ok(())
             }
-            Operation::DeletePdu { pdu, frame_mappings } => {
+            Operation::DeletePdu {
+                pdu,
+                frame_mappings,
+            } => {
                 self.pdus.push(pdu.clone());
                 // 恢复各帧中被一并移除的映射
                 for (frame_name, mapping) in frame_mappings {
@@ -859,21 +901,28 @@ impl EditableFibex {
             }
             Operation::SetFrameTriggering {
                 frame_name,
+                channel,
                 old_triggering,
                 new_triggering: _,
             } => {
                 if let Some(frame) = self.get_frame_mut(frame_name) {
-                    frame.triggering = *old_triggering;
+                    frame.set_channel_triggering(*channel, *old_triggering);
                 }
                 Ok(())
             }
-            Operation::AddFramePdu { frame_name, mapping } => {
+            Operation::AddFramePdu {
+                frame_name,
+                mapping,
+            } => {
                 if let Some(frame) = self.get_frame_mut(frame_name) {
                     frame.pdus.retain(|m| m.pdu_name != mapping.pdu_name);
                 }
                 Ok(())
             }
-            Operation::DeleteFramePdu { frame_name, mapping } => {
+            Operation::DeleteFramePdu {
+                frame_name,
+                mapping,
+            } => {
                 if let Some(frame) = self.get_frame_mut(frame_name) {
                     frame.pdus.push(mapping.clone());
                 }
@@ -919,7 +968,10 @@ impl EditableFibex {
                 self.pdus.push(pdu.clone());
                 Ok(())
             }
-            Operation::DeletePdu { pdu, frame_mappings } => {
+            Operation::DeletePdu {
+                pdu,
+                frame_mappings,
+            } => {
                 self.pdus.retain(|p| p.name != pdu.name);
                 for (frame_name, mapping) in frame_mappings {
                     if let Some(frame) = self.frames.iter_mut().find(|f| f.name == *frame_name) {
@@ -1160,21 +1212,28 @@ impl EditableFibex {
             }
             Operation::SetFrameTriggering {
                 frame_name,
+                channel,
                 old_triggering: _,
                 new_triggering,
             } => {
                 if let Some(frame) = self.get_frame_mut(frame_name) {
-                    frame.triggering = *new_triggering;
+                    frame.set_channel_triggering(*channel, *new_triggering);
                 }
                 Ok(())
             }
-            Operation::AddFramePdu { frame_name, mapping } => {
+            Operation::AddFramePdu {
+                frame_name,
+                mapping,
+            } => {
                 if let Some(frame) = self.get_frame_mut(frame_name) {
                     frame.pdus.push(mapping.clone());
                 }
                 Ok(())
             }
-            Operation::DeleteFramePdu { frame_name, mapping } => {
+            Operation::DeleteFramePdu {
+                frame_name,
+                mapping,
+            } => {
                 if let Some(frame) = self.get_frame_mut(frame_name) {
                     frame.pdus.retain(|m| m.pdu_name != mapping.pdu_name);
                 }
@@ -1304,10 +1363,10 @@ impl EditableFibex {
                     ClusterParam::MinislotDuration => p.minislot_duration = u32v(&value),
                     ClusterParam::StaticSlotDuration => p.static_slot_duration = u32v(&value),
                     ClusterParam::SymbolWindow => p.symbol_window = u32v(&value),
-                    ClusterParam::SymbolWindowIdlePhase => p.symbol_window_idle_phase = u32v(&value),
-                    ClusterParam::OffsetCorrectionStart => {
-                        p.offset_correction_start = u32v(&value)
+                    ClusterParam::SymbolWindowIdlePhase => {
+                        p.symbol_window_idle_phase = u32v(&value)
                     }
+                    ClusterParam::OffsetCorrectionStart => p.offset_correction_start = u32v(&value),
                     ClusterParam::Name => {}
                 }
             }
@@ -1323,7 +1382,9 @@ impl EditableFibex {
             return;
         }
         self.ecus.push(name.to_string());
-        self.push_compound(Operation::AddEcu { name: name.to_string() });
+        self.push_compound(Operation::AddEcu {
+            name: name.to_string(),
+        });
     }
 
     pub fn delete_ecu(&mut self, name: &str) {
@@ -1331,7 +1392,9 @@ impl EditableFibex {
             return;
         }
         self.ecus.retain(|n| n != name);
-        self.push_compound(Operation::DeleteEcu { name: name.to_string() });
+        self.push_compound(Operation::DeleteEcu {
+            name: name.to_string(),
+        });
     }
 
     pub fn rename_ecu(&mut self, old_name: &str, new_name: &str) {
@@ -1352,6 +1415,11 @@ impl EditableFibex {
     /// 重命名 ECU 并同步所有信号的接收者列表
     fn rename_ecu_internal(&mut self, old_name: &str, new_name: &str) {
         for ecu in self.ecus.iter_mut() {
+            if ecu == old_name {
+                *ecu = new_name.to_string();
+            }
+        }
+        for (ecu, _) in self.ecu_key_slots.iter_mut() {
             if ecu == old_name {
                 *ecu = new_name.to_string();
             }
@@ -1417,7 +1485,10 @@ impl EditableFibex {
                 frame_mappings.push((frame.name.clone(), frame.pdus.remove(i)));
             }
         }
-        self.push_compound(Operation::DeletePdu { pdu, frame_mappings });
+        self.push_compound(Operation::DeletePdu {
+            pdu,
+            frame_mappings,
+        });
     }
 
     pub fn set_pdu_name(&mut self, old_name: &str, new_name: &str) {
@@ -1800,7 +1871,9 @@ impl EditableFibex {
             return;
         }
         self.frames.push(frame.clone());
-        self.push_compound(Operation::AddFrame { frame: frame.clone() });
+        self.push_compound(Operation::AddFrame {
+            frame: frame.clone(),
+        });
     }
 
     /// 新建默认帧，返回新帧名
@@ -1811,12 +1884,12 @@ impl EditableFibex {
             idx += 1;
             name = format!("Frame_{}", idx);
         }
-        // 选择第一个未被占用的 Slot（通道 A）
+        // 选择通道 A 上第一个未被占用的 Slot
         let used: Vec<u32> = self
             .frames
             .iter()
-            .filter(|f| f.triggering.channel != FrChannel::B)
-            .map(|f| f.triggering.slot_id)
+            .filter_map(|f| f.channel_triggering(FrChannel::A))
+            .map(|t| t.slot_id)
             .collect();
         let mut slot = 1u32;
         while used.contains(&slot) {
@@ -1826,13 +1899,13 @@ impl EditableFibex {
             name: name.clone(),
             length: 8,
             payload_preamble: false,
-            triggering: FrameTriggering {
+            triggerings: vec![FrameTriggering {
                 channel: FrChannel::A,
                 slot_id: slot,
                 base_cycle: 0,
                 cycle_repetition: 1,
                 startup: false,
-            },
+            }],
             pdus: Vec::new(),
             comment: String::new(),
         };
@@ -1919,24 +1992,109 @@ impl EditableFibex {
         });
     }
 
-    pub fn set_frame_triggering(
+    /// 改某通道的触发点；`next` 为 None 表示该通道不再发送这帧。
+    /// `channel` 只会是 A 或 B——每通道一条触发，A+B 由两条并列表达。
+    pub fn set_channel_triggering(
         &mut self,
         frame_name: &str,
-        new_triggering: FrameTriggering,
+        channel: FrChannel,
+        next: Option<FrameTriggering>,
     ) {
         let Some(frame) = self.get_frame_mut(frame_name) else {
             return;
         };
-        if frame.triggering == new_triggering {
+        let old = frame.channel_triggering(channel);
+        if old == next {
             return;
         }
-        let old = frame.triggering;
-        frame.triggering = new_triggering;
+        frame.set_channel_triggering(channel, next);
         self.push_compound(Operation::SetFrameTriggering {
             frame_name: frame_name.to_string(),
+            channel,
             old_triggering: old,
-            new_triggering,
+            new_triggering: next,
         });
+    }
+
+    /// 把帧排到 `channel` 通道的 (slot_id, base_cycle)。与别的帧相撞时返回占用者名字，
+    /// 不做任何修改。该通道原本没排这帧时，发送规律沿用另一通道。
+    pub fn schedule_frame(
+        &mut self,
+        frame_name: &str,
+        channel: FrChannel,
+        slot_id: u32,
+        base_cycle: u32,
+    ) -> Result<(), String> {
+        let Some(frame) = self.get_frame(frame_name) else {
+            return Err(format!("Frame '{frame_name}' not found"));
+        };
+        let current = frame
+            .channel_triggering(channel)
+            .or(frame.first_triggering());
+        let next = FrameTriggering {
+            channel,
+            slot_id,
+            base_cycle,
+            cycle_repetition: current.map(|t| t.cycle_repetition).unwrap_or(1),
+            startup: current.map(|t| t.startup).unwrap_or(false),
+        };
+        if frame.channel_triggering(channel) == Some(next) {
+            return Ok(());
+        }
+        if let Some(owner) = self.slot_conflict(frame_name, &next) {
+            return Err(format!(
+                "Slot {slot_id} on channel {} is already used by '{owner}'",
+                channel.label()
+            ));
+        }
+        self.set_channel_triggering(frame_name, channel, Some(next));
+        Ok(())
+    }
+
+    /// 清除帧在所有通道上的排程（时隙号置 0，Validate 会把未排程的帧报出来）
+    pub fn unschedule_frame(&mut self, frame_name: &str) {
+        let Some(frame) = self.get_frame(frame_name) else {
+            return;
+        };
+        let scheduled: Vec<FrameTriggering> = frame
+            .triggerings()
+            .iter()
+            .filter(|t| t.slot_id != 0)
+            .copied()
+            .collect();
+        let before = self.history.len();
+        for t in scheduled {
+            self.set_channel_triggering(
+                frame_name,
+                t.channel,
+                Some(FrameTriggering { slot_id: 0, ..t }),
+            );
+        }
+        // 两个通道一起清除时算一步撤销
+        let pushed = self.history.len() - before;
+        if pushed > 1 {
+            self.merge_last_compounds(pushed);
+        }
+    }
+
+    /// 候选触发点会与哪个已有帧在同一时隙的同一周期相撞
+    fn slot_conflict(&self, frame_name: &str, candidate: &FrameTriggering) -> Option<String> {
+        if candidate.slot_id == 0 {
+            return None;
+        }
+        self.frames
+            .iter()
+            .find(|f| {
+                f.name != frame_name
+                    && f.triggerings().iter().any(|t| {
+                        t.channel == candidate.channel
+                            && t.slot_id == candidate.slot_id
+                            && (0..64).any(|cycle| {
+                                t.is_active_at_cycle(cycle) && candidate.is_active_at_cycle(cycle)
+                            })
+                    })
+            })
+            .map(|f| f.name.clone())
     }
 
     pub fn add_frame_pdu(&mut self, frame_name: &str, mapping: FramePduMapping) {
@@ -2001,36 +2159,52 @@ impl EditableFibex {
         if p.speed_kbps != 5000 && p.speed_kbps != 10000 {
             issues.push(ValidationIssue {
                 severity: Severity::Error,
-                message: format!("Invalid cluster speed {} kbit/s (must be 5000 or 10000)", p.speed_kbps),
+                message: format!(
+                    "Invalid cluster speed {} kbit/s (must be 5000 or 10000)",
+                    p.speed_kbps
+                ),
             });
         }
         if !(1.0..=16.0).contains(&p.cycle_time_ms) {
             issues.push(ValidationIssue {
                 severity: Severity::Warning,
-                message: format!("Cycle time {} ms outside common range 1..16 ms", p.cycle_time_ms),
+                message: format!(
+                    "Cycle time {} ms outside common range 1..16 ms",
+                    p.cycle_time_ms
+                ),
             });
         }
         if !(2..=31).contains(&p.coldstart_attempts) {
             issues.push(ValidationIssue {
                 severity: Severity::Warning,
-                message: format!("gColdstartAttempts {} out of range 2..31", p.coldstart_attempts),
+                message: format!(
+                    "gColdstartAttempts {} out of range 2..31",
+                    p.coldstart_attempts
+                ),
             });
         }
         if p.number_of_static_slots > 62 {
             issues.push(ValidationIssue {
                 severity: Severity::Error,
-                message: format!("gNumberOfStaticSlots {} exceeds limit 62", p.number_of_static_slots),
+                message: format!(
+                    "gNumberOfStaticSlots {} exceeds limit 62",
+                    p.number_of_static_slots
+                ),
             });
         }
         if p.number_of_minislots > 7998 {
             issues.push(ValidationIssue {
                 severity: Severity::Error,
-                message: format!("gNumberOfMinislots {} exceeds limit 7998", p.number_of_minislots),
+                message: format!(
+                    "gNumberOfMinislots {} exceeds limit 7998",
+                    p.number_of_minislots
+                ),
             });
         }
 
         // PDU 检查
-        let mut seen_pdu_names: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut seen_pdu_names: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for (pdu_idx, pdu) in self.pdus.iter().enumerate() {
             if pdu.name.is_empty() {
                 issues.push(ValidationIssue {
@@ -2062,12 +2236,16 @@ impl EditableFibex {
             }
 
             let max_bits = pdu.length.saturating_mul(8);
-            let mut seen_sig_names: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            let mut seen_sig_names: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
             for (sig_idx, sig) in pdu.signals.iter().enumerate() {
                 if sig.name.is_empty() {
                     issues.push(ValidationIssue {
                         severity: Severity::Error,
-                        message: format!("Signal name empty at index {} in PDU '{}'", pdu.name, sig_idx),
+                        message: format!(
+                            "Signal name empty at index {} in PDU '{}'",
+                            pdu.name, sig_idx
+                        ),
                     });
                 }
                 if let Some(prev_idx) = seen_sig_names.get(&sig.name) {
@@ -2084,7 +2262,10 @@ impl EditableFibex {
                 if sig.length_bits == 0 {
                     issues.push(ValidationIssue {
                         severity: Severity::Warning,
-                        message: format!("Signal '{}' in PDU '{}' has zero bit length", pdu.name, sig.name),
+                        message: format!(
+                            "Signal '{}' in PDU '{}' has zero bit length",
+                            pdu.name, sig.name
+                        ),
                     });
                 }
                 if sig.start_bit + sig.length_bits > max_bits {
@@ -2111,7 +2292,8 @@ impl EditableFibex {
         }
 
         // Frame 检查
-        let mut seen_frame_names: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut seen_frame_names: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for (frame_idx, frame) in self.frames.iter().enumerate() {
             if frame.name.is_empty() {
                 issues.push(ValidationIssue {
@@ -2145,44 +2327,53 @@ impl EditableFibex {
                 });
             }
 
-            let t = &frame.triggering;
-            if t.slot_id == 0 || t.slot_id > 2047 {
-                issues.push(ValidationIssue {
-                    severity: Severity::Error,
-                    message: format!(
-                        "Frame '{}' slot id {} out of range 1..2047",
-                        frame.name, t.slot_id
-                    ),
-                });
-            } else if t.slot_id > p.number_of_static_slots {
+            if frame.triggerings.is_empty() {
                 issues.push(ValidationIssue {
                     severity: Severity::Warning,
-                    message: format!(
-                        "Frame '{}' slot id {} exceeds gNumberOfStaticSlots ({})",
-                        frame.name, t.slot_id, p.number_of_static_slots
-                    ),
+                    message: format!("Frame '{}' is not triggered on any channel", frame.name),
                 });
             }
-            if !matches!(
-                t.cycle_repetition,
-                1 | 2 | 4 | 8 | 16 | 32 | 64
-            ) {
-                issues.push(ValidationIssue {
-                    severity: Severity::Error,
-                    message: format!(
-                        "Frame '{}' cycle repetition {} invalid (must be 1/2/4/8/16/32/64)",
-                        frame.name, t.cycle_repetition
-                    ),
-                });
-            }
-            if t.base_cycle >= t.cycle_repetition {
-                issues.push(ValidationIssue {
-                    severity: Severity::Error,
-                    message: format!(
-                        "Frame '{}' base cycle {} must be less than cycle repetition {}",
-                        frame.name, t.base_cycle, t.cycle_repetition
-                    ),
-                });
+            for t in &frame.triggerings {
+                if t.slot_id == 0 || t.slot_id > 2047 {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Error,
+                        message: format!(
+                            "Frame '{}' slot id {} on channel {} out of range 1..2047",
+                            frame.name,
+                            t.slot_id,
+                            t.channel.label()
+                        ),
+                    });
+                } else if t.slot_id > p.number_of_static_slots {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Warning,
+                        message: format!(
+                            "Frame '{}' slot id {} on channel {} exceeds gNumberOfStaticSlots ({})",
+                            frame.name,
+                            t.slot_id,
+                            t.channel.label(),
+                            p.number_of_static_slots
+                        ),
+                    });
+                }
+                if !matches!(t.cycle_repetition, 1 | 2 | 4 | 8 | 16 | 32 | 64) {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Error,
+                        message: format!(
+                            "Frame '{}' cycle repetition {} invalid (must be 1/2/4/8/16/32/64)",
+                            frame.name, t.cycle_repetition
+                        ),
+                    });
+                }
+                if t.base_cycle >= t.cycle_repetition {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Error,
+                        message: format!(
+                            "Frame '{}' base cycle {} must be less than cycle repetition {}",
+                            frame.name, t.base_cycle, t.cycle_repetition
+                        ),
+                    });
+                }
             }
 
             // Frame 内 PDU 映射检查
@@ -2223,32 +2414,32 @@ impl EditableFibex {
             }
         }
 
-        // Slot/周期冲突检查
+        // Slot/周期冲突检查：同一通道上的两条触发才可能相撞
         for i in 0..self.frames.len() {
             for j in (i + 1)..self.frames.len() {
                 let f1 = &self.frames[i];
                 let f2 = &self.frames[j];
-                let t1 = &f1.triggering;
-                let t2 = &f2.triggering;
-                if t1.slot_id != t2.slot_id {
-                    continue;
-                }
-                let channel_overlap = (t1.channel.covers(FrChannel::A) && t2.channel.covers(FrChannel::A))
-                    || (t1.channel.covers(FrChannel::B) && t2.channel.covers(FrChannel::B));
-                if !channel_overlap {
-                    continue;
-                }
-                // 检查 0..64 周期内是否同时激活
-                for cycle in 0..64u32 {
-                    if t1.is_active_at_cycle(cycle) && t2.is_active_at_cycle(cycle) {
-                        issues.push(ValidationIssue {
-                            severity: Severity::Error,
-                            message: format!(
-                                "Slot conflict: frames '{}' and '{}' both occupy slot {} cycle {} (channel {})",
-                                f1.name, f2.name, t1.slot_id, cycle, t1.channel.label()
-                            ),
-                        });
-                        break;
+                for ch in [FrChannel::A, FrChannel::B] {
+                    let (Some(t1), Some(t2)) =
+                        (f1.channel_triggering(ch), f2.channel_triggering(ch))
+                    else {
+                        continue;
+                    };
+                    if t1.slot_id != t2.slot_id {
+                        continue;
+                    }
+                    // 检查 0..64 周期内是否同时激活
+                    for cycle in 0..64u32 {
+                        if t1.is_active_at_cycle(cycle) && t2.is_active_at_cycle(cycle) {
+                            issues.push(ValidationIssue {
+                                severity: Severity::Error,
+                                message: format!(
+                                    "Slot conflict: frames '{}' and '{}' both occupy slot {} cycle {} (channel {})",
+                                    f1.name, f2.name, t1.slot_id, cycle, ch.label()
+                                ),
+                            });
+                            break;
+                        }
                     }
                 }
             }
@@ -2259,7 +2450,7 @@ impl EditableFibex {
             let count = self
                 .frames
                 .iter()
-                .filter(|f| f.triggering.startup && f.triggering.channel.covers(ch))
+                .filter(|f| f.channel_triggering(ch).is_some_and(|t| t.startup))
                 .count();
             if count != 0 && count != 2 {
                 issues.push(ValidationIssue {
@@ -2444,7 +2635,7 @@ impl EditableFrame {
         name: String,
         length: u32,
         payload_preamble: bool,
-        triggering: FrameTriggering,
+        triggerings: Vec<FrameTriggering>,
         pdus: Vec<FramePduMapping>,
         comment: String,
     ) -> Self {
@@ -2452,7 +2643,7 @@ impl EditableFrame {
             name,
             length,
             payload_preamble,
-            triggering,
+            triggerings,
             pdus,
             comment,
         }
@@ -2470,8 +2661,51 @@ impl EditableFrame {
         self.payload_preamble
     }
 
-    pub fn triggering(&self) -> &FrameTriggering {
-        &self.triggering
+    /// 帧的全部触发点，每通道一条
+    pub fn triggerings(&self) -> &[FrameTriggering] {
+        &self.triggerings
+    }
+
+    /// 该通道上的触发点；帧不在该通道上发送时为 None
+    pub fn channel_triggering(&self, channel: FrChannel) -> Option<FrameTriggering> {
+        self.triggerings
+            .iter()
+            .find(|t| t.channel == channel)
+            .copied()
+    }
+
+    /// 排序与摘要用的代表触发点：优先通道 A，其次 B
+    pub fn first_triggering(&self) -> Option<FrameTriggering> {
+        self.channel_triggering(FrChannel::A)
+            .or_else(|| self.channel_triggering(FrChannel::B))
+            .or_else(|| self.triggerings.first().copied())
+    }
+
+    /// 通道列的文本
+    pub fn channel_label(&self) -> &'static str {
+        let a = self.channel_triggering(FrChannel::A).is_some();
+        let b = self.channel_triggering(FrChannel::B).is_some();
+        match (a, b) {
+            (true, true) => "A+B",
+            (true, false) => "A",
+            (false, true) => "B",
+            (false, false) => "-",
+        }
+    }
+
+    /// 替换/新增某通道的触发点，None 表示该通道不再发送该帧
+    pub(crate) fn set_channel_triggering(
+        &mut self,
+        channel: FrChannel,
+        next: Option<FrameTriggering>,
+    ) {
+        self.triggerings.retain(|t| t.channel != channel);
+        if let Some(t) = next {
+            self.triggerings.push(FrameTriggering { channel, ..t });
+            // 通道 A 在前，便于按 A/B 顺序显示
+            self.triggerings
+                .sort_by_key(|t| if t.channel == FrChannel::A { 0 } else { 1 });
+        }
     }
 
     pub fn pdus(&self) -> &Vec<FramePduMapping> {
@@ -2524,13 +2758,13 @@ mod tests {
             "Frame1".to_string(),
             8,
             false,
-            FrameTriggering {
+            vec![FrameTriggering {
                 channel: FrChannel::A,
                 slot_id: 1,
                 base_cycle: 0,
                 cycle_repetition: 1,
                 startup: false,
-            },
+            }],
             vec![FramePduMapping::new("Pdu1", 0)],
             String::new(),
         );
@@ -2624,7 +2858,7 @@ mod tests {
             "Frame2".to_string(),
             8,
             false,
-            FrameTriggering::default(),
+            vec![FrameTriggering::default()],
             Vec::new(),
             String::new(),
         );
@@ -2658,13 +2892,13 @@ mod tests {
             "Frame2".to_string(),
             8,
             false,
-            FrameTriggering {
+            vec![FrameTriggering {
                 channel: FrChannel::A,
                 slot_id: 1,
                 base_cycle: 0,
                 cycle_repetition: 2,
                 startup: false,
-            },
+            }],
             Vec::new(),
             String::new(),
         );
@@ -2679,9 +2913,121 @@ mod tests {
         let mut fibex = sample();
         fibex.set_signal_start_bit("Pdu1", "Speed", 24);
         let issues = fibex.validate();
-        assert!(issues
-            .iter()
-            .any(|i| i.message.contains("exceeds PDU size")));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("exceeds PDU size"))
+        );
+    }
+
+    #[test]
+    fn schedule_frame_adds_a_second_channel_triggering() {
+        let mut fibex = sample();
+        // 排到 B 通道第 3 时隙第 2 周期：A 通道原本那条不应被改动
+        fibex
+            .schedule_frame("Frame1", FrChannel::B, 3, 2)
+            .expect("slot 3 is free");
+        let frame = fibex.get_frame("Frame1").unwrap();
+        let b = frame
+            .channel_triggering(FrChannel::B)
+            .expect("B 通道应已排程");
+        assert_eq!(
+            (b.slot_id, b.base_cycle, b.cycle_repetition),
+            (3, 2, 1),
+            "重复周期沿用该帧原有的 1"
+        );
+        assert_eq!(frame.channel_triggering(FrChannel::A).unwrap().slot_id, 1);
+        assert_eq!(frame.channel_label(), "A+B");
+
+        fibex.undo().unwrap();
+        let back = fibex.get_frame("Frame1").unwrap();
+        assert!(
+            back.channel_triggering(FrChannel::B).is_none(),
+            "撤销只回退 B 通道那条"
+        );
+        assert_eq!(back.channel_triggering(FrChannel::A).unwrap().slot_id, 1);
+    }
+
+    #[test]
+    fn two_channels_may_use_different_slots() {
+        let mut fibex = sample();
+        fibex
+            .schedule_frame("Frame1", FrChannel::B, 9, 0)
+            .expect("slot 9 is free");
+        let frame = fibex.get_frame("Frame1").unwrap();
+        assert_eq!(frame.channel_triggering(FrChannel::A).unwrap().slot_id, 1);
+        assert_eq!(frame.channel_triggering(FrChannel::B).unwrap().slot_id, 9);
+    }
+
+    #[test]
+    fn schedule_frame_rejects_slot_already_taken() {
+        let mut fibex = sample();
+        let taken = EditableFrame::build(
+            "Frame2".to_string(),
+            8,
+            false,
+            vec![FrameTriggering {
+                channel: FrChannel::A,
+                slot_id: 5,
+                base_cycle: 0,
+                cycle_repetition: 2,
+                startup: false,
+            }],
+            Vec::new(),
+            String::new(),
+        );
+        fibex.add_frame(&taken);
+
+        // Frame1 每个周期都发，5 号时隙已被 Frame2 以 2 周期重复占用
+        let err = fibex
+            .schedule_frame("Frame1", FrChannel::A, 5, 1)
+            .expect_err("should conflict");
+        assert!(err.contains("Frame2"), "冲突原因应指出占用者: {err}");
+
+        // 同一时隙在另一个通道上不冲突
+        fibex
+            .schedule_frame("Frame1", FrChannel::B, 5, 1)
+            .expect("Frame2 不在 B 通道，slot 5 可用");
+
+        fibex
+            .schedule_frame("Frame1", FrChannel::A, 6, 1)
+            .expect("slot 6 is free");
+        assert_eq!(
+            fibex
+                .get_frame("Frame1")
+                .unwrap()
+                .channel_triggering(FrChannel::A)
+                .unwrap()
+                .slot_id,
+            6
+        );
+    }
+
+    #[test]
+    fn unschedule_frame_clears_slot_and_undo_restores() {
+        let mut fibex = sample();
+        fibex
+            .schedule_frame("Frame1", FrChannel::B, 4, 0)
+            .expect("slot 4 is free");
+        fibex.unschedule_frame("Frame1");
+        for ch in [FrChannel::A, FrChannel::B] {
+            assert_eq!(
+                fibex
+                    .get_frame("Frame1")
+                    .unwrap()
+                    .channel_triggering(ch)
+                    .unwrap()
+                    .slot_id,
+                0,
+                "清除排程应把两个通道的时隙号都置 0"
+            );
+        }
+
+        // 两个通道一起清除算一步撤销
+        fibex.undo().unwrap();
+        let frame = fibex.get_frame("Frame1").unwrap();
+        assert_eq!(frame.channel_triggering(FrChannel::A).unwrap().slot_id, 1);
+        assert_eq!(frame.channel_triggering(FrChannel::B).unwrap().slot_id, 4);
     }
 
     #[test]

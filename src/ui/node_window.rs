@@ -31,7 +31,9 @@ pub fn render_node_list(ui: &Ui, dbc: &mut EditableDbc, state: &mut NodeListStat
 
     let nodes: Vec<String> = dbc.nodes().clone();
     if nodes.is_empty() {
-        ui.text_disabled("No nodes defined. Add a node above, or they will be inferred from TX/RX references.");
+        ui.text_disabled(
+            "No nodes defined. Add a node above, or they will be inferred from TX/RX references.",
+        );
         return changed;
     }
 
@@ -84,7 +86,8 @@ pub fn render_node_list(ui: &Ui, dbc: &mut EditableDbc, state: &mut NodeListStat
             ui.table_set_column_index(0);
             if state.rename_target.as_deref() == Some(node_name.as_str()) {
                 ui.set_next_item_width(160.0);
-                ui.input_text("##rename_input", &mut state.rename_buffer).build();
+                ui.input_text("##rename_input", &mut state.rename_buffer)
+                    .build();
                 ui.same_line();
                 if ui.small_button("OK") {
                     let new_name = state.rename_buffer.trim().to_string();

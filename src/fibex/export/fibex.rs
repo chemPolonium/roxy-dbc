@@ -34,6 +34,25 @@ pub fn export_fibex(fibex: &EditableFibex) -> String {
             "        <ho:SHORT-NAME>{}</ho:SHORT-NAME>\n",
             escape_xml(ecu)
         ));
+        // FIBEX 里关键时隙写在控制器的 KEY-SLOT-USAGE 下；Vector 把同步与冷启动合并成
+        // STARTUP-SYNC。两个用途都不是时，FIBEX 没有对应写法，只能不写。
+        if let Some(slot) = fibex.ecu_key_slot(ecu)
+            && (slot.used_for_sync || slot.used_for_startup)
+        {
+            let tag = if slot.used_for_sync && slot.used_for_startup {
+                "STARTUP-SYNC"
+            } else if slot.used_for_sync {
+                "SYNC-SLOT"
+            } else {
+                "STARTUP-SLOT"
+            };
+            out.push_str("        <fr:KEY-SLOT-USAGE>\n");
+            out.push_str(&format!(
+                "          <fr:{}>{}</fr:{}>\n",
+                tag, slot.slot_id, tag
+            ));
+            out.push_str("        </fr:KEY-SLOT-USAGE>\n");
+        }
         out.push_str("      </ho:CONTROLLER>\n");
     }
     out.push_str("    </fx:CONTROLLERS>\n");
@@ -84,6 +103,11 @@ pub fn export_fibex(fibex: &EditableFibex) -> String {
     out.push_str(&format!(
         "      <fx:MACROTICK-DURATION>{}</fx:MACROTICK-DURATION>\n",
         fmt_f64(p.macrotick_duration_us / 1000.0)
+    ));
+    out.push_str(&format!(
+        "      <fr:MACRO-PER-CYCLE>{}</fr:MACRO-PER-CYCLE>\n",
+        // 以周期与宏节拍的换算结果写出，界面里改过之后仍然对得上
+        crate::fibex::import::cycle_macroticks(p.cycle_time_ms, p.macrotick_duration_us)
     ));
     out.push_str(&format!(
         "      <fx:MINOR-VERSION>{}</fx:MINOR-VERSION>\n",
@@ -139,17 +163,16 @@ pub fn export_fibex(fibex: &EditableFibex) -> String {
         out.push_str("          <fx:STATIC-PART>\n");
         out.push_str("            <fx:SLOTS>\n");
 
-        // 按 slot 分组该通道上的帧触发
-        let mut slots: Vec<(u32, Vec<&EditableFrame>)> = Vec::new();
+        // 按 slot 分组该通道上的帧触发（每通道各一条，时隙号可以不同）
+        let mut slots: Vec<(u32, Vec<(&EditableFrame, FrameTriggering)>)> = Vec::new();
         for frame in fibex.frames() {
-            if !frame.triggering().channel.covers(ch) {
+            let Some(t) = frame.channel_triggering(ch) else {
                 continue;
-            }
-            let slot_id = frame.triggering().slot_id;
-            if let Some(entry) = slots.iter_mut().find(|(id, _)| *id == slot_id) {
-                entry.1.push(frame);
+            };
+            if let Some(entry) = slots.iter_mut().find(|(id, _)| *id == t.slot_id) {
+                entry.1.push((frame, t));
             } else {
-                slots.push((slot_id, vec![frame]));
+                slots.push((t.slot_id, vec![(frame, t)]));
             }
         }
         slots.sort_by_key(|(id, _)| *id);
@@ -168,8 +191,7 @@ pub fn export_fibex(fibex: &EditableFibex) -> String {
                 slot_id
             ));
             out.push_str("                <fx:FRAME-TRIGGERINGS>\n");
-            for frame in frames {
-                let t = frame.triggering();
+            for (frame, t) in frames {
                 out.push_str(&format!(
                     "                  <fx:FRAME-TRIGGERING ID=\"{}\">\n",
                     escape_xml(&id_of(channel_id, &format!("{}_Trigger", frame.name())))
@@ -401,14 +423,21 @@ pub fn export_fibex(fibex: &EditableFibex) -> String {
         ));
         out.push_str(&format!(
             "      <fx:PAYLOAD-PREAMBLE>{}</fx:PAYLOAD-PREAMBLE>\n",
-            if frame.payload_preamble() { "true" } else { "false" }
+            if frame.payload_preamble() {
+                "true"
+            } else {
+                "false"
+            }
         ));
         if !frame.pdus().is_empty() {
             out.push_str("      <fx:PDU-MAPPINGS>\n");
             for m in frame.pdus() {
                 out.push_str(&format!(
                     "        <fx:PDU-MAPPING ID=\"{}\">\n",
-                    escape_xml(&id_of("PDUMAP", &format!("{}.{}", frame.name(), m.pdu_name)))
+                    escape_xml(&id_of(
+                        "PDUMAP",
+                        &format!("{}.{}", frame.name(), m.pdu_name)
+                    ))
                 ));
                 out.push_str(&format!(
                     "          <fx:PDU-REF REF-TYPE=\"fx:PDU-TYPE\" ID-REF=\"{}\"/>\n",

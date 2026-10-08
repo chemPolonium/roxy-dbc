@@ -5,7 +5,7 @@
 //! 并把检测到的编码记录在 DbcWindow 上，保存时按原编码写出，
 //! 避免和其它工具交换文件时出现乱码。
 
-use encoding_rs::{Encoding, GBK, UTF_16BE, UTF_16LE, UTF_8};
+use encoding_rs::{Encoding, GBK, UTF_8, UTF_16BE, UTF_16LE};
 
 /// 一次解码的结果：文本、所用编码、是否带 BOM
 #[derive(Clone)]

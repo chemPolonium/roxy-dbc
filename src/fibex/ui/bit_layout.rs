@@ -42,7 +42,12 @@ const CELL_H: f32 = 22.0;
 const LABEL_W: f32 = 36.0;
 
 /// 渲染信号位布局图。必须在窗口内调用。
-pub fn render_bit_layout(ui: &Ui, signals: &[EditableSignal], num_bytes: usize, selected_names: &[String]) {
+pub fn render_bit_layout(
+    ui: &Ui,
+    signals: &[EditableSignal],
+    num_bytes: usize,
+    selected_names: &[String],
+) {
     let num_bytes = num_bytes.max(1);
 
     let origin = ui.cursor_screen_pos();
@@ -94,9 +99,13 @@ pub fn render_bit_layout(ui: &Ui, signals: &[EditableSignal], num_bytes: usize, 
             let col = 7 - (bit % 8);
             let x = origin[0] + LABEL_W + col as f32 * CELL_W;
             let y = grid_top + byte as f32 * CELL_H;
-            dl.add_rect([x + 1.0, y + 1.0], [x + CELL_W - 1.0, y + CELL_H - 1.0], color)
-                .filled(true)
-                .build();
+            dl.add_rect(
+                [x + 1.0, y + 1.0],
+                [x + CELL_W - 1.0, y + CELL_H - 1.0],
+                color,
+            )
+            .filled(true)
+            .build();
             if label_pos.is_none() {
                 label_pos = Some([x, y]);
             }
@@ -108,18 +117,18 @@ pub fn render_bit_layout(ui: &Ui, signals: &[EditableSignal], num_bytes: usize, 
             } else {
                 [color[0], color[1], color[2], 1.0]
             };
-            dl.add_rect([x + 0.5, y + 0.5], [x + CELL_W - 0.5, y + CELL_H - 0.5], border_color)
-                .thickness(if is_selected { 2.0 } else { 1.0 })
-                .build();
+            dl.add_rect(
+                [x + 0.5, y + 0.5],
+                [x + CELL_W - 0.5, y + CELL_H - 0.5],
+                border_color,
+            )
+            .thickness(if is_selected { 2.0 } else { 1.0 })
+            .build();
             // 信号名裁剪到其占位的单元格范围内，避免长名字溢出到其他信号上
             let last_bit = positions.last().copied().unwrap_or(0);
             let end_col = 7 - (last_bit % 8);
             let x_end = origin[0] + LABEL_W + (end_col + 1) as f32 * CELL_W;
-            let clip = dl.push_clip_rect(
-                [x + 1.0, y + 1.0],
-                [x_end - 1.0, y + CELL_H - 1.0],
-                true,
-            );
+            let clip = dl.push_clip_rect([x + 1.0, y + 1.0], [x_end - 1.0, y + CELL_H - 1.0], true);
             dl.add_text(
                 [x + 3.0, y + CELL_H / 2.0 - 6.0],
                 [1.0, 1.0, 1.0, 1.0],

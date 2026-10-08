@@ -10,9 +10,7 @@
 //! - 导出 CSV（UTF-8 BOM，Excel 友好）
 
 use can_dbc::{ByteOrder, ValueType};
-use dear_imgui_rs::{
-    MouseButton, SortDirection, TableFlags, TableOptions, TableSizingPolicy, Ui,
-};
+use dear_imgui_rs::{MouseButton, SortDirection, TableFlags, TableOptions, TableSizingPolicy, Ui};
 
 use crate::editable_dbc::{EditableDbc, EditableSignal};
 use crate::ui::message_edit_window::MessageEditWindowState;
@@ -24,7 +22,10 @@ use std::path::Path;
 pub enum AllSignalsEvent {
     None,
     /// 请求删除一个信号（走统一的确认对话框）
-    DeleteSignal { msg_id: u32, sig_name: String },
+    DeleteSignal {
+        msg_id: u32,
+        sig_name: String,
+    },
     /// 导出或其它操作失败
     Error(String),
 }
@@ -117,7 +118,12 @@ pub fn parse_values(text: &str) -> Result<Vec<(i64, String)>, String> {
 
 /// 生成下一个可用的信号名（NewSignal_0001 风格，跳过已存在的名字）
 pub fn next_signal_name(dbc: &EditableDbc) -> String {
-    let mut n = dbc.messages().iter().map(|m| m.signals().len()).sum::<usize>() + 1;
+    let mut n = dbc
+        .messages()
+        .iter()
+        .map(|m| m.signals().len())
+        .sum::<usize>()
+        + 1;
     loop {
         let name = format!("NewSignal_{:04}", n);
         let exists = dbc
@@ -134,8 +140,23 @@ pub fn next_signal_name(dbc: &EditableDbc) -> String {
 /// 通信矩阵 CSV（UTF-8 BOM 前缀由调用方处理，这里返回纯文本）
 pub fn build_matrix_csv(rows: &[MatrixRow]) -> String {
     const HEADERS: [&str; 17] = [
-        "ID", "Message", "DLC", "Transmitter", "Signal", "Start", "Length", "Order", "Type",
-        "Factor", "Offset", "Min", "Max", "Unit", "Receivers", "Comment", "Values",
+        "ID",
+        "Message",
+        "DLC",
+        "Transmitter",
+        "Signal",
+        "Start",
+        "Length",
+        "Order",
+        "Type",
+        "Factor",
+        "Offset",
+        "Min",
+        "Max",
+        "Unit",
+        "Receivers",
+        "Comment",
+        "Values",
     ];
 
     fn csv_field(s: &str) -> String {
@@ -158,21 +179,34 @@ pub fn build_matrix_csv(rows: &[MatrixRow]) -> String {
 
     for r in rows {
         let fields = [
-            format!("0x{:03X}{}", r.msg_id, if r.msg_extended { "x" } else { "" }),
+            format!(
+                "0x{:03X}{}",
+                r.msg_id,
+                if r.msg_extended { "x" } else { "" }
+            ),
             r.msg_name.clone(),
             r.dlc.to_string(),
             r.transmitter.clone(),
             r.sig_name.clone(),
             r.start_bit.to_string(),
             r.signal_size.to_string(),
-            if r.byte_order_is_little { "Intel" } else { "Motorola" }.to_string(),
+            if r.byte_order_is_little {
+                "Intel"
+            } else {
+                "Motorola"
+            }
+            .to_string(),
             if r.signed { "Signed" } else { "Unsigned" }.to_string(),
             r.factor.to_string(),
             r.offset.to_string(),
             r.min.to_string(),
             r.max.to_string(),
             r.unit.clone(),
-            if r.receivers.is_empty() { "Vector__XXX".to_string() } else { r.receivers.clone() },
+            if r.receivers.is_empty() {
+                "Vector__XXX".to_string()
+            } else {
+                r.receivers.clone()
+            },
             r.comment.clone(),
             format_values(&r.values),
         ];
@@ -272,10 +306,22 @@ impl AllSignalsWindow {
                 col::LENGTH => a.signal_size.cmp(&b.signal_size),
                 col::ORDER => a.byte_order_is_little.cmp(&b.byte_order_is_little),
                 col::TYPE => a.signed.cmp(&b.signed),
-                col::FACTOR => a.factor.partial_cmp(&b.factor).unwrap_or(std::cmp::Ordering::Equal),
-                col::OFFSET => a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal),
-                col::MIN => a.min.partial_cmp(&b.min).unwrap_or(std::cmp::Ordering::Equal),
-                col::MAX => a.max.partial_cmp(&b.max).unwrap_or(std::cmp::Ordering::Equal),
+                col::FACTOR => a
+                    .factor
+                    .partial_cmp(&b.factor)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                col::OFFSET => a
+                    .offset
+                    .partial_cmp(&b.offset)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                col::MIN => a
+                    .min
+                    .partial_cmp(&b.min)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                col::MAX => a
+                    .max
+                    .partial_cmp(&b.max)
+                    .unwrap_or(std::cmp::Ordering::Equal),
                 col::UNIT => a.unit.cmp(&b.unit),
                 col::RECEIVERS => a.receivers.cmp(&b.receivers),
                 col::COMMENT => a.comment.cmp(&b.comment),
@@ -325,12 +371,13 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
         let _disabled = ui.begin_disabled_with_cond(window.selected.is_none());
         if ui.button("+ Add Signal")
             && let Some((msg_id, _)) = window.selected.clone()
-                && ctx.dbc.get_message(msg_id).is_some() {
-                    let name = next_signal_name(ctx.dbc);
-                    let sig = default_signal_named(&name);
-                    ctx.dbc.add_signal(msg_id, &sig);
-                    *ctx.is_dirty = true;
-                }
+            && ctx.dbc.get_message(msg_id).is_some()
+        {
+            let name = next_signal_name(ctx.dbc);
+            let sig = default_signal_named(&name);
+            ctx.dbc.add_signal(msg_id, &sig);
+            *ctx.is_dirty = true;
+        }
     }
     ui.same_line();
     if ui.button("Export CSV...") {
@@ -384,207 +431,214 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
         [0.0, avail_h],
         0.0,
     ) {
-                for header in [
-                    "ID",
-                    "Message",
-                    "DLC",
-                    "Transmitter",
-                    "Signal",
-                    "Start",
-                    "Length",
-                    "Order",
-                    "Type",
-                    "Factor",
-                    "Offset",
-                    "Min",
-                    "Max",
-                    "Unit",
-                    "Receivers",
-                    "Comment",
-                    "Values",
-                ] {
-                    ui.table_setup_column(header, dear_imgui_rs::TableColumnFlags::NONE, None);
+        for header in [
+            "ID",
+            "Message",
+            "DLC",
+            "Transmitter",
+            "Signal",
+            "Start",
+            "Length",
+            "Order",
+            "Type",
+            "Factor",
+            "Offset",
+            "Min",
+            "Max",
+            "Unit",
+            "Receivers",
+            "Comment",
+            "Values",
+        ] {
+            ui.table_setup_column(header, dear_imgui_rs::TableColumnFlags::NONE, None);
+        }
+        // 冻结标题行（矩阵还有横向滚动，同时冻结 ID 列便于对照）
+        ui.table_setup_scroll_freeze(1, 1);
+        ui.table_headers_row();
+
+        if let Some(mut sort_specs) = ui.table_get_sort_specs()
+            && sort_specs.is_dirty()
+        {
+            if let Some(spec) = sort_specs.iter().next() {
+                window.sort_column = usize::from(spec.column_index) as u32;
+                window.sort_ascending = spec.sort_direction == SortDirection::Ascending;
+            }
+            sort_specs.clear_dirty(ui);
+        }
+
+        for row in &rows {
+            let key = (row.msg_id, row.sig_name.clone());
+            let is_selected = window.selected.as_ref() == Some(&key);
+
+            ui.table_next_row();
+
+            ui.table_set_column_index(col::ID as usize);
+            ui.text(format!(
+                "0x{:03X}{}",
+                row.msg_id,
+                if row.msg_extended { "x" } else { "" }
+            ));
+
+            ui.table_set_column_index(col::MESSAGE as usize);
+            ui.text(&row.msg_name);
+
+            ui.table_set_column_index(col::DLC as usize);
+            ui.text(row.dlc.to_string());
+
+            ui.table_set_column_index(col::TRANSMITTER as usize);
+            ui.text(&row.transmitter);
+
+            ui.table_set_column_index(col::SIGNAL as usize);
+            // 不同消息下可能存在同名信号，ID 里带上消息 ID 避免冲突
+            let selectable_label = format!("{}##as_{}_{}", row.sig_name, row.msg_id, row.sig_name);
+            if ui
+                .selectable_config(selectable_label)
+                .selected(is_selected)
+                .span_all_columns(true)
+                .build()
+            {
+                window.selected = Some(key.clone());
+            }
+            if ui.is_item_hovered()
+                && ui.is_mouse_double_clicked(MouseButton::Left)
+                && let Some(msg) = ctx.dbc.get_message(row.msg_id)
+                && let Some(sig) = msg.signals().iter().find(|s| s.name() == row.sig_name)
+            {
+                ctx.signal_edit_dialog.open_from_signal(
+                    &*ctx.dbc,
+                    msg.message_id(),
+                    sig,
+                    ctx.file_path,
+                );
+            }
+
+            if let Some(_popup) = ui.begin_popup_context_item_with_label(Some(&format!(
+                "matrix_ctx_{}_{}",
+                row.msg_id, row.sig_name
+            ))) {
+                if window.selected.as_ref() != Some(&key) {
+                    window.selected = Some(key.clone());
                 }
-                // 冻结标题行（矩阵还有横向滚动，同时冻结 ID 列便于对照）
-                ui.table_setup_scroll_freeze(1, 1);
-                ui.table_headers_row();
-
-                if let Some(mut sort_specs) = ui.table_get_sort_specs()
-                    && sort_specs.is_dirty() {
-                        if let Some(spec) = sort_specs.iter().next() {
-                            window.sort_column = usize::from(spec.column_index) as u32;
-                        window.sort_ascending =
-                            spec.sort_direction == SortDirection::Ascending;
-                        }
-                        sort_specs.clear_dirty(ui);
-                    }
-
-                for row in &rows {
-                    let key = (row.msg_id, row.sig_name.clone());
-                    let is_selected = window.selected.as_ref() == Some(&key);
-
-                    ui.table_next_row();
-
-                    ui.table_set_column_index(col::ID as usize);
-                    ui.text(format!(
-                        "0x{:03X}{}",
-                        row.msg_id,
-                        if row.msg_extended { "x" } else { "" }
-                    ));
-
-                    ui.table_set_column_index(col::MESSAGE as usize);
-                    ui.text(&row.msg_name);
-
-                    ui.table_set_column_index(col::DLC as usize);
-                    ui.text(row.dlc.to_string());
-
-                    ui.table_set_column_index(col::TRANSMITTER as usize);
-                    ui.text(&row.transmitter);
-
-                    ui.table_set_column_index(col::SIGNAL as usize);
-                    // 不同消息下可能存在同名信号，ID 里带上消息 ID 避免冲突
-                    let selectable_label = format!(
-                        "{}##as_{}_{}",
-                        row.sig_name, row.msg_id, row.sig_name
+                if ui.menu_item("Edit Signal...")
+                    && let Some(msg) = ctx.dbc.get_message(row.msg_id)
+                    && let Some(sig) = msg.signals().iter().find(|s| s.name() == row.sig_name)
+                {
+                    ctx.signal_edit_dialog.open_from_signal(
+                        &*ctx.dbc,
+                        msg.message_id(),
+                        sig,
+                        ctx.file_path,
                     );
-                    if ui
-                        .selectable_config(selectable_label)
-                        .selected(is_selected)
-                        .span_all_columns(true)
-                        .build()
-                    {
-                        window.selected = Some(key.clone());
-                    }
-                    if ui.is_item_hovered() && ui.is_mouse_double_clicked(MouseButton::Left)
-                        && let Some(msg) = ctx.dbc.get_message(row.msg_id)
-                            && let Some(sig) =
-                                msg.signals().iter().find(|s| s.name() == row.sig_name)
-                            {
-                                ctx.signal_edit_dialog
-                                    .open_from_signal(msg.message_id(), sig, ctx.file_path);
-                            }
+                }
+                if ui.menu_item("Edit Values...") {
+                    window.values_edit_target = Some(key.clone());
+                    window.values_edit_buffer = format_values(&row.values);
+                }
+                if ui.menu_item("Edit Message...")
+                    && let Some(msg) = ctx.dbc.get_message(row.msg_id)
+                {
+                    let nodes = ctx.dbc.nodes().clone();
+                    ctx.edit_windows.push(MessageEditWindowState::open(
+                        &*ctx.dbc,
+                        msg,
+                        ctx.file_path,
+                        nodes,
+                    ));
+                }
+                ui.separator();
+                if ui.menu_item("Delete Signal") {
+                    event = AllSignalsEvent::DeleteSignal {
+                        msg_id: row.msg_id,
+                        sig_name: row.sig_name.clone(),
+                    };
+                }
+            }
 
-                    if let Some(_popup) = ui.begin_popup_context_item_with_label(Some(
-                        &format!(
-                            "matrix_ctx_{}_{}",
-                            row.msg_id, row.sig_name
-                        ),
-                    )) {
-                        if window.selected.as_ref() != Some(&key) {
-                            window.selected = Some(key.clone());
-                        }
-                        if ui.menu_item("Edit Signal...")
-                            && let Some(msg) = ctx.dbc.get_message(row.msg_id)
-                                && let Some(sig) =
-                                    msg.signals().iter().find(|s| s.name() == row.sig_name)
-                                {
-                                    ctx.signal_edit_dialog
-                                        .open_from_signal(msg.message_id(), sig, ctx.file_path);
-                                }
-                        if ui.menu_item("Edit Values...") {
-                            window.values_edit_target = Some(key.clone());
-                            window.values_edit_buffer = format_values(&row.values);
-                        }
-                        if ui.menu_item("Edit Message...")
-                            && let Some(msg) = ctx.dbc.get_message(row.msg_id) {
-                                let nodes = ctx.dbc.nodes().clone();
-                                ctx.edit_windows
-                                    .push(MessageEditWindowState::open(msg, ctx.file_path, nodes));
-                            }
-                        ui.separator();
-                        if ui.menu_item("Delete Signal") {
-                            event = AllSignalsEvent::DeleteSignal {
-                                msg_id: row.msg_id,
-                                sig_name: row.sig_name.clone(),
-                            };
-                        }
-                    }
+            ui.table_set_column_index(col::START as usize);
+            ui.text(row.start_bit.to_string());
 
-                    ui.table_set_column_index(col::START as usize);
-                    ui.text(row.start_bit.to_string());
+            ui.table_set_column_index(col::LENGTH as usize);
+            ui.text(row.signal_size.to_string());
 
-                    ui.table_set_column_index(col::LENGTH as usize);
-                    ui.text(row.signal_size.to_string());
+            ui.table_set_column_index(col::ORDER as usize);
+            ui.text(if row.byte_order_is_little {
+                "Intel"
+            } else {
+                "Motorola"
+            });
 
-                    ui.table_set_column_index(col::ORDER as usize);
-                    ui.text(if row.byte_order_is_little { "Intel" } else { "Motorola" });
+            ui.table_set_column_index(col::TYPE as usize);
+            ui.text(if row.signed { "Signed" } else { "Unsigned" });
 
-                    ui.table_set_column_index(col::TYPE as usize);
-                    ui.text(if row.signed { "Signed" } else { "Unsigned" });
+            ui.table_set_column_index(col::FACTOR as usize);
+            ui.text(row.factor.to_string());
 
-                    ui.table_set_column_index(col::FACTOR as usize);
-                    ui.text(row.factor.to_string());
+            ui.table_set_column_index(col::OFFSET as usize);
+            ui.text(row.offset.to_string());
 
-                    ui.table_set_column_index(col::OFFSET as usize);
-                    ui.text(row.offset.to_string());
+            ui.table_set_column_index(col::MIN as usize);
+            ui.text(row.min.to_string());
 
-                    ui.table_set_column_index(col::MIN as usize);
-                    ui.text(row.min.to_string());
+            ui.table_set_column_index(col::MAX as usize);
+            ui.text(row.max.to_string());
 
-                    ui.table_set_column_index(col::MAX as usize);
-                    ui.text(row.max.to_string());
+            ui.table_set_column_index(col::UNIT as usize);
+            ui.text(&row.unit);
 
-                    ui.table_set_column_index(col::UNIT as usize);
-                    ui.text(&row.unit);
+            ui.table_set_column_index(col::RECEIVERS as usize);
+            if row.receivers.is_empty() {
+                ui.text_disabled("Vector__XXX");
+            } else {
+                ui.text(&row.receivers);
+            }
 
-                    ui.table_set_column_index(col::RECEIVERS as usize);
-                    if row.receivers.is_empty() {
-                        ui.text_disabled("Vector__XXX");
-                    } else {
-                        ui.text(&row.receivers);
-                    }
+            ui.table_set_column_index(col::COMMENT as usize);
+            ui.text(&row.comment);
 
-                    ui.table_set_column_index(col::COMMENT as usize);
-                    ui.text(&row.comment);
-
-                    // Values 列：双击进入行内编辑（0=Off; 1=On）
-                    ui.table_set_column_index(col::VALUES as usize);
-                    let editing_this = window.values_edit_target.as_ref() == Some(&key);
-                    if editing_this {
-                        ui.input_text("##matrix_values_edit", &mut window.values_edit_buffer)
-                            .build();
-                        ui.same_line();
-                        let invalid = parse_values(&window.values_edit_buffer).is_err();
-                        if ui.small_button("OK##matrix_values_apply") {
-                            match parse_values(&window.values_edit_buffer) {
-                                Ok(values) => {
-                                    ctx.dbc.set_signal_value_descriptions(
-                                        key.0,
-                                        &key.1,
-                                        values,
-                                    );
-                                    *ctx.is_dirty = true;
-                                    window.values_edit_target = None;
-                                }
-                                Err(_) => {
-                                    // 非法输入不退出编辑态，等待修正
-                                }
-                            }
-                        }
-                        ui.same_line();
-                        if ui.small_button("X##matrix_values_cancel") {
+            // Values 列：双击进入行内编辑（0=Off; 1=On）
+            ui.table_set_column_index(col::VALUES as usize);
+            let editing_this = window.values_edit_target.as_ref() == Some(&key);
+            if editing_this {
+                ui.input_text("##matrix_values_edit", &mut window.values_edit_buffer)
+                    .build();
+                ui.same_line();
+                let invalid = parse_values(&window.values_edit_buffer).is_err();
+                if ui.small_button("OK##matrix_values_apply") {
+                    match parse_values(&window.values_edit_buffer) {
+                        Ok(values) => {
+                            ctx.dbc.set_signal_value_descriptions(key.0, &key.1, values);
+                            *ctx.is_dirty = true;
                             window.values_edit_target = None;
                         }
-                        if invalid {
-                            ui.same_line();
-                            ui.text_colored([1.0, 0.3, 0.3, 1.0], "invalid (use 0=Off; 1=On)");
-                        }
-                    } else {
-                        let text = format_values(&row.values);
-                        if text.is_empty() {
-                            ui.text_disabled("-");
-                        } else {
-                            ui.text(&text);
-                            if ui.is_item_hovered() {
-                                ui.set_tooltip(&text);
-                            }
-                        }
-                        if ui.is_item_hovered() && ui.is_mouse_double_clicked(MouseButton::Left) {
-                            window.values_edit_target = Some(key.clone());
-                            window.values_edit_buffer = text;
+                        Err(_) => {
+                            // 非法输入不退出编辑态，等待修正
                         }
                     }
                 }
+                ui.same_line();
+                if ui.small_button("X##matrix_values_cancel") {
+                    window.values_edit_target = None;
+                }
+                if invalid {
+                    ui.same_line();
+                    ui.text_colored([1.0, 0.3, 0.3, 1.0], "invalid (use 0=Off; 1=On)");
+                }
+            } else {
+                let text = format_values(&row.values);
+                if text.is_empty() {
+                    ui.text_disabled("-");
+                } else {
+                    ui.text(&text);
+                    if ui.is_item_hovered() {
+                        ui.set_tooltip(&text);
+                    }
+                }
+                if ui.is_item_hovered() && ui.is_mouse_double_clicked(MouseButton::Left) {
+                    window.values_edit_target = Some(key.clone());
+                    window.values_edit_buffer = text;
+                }
+            }
+        }
     }
     event
 }
@@ -607,7 +661,11 @@ mod tests {
         let parsed = parse_values("3=three; -1=neg; 0=zero").unwrap();
         assert_eq!(
             parsed,
-            vec![(-1, "neg".to_string()), (0, "zero".to_string()), (3, "three".to_string())]
+            vec![
+                (-1, "neg".to_string()),
+                (0, "zero".to_string()),
+                (3, "three".to_string())
+            ]
         );
     }
 
