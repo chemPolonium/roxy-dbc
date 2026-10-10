@@ -190,13 +190,13 @@ fn main() {
 
     // `dbc ...` / `--help` 走无窗口命令行，结果写标准输出后按退出码结束
     if cli::is_cli_invocation(&argv) {
-        cli::attach_parent_console();
         let outcome = cli::execute(&argv);
-        use std::io::Write as _;
-        print!("{}", outcome.out);
-        eprint!("{}", outcome.err);
-        let _ = std::io::stdout().flush();
-        let _ = std::io::stderr().flush();
+        cli::write_stdout(&outcome.out);
+        cli::write_stderr(&outcome.err);
+        // GUI 子系统程序 shell 不会等，提示符要按一下回车才刷新
+        if cli::prompt_needs_redraw() {
+            cli::write_stdout("\npress Enter to redraw the prompt\n");
+        }
         std::process::exit(outcome.code);
     }
 

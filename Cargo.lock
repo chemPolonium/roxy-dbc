@@ -1798,7 +1798,7 @@ dependencies = [
 
 [[package]]
 name = "roxy-dbc"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "bytemuck",
  "calamine",

@@ -1940,63 +1940,156 @@ fn json_str(text: &str) -> String {
     out
 }
 
-/// release 版是 `windows_subsystem = "windows"`：没有控制台，命令行的输出会无处
-/// 可去。从终端启动时认下父进程的控制台，并把标准句柄指过去。debug 版自带控制台，
-/// 这次 attach 失败也无害。被 `> file` 重定向时不接管，否则结果会被丢掉。
+/// release 版是 `windows_subsystem = "windows"`：进程启动时没有控制台，Rust 缓存的
+/// 标准输出句柄是空的，`println!` 会静默丢掉。所以命令行输出一律自己取句柄写——
+/// 继承来的句柄可用就用（`> file`、管道），否则接上父控制台再开 `CONOUT$`（在终端里
+/// 直接跑）。双击启动没有父控制台，写不出去也不报错。
 #[cfg(windows)]
-pub fn attach_parent_console() {
+pub fn write_stdout(text: &str) {
+    console::write(console::STD_OUT, text);
+}
+
+#[cfg(windows)]
+pub fn write_stderr(text: &str) {
+    console::write(console::STD_ERR, text);
+}
+
+#[cfg(not(windows))]
+pub fn write_stdout(text: &str) {
+    use std::io::Write as _;
+    let _ = std::io::stdout().write_all(text.as_bytes());
+}
+
+#[cfg(not(windows))]
+pub fn write_stderr(text: &str) {
+    use std::io::Write as _;
+    let _ = std::io::stderr().write_all(text.as_bytes());
+}
+
+/// 输出是自己接上父控制台写掉的（而不是管道或文件）时为真：shell 不等这种 GUI
+/// 程序，跑完提示符不会自己刷新，所以 main 里补一句让人按回车。重定向时不提，
+/// 免得混进脚本和 AI 读到的输出里。
+pub fn prompt_needs_redraw() -> bool {
+    #[cfg(windows)]
+    {
+        console::used_conout()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[cfg(windows)]
+mod console {
+    use std::ffi::c_void;
+    use std::ptr;
+    use std::sync::Once;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    pub const STD_OUT: u32 = u32::MAX - 10; // (DWORD)-11
+    pub const STD_ERR: u32 = u32::MAX - 11; // (DWORD)-12
     const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
     const GENERIC_WRITE: u32 = 0x4000_0000;
     const FILE_SHARE_WRITE: u32 = 0x0000_0002;
     const OPEN_EXISTING: u32 = 3;
-    const STD_OUTPUT_HANDLE: u32 = u32::MAX - 10; // (DWORD)-11
-    const STD_ERROR_HANDLE: u32 = u32::MAX - 11; // (DWORD)-12
-    const FILE_TYPE_CHAR: u32 = 2;
+    const FILE_TYPE_UNKNOWN: u32 = 0;
+    const INVALID: *mut c_void = -1isize as *mut c_void;
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
-        fn AttachConsole(process: u32) -> i32;
+        fn GetStdHandle(which: u32) -> *mut c_void;
+        fn GetFileType(handle: *mut c_void) -> u32;
+        fn WriteFile(
+            handle: *mut c_void,
+            buffer: *const u8,
+            count: u32,
+            written: *mut u32,
+            overlapped: *mut c_void,
+        ) -> i32;
         fn CreateFileW(
             name: *const u16,
             access: u32,
             share: u32,
-            security: *const u8,
+            security: *const c_void,
             disposition: u32,
             flags: u32,
-            template: isize,
-        ) -> isize;
-        fn SetStdHandle(which: u32, handle: isize) -> i32;
-        fn GetStdHandle(which: u32) -> isize;
-        fn GetFileType(handle: isize) -> u32;
+            template: *const c_void,
+        ) -> *mut c_void;
+        fn AttachConsole(process: u32) -> i32;
+        fn CloseHandle(handle: *mut c_void) -> i32;
     }
 
-    unsafe {
-        if GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) != FILE_TYPE_CHAR {
+    static ATTACHED: Once = Once::new();
+    static USED_CONOUT: AtomicBool = AtomicBool::new(false);
+
+    /// 有没有走过 CONOUT$ 这条路（也就是真的在控制台里跑）
+    pub fn used_conout() -> bool {
+        USED_CONOUT.load(Ordering::Relaxed)
+    }
+
+    fn usable(handle: *mut c_void) -> bool {
+        !handle.is_null()
+            && handle != INVALID
+            && unsafe { GetFileType(handle) != FILE_TYPE_UNKNOWN }
+    }
+
+    pub fn write(which: u32, text: &str) {
+        if text.is_empty() {
             return;
         }
-        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+        let inherited = unsafe { GetStdHandle(which) };
+        let (handle, owned) = if usable(inherited) {
+            (inherited, false)
+        } else {
+            ATTACHED.call_once(|| unsafe {
+                AttachConsole(ATTACH_PARENT_PROCESS);
+            });
+            let mut conout: Vec<u16> = "CONOUT$".encode_utf16().collect();
+            conout.push(0);
+            let opened = unsafe {
+                CreateFileW(
+                    conout.as_ptr(),
+                    GENERIC_WRITE,
+                    FILE_SHARE_WRITE,
+                    ptr::null(),
+                    OPEN_EXISTING,
+                    0,
+                    ptr::null(),
+                )
+            };
+            (opened, true)
+        };
+        if !usable(handle) {
             return;
         }
-        let mut conout: Vec<u16> = "CONOUT$".encode_utf16().collect();
-        conout.push(0);
-        let handle = CreateFileW(
-            conout.as_ptr(),
-            GENERIC_WRITE,
-            FILE_SHARE_WRITE,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            0,
-            0,
-        );
-        if handle != -1 {
-            SetStdHandle(STD_OUTPUT_HANDLE, handle);
-            SetStdHandle(STD_ERROR_HANDLE, handle);
+        if owned {
+            USED_CONOUT.store(true, Ordering::Relaxed);
+        }
+        let bytes = text.as_bytes();
+        let mut offset = 0;
+        unsafe {
+            while offset < bytes.len() {
+                let mut written = 0u32;
+                let count = (bytes.len() - offset).min(u32::MAX as usize) as u32;
+                let ok = WriteFile(
+                    handle,
+                    bytes.as_ptr().add(offset),
+                    count,
+                    &mut written,
+                    ptr::null_mut(),
+                );
+                if ok == 0 || written == 0 {
+                    break;
+                }
+                offset += written as usize;
+            }
+            if owned {
+                CloseHandle(handle);
+            }
         }
     }
 }
-
-#[cfg(not(windows))]
-pub fn attach_parent_console() {}
 
 #[cfg(test)]
 mod tests {

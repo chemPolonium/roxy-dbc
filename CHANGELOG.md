@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-10-10
+
+### Fixed
+- release 版在终端里跑命令行看不到任何输出：它是 GUI 子系统程序，启动时没有控制台，Rust 缓存的标准句柄是空的，`println!` 静默丢掉。现在命令行的输出与错误自己取句柄写（继承的句柄可用就用，否则接上父控制台开 `CONOUT$`），所以在 PowerShell / 终端 / cmd 里直接跑、以及 `> 文件` 和管道都能看到，debug 版行为不变
+- 在终端里直接跑完命令后补一句 `press Enter to redraw the prompt`：GUI 子系统程序 shell 不会等它，提示符要按一下回车才刷新。这句只在真的往控制台写时出现，`> 文件` 与管道里不会有，不污染脚本和 AI 读到的输出
+
 ## [0.11.2] - 2026-10-10
 
 ### Fixed
