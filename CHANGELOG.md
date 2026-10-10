@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-10
+
+### Added
+- 命令行帮助补全写法：`roxy-dbc.exe --help` / `-h` / `/?` / `-?` 列命令与退出码，`roxy-dbc.exe dbc help <命令>`（如 `dbc help message add`）与 `dbc <命令> --help` 一样只列那条命令的选项；帮助文本里也说明了直接给文件名是开窗口
+
 ## [0.11.0] - 2026-10-10
 
 ### Added

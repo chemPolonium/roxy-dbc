@@ -110,7 +110,8 @@ roxy-dbc.exe dbc node add motor.dbc --name ECU3
 roxy-dbc.exe dbc validate motor.dbc
 ```
 
-- 命令有 `show` `comment` `message add|set|delete` `signal add|set|delete` `attribute set` `node add|rename|delete` `validate`，每条的选项用 `roxy-dbc.exe dbc signal add --help` 看
+- 命令有 `show` `comment` `message add|set|delete` `signal add|set|delete` `attribute set` `node add|rename|delete` `validate`
+- 帮助有这几种写法，都退出码 0：`roxy-dbc.exe --help` / `-h` / `/?`（列命令与退出码）、`roxy-dbc.exe dbc signal add --help`（列一条命令的选项）、`roxy-dbc.exe dbc help comment`（同上的另一种写法）
 - 目标写名字或 ID 都认：`--message EngineData`、`--message 0x064`、`--signal EngineData.EngSpeed`；写错时会说明并列出文件里有什么
 - 写回按打开时的编码（UTF-8 / UTF-8 BOM / GBK），先写同目录临时文件再替换，不会留下半个文件；`--out <路径>` 写副本不动原文件，`--backup` 先把原文件存成 `.bak`
 - 值表按 `VAL_` 的写法给：`0 "Off" 1 "On"`，描述带不带引号都行；周期时间写到文件里已声明的那个属性上（`GenMsgCycleTime`，只有 `CycleTime` 时用它）

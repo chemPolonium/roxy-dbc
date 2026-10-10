@@ -388,16 +388,26 @@ impl Outcome {
     }
 }
 
-/// 第一个参数是 dbc / -h / --help / help 时走命令行，其余情况留给图形界面
+/// 帮助的同几种写法，Windows 上的 `/?` 也算
+fn is_help_word(word: &str) -> bool {
+    matches!(word, "-h" | "--help" | "help" | "/?" | "-?")
+}
+
+/// 第一个参数是 dbc / 帮助写法时走命令行，其余情况留给图形界面
 pub fn is_cli_invocation(argv: &[String]) -> bool {
-    matches!(
-        argv.first().map(|s| s.as_str()),
-        Some("dbc") | Some("-h") | Some("--help") | Some("help")
-    )
+    argv.first().map(|s| s.as_str()) == Some("dbc") || argv.first().is_some_and(|s| is_help_word(s))
 }
 
 fn find(path: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|c| c.path == path)
+}
+
+/// `help <命令>` 后面跟的是命令名就给那条命令的帮助，否则给总帮助
+fn help_for(names: &[String]) -> String {
+    match find(&names.join(" ")) {
+        Some(command) => command_usage(command),
+        None => usage(),
+    }
 }
 
 /// 该命令接受的选项名（含按 writes / json 追加的公共选项）
@@ -417,7 +427,10 @@ fn usage() -> String {
     let mut out = String::new();
     out.push_str("roxy-dbc dbc -- edit CAN description files without a window\n\n");
     out.push_str("  roxy-dbc dbc <command> <file.dbc> [options]\n");
-    out.push_str("  roxy-dbc dbc <command> --help    options of one command\n\n");
+    out.push_str("  roxy-dbc dbc <command> --help    options of one command\n");
+    out.push_str("  roxy-dbc dbc help <command>      the same, from the help command\n");
+    out.push_str("  roxy-dbc [file ...]              open files in the window (a bare start)\n");
+    out.push_str("  roxy-dbc --help | -h | /?        this text\n\n");
     out.push_str("commands\n");
     for command in COMMANDS {
         out.push_str(&format!("  {:<34} {}\n", command.path, command.summary));
@@ -473,11 +486,9 @@ impl From<String> for ParseError {
 
 /// 解析 `dbc <命令> <文件> [选项]`；`--help` 时返回帮助文本
 fn parse(argv: &[String]) -> Result<Invocation, ParseError> {
-    // 顶层 `roxy-dbc --help`：没有命令名，只列总帮助
-    if let Some(first) = argv.first()
-        && matches!(first.as_str(), "-h" | "--help" | "help")
-    {
-        return Err(ParseError::Help(usage()));
+    // 帮助写法：`roxy-dbc --help`、`roxy-dbc help <命令>`、`roxy-dbc dbc help <命令>`
+    if argv.first().is_some_and(|first| is_help_word(first)) {
+        return Err(ParseError::Help(help_for(argv.get(1..).unwrap_or(&[]))));
     }
     let rest = argv.get(1..).map_or(&[][..], |r| r);
     let Some(first) = rest.first() else {
@@ -486,8 +497,8 @@ fn parse(argv: &[String]) -> Result<Invocation, ParseError> {
                 .to_string(),
         ));
     };
-    if matches!(first.as_str(), "-h" | "--help" | "help") {
-        return Err(ParseError::Help(usage()));
+    if is_help_word(first) {
+        return Err(ParseError::Help(help_for(rest.get(1..).unwrap_or(&[]))));
     }
     let two_words = match rest.get(1) {
         Some(second) => format!("{first} {second}"),
@@ -518,7 +529,7 @@ fn parse(argv: &[String]) -> Result<Invocation, ParseError> {
     let mut i = consumed;
     while i < rest.len() {
         let token = &rest[i];
-        if token == "-h" || token == "--help" {
+        if matches!(token.as_str(), "-h" | "--help" | "/?" | "-?") {
             return Err(ParseError::Help(command_usage(command)));
         }
         let Some(raw) = token.strip_prefix("--") else {
@@ -2404,6 +2415,26 @@ CM_ BU_ ECU1 \"node text\";
         let outcome = execute(&["dbc".to_string()]);
         assert_eq!(outcome.code, 2);
         assert!(outcome.err.contains("which command?"), "{}", outcome.err);
+
+        // Windows 习惯的 /? 与 -? 也当帮助
+        for word in ["/?", "-?"] {
+            let outcome = execute(&[word.to_string()]);
+            assert_eq!(outcome.code, 0, "{word}: {}", outcome.err);
+            assert!(outcome.out.contains("exit codes"), "{word}");
+        }
+
+        // help 后面跟命令名：只列那条命令
+        let outcome = execute(&["dbc".into(), "help".into(), "comment".into()]);
+        assert!(outcome.out.contains("dbc comment FILE"), "{}", outcome.out);
+        assert!(outcome.out.contains("--text <s>"), "{}", outcome.out);
+        assert!(!outcome.out.contains("--byte-order"), "{}", outcome.out);
+
+        let outcome = execute(&["help".into(), "message".into(), "add".into()]);
+        assert!(
+            outcome.out.contains("dbc message add FILE"),
+            "{}",
+            outcome.out
+        );
 
         let outcome = run(&["signal", "add", "--help"]);
         assert!(
