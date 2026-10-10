@@ -1,10 +1,12 @@
 //! Library entry for roxy-dbc to allow integration tests and external usage.
 pub mod app;
+pub mod cli;
 pub mod editable_dbc;
 pub mod excel;
 pub mod export;
 pub mod fibex;
 pub mod file_encoding;
+pub mod icon;
 pub mod import;
 pub mod ui;
 pub mod win_clipboard;

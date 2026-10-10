@@ -41,7 +41,8 @@ impl AppWindow {
 
             let attributes = Window::default_attributes()
                 .with_inner_size(size)
-                .with_title(format!("Roxy DBC {version}"));
+                .with_title(format!("Roxy DBC {version}"))
+                .with_window_icon(crate::icon::window_icon());
             Arc::new(event_loop.create_window(attributes).unwrap())
         };
 

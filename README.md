@@ -17,6 +17,7 @@
 - 🖱️ **拖放打开** - 直接把 DBC/ARXML/KCD/XLSX 文件拖进窗口即可打开
 - ✏️ **消息与信号编辑** - 全部属性可编辑（含消息 ID），含值表（VAL_）编辑
 - 🏷️ **DBC 属性** - `BA_DEF_` / `BA_` / `BA_DEF_DEF_` 读入、编辑、写回；枚举属性用下拉，Validate 检查取值是否越界或不在枚举列表
+- 🖥️ **命令行改 DBC** - 不开窗口就能加注释、增删改消息与信号、写属性、校验，结果打到 stdout、错误打到 stderr，退出码固定，给脚本和 AI 代理用
 - 🧩 **节点（ECU）管理** - 添加 / 删除 / 重命名网络节点，重命名自动同步收发引用
 - 🗂️ **信号位布局图** - 可视化信号占位，支持 Intel/Motorola 字节序
 - 🎯 **多选批处理** - Ctrl/Shift 多选，批量复制 / 剪切 / 删除
@@ -90,6 +91,32 @@
 - 报文类型、发送类型、周期时间、快速周期、重发次数、延时、信号发送类型、初始值、无效值、非使能值存为 DBC 属性（`GenMsgType` / `GenMsgSendType` / `GenMsgCycleTime` / `GenMsgCycleTimeFast` / `GenMsgNrOfRepetition` / `GenMsgDelayTime` / `GenSigSendType` / `GenSigStartValue` / `GenSigInvalidValue` / `GenSigInactiveValue`），初始值一类支持 `0x` 十六进制；导出模板时按同样的名字读回来
 - 导入过程中被跳过的行（缺 Msg_ID、信号上面没有报文行）会在 Validation Results 窗口里按行号列出
 
+## 🖥️ 命令行改 DBC
+
+同一个 exe 不开窗口也能直接改文件，给脚本和 AI 代理用：
+
+```bash
+roxy-dbc.exe --help                          # 命令清单与选项
+roxy-dbc.exe dbc show motor.dbc              # 节点、报文、信号、注释、属性、值表
+roxy-dbc.exe dbc show motor.dbc --json       # 同一份内容，机器读的形式
+roxy-dbc.exe dbc comment motor.dbc --message EngineData --text "发动机数据"
+roxy-dbc.exe dbc comment motor.dbc --signal EngineData.EngSpeed --text "发动机转速"
+roxy-dbc.exe dbc comment motor.dbc --message EngineData --clear
+roxy-dbc.exe dbc message add motor.dbc --name BrakeData --id 0x1A --size 2 --transmitter ABS --text "制动数据"
+roxy-dbc.exe dbc signal add motor.dbc --message BrakeData --name Pressure --start 0 --bits 12 --byte-order motorola --factor 0.5 --max 200 --unit bar --receivers ECU1 --values "0 idle 1 active"
+roxy-dbc.exe dbc message set motor.dbc --message BrakeData --cycle 20 --size 4
+roxy-dbc.exe dbc attribute set motor.dbc --signal BrakeData.Pressure --name GenSigStartValue --value 0
+roxy-dbc.exe dbc node add motor.dbc --name ECU3
+roxy-dbc.exe dbc validate motor.dbc
+```
+
+- 命令有 `show` `comment` `message add|set|delete` `signal add|set|delete` `attribute set` `node add|rename|delete` `validate`，每条的选项用 `roxy-dbc.exe dbc signal add --help` 看
+- 目标写名字或 ID 都认：`--message EngineData`、`--message 0x064`、`--signal EngineData.EngSpeed`；写错时会说明并列出文件里有什么
+- 写回按打开时的编码（UTF-8 / UTF-8 BOM / GBK），先写同目录临时文件再替换，不会留下半个文件；`--out <路径>` 写副本不动原文件，`--backup` 先把原文件存成 `.bak`
+- 值表按 `VAL_` 的写法给：`0 "Off" 1 "On"`，描述带不带引号都行；周期时间写到文件里已声明的那个属性上（`GenMsgCycleTime`，只有 `CycleTime` 时用它）
+- 结果走 stdout，错误走 stderr；退出码 0 成功、1 `validate` 查出错误、2 命令没做成（选项不对、目标不存在、文件读写失败）
+- 节点注释（`CM_ BU_`）、环境变量（`EV_`）、信号组（`SIG_GROUP_`）、独立值表（`VAL_TABLE_`）本工具不建模：改带这些段的文件时，写回前会在 stderr 说明这些行会丢
+
 ## 🗺️ 位布局图
 
 打开消息窗口即可看到信号位布局：按字节行显示每个信号的占位，颜色区分不同信号，选中的信号高亮描边。支持 Intel（小端，位号线性递增）与 Motorola（大端，字节内递减后折行至下一字节）两种位序。
@@ -115,7 +142,7 @@ roxy-dbc.exe                          # 空启动
 roxy-dbc.exe path\to\file.dbc        # 启动时打开文件
 roxy-dbc.exe a.dbc b.arxml c.kcd     # 同时打开多个文件
 ```
-支持 `.dbc` / `.arxml` / `.xml` / `.fibex` / `.kcd` / `.xlsx`，也可在资源管理器中通过"打开方式"关联到 roxy-dbc。`.xlsx` 会按通信矩阵模板生成一个 DBC 编辑窗口。
+支持 `.dbc` / `.arxml` / `.xml` / `.fibex` / `.kcd` / `.xlsx`，也可在资源管理器中通过"打开方式"关联到 roxy-dbc。`.xlsx` 会按通信矩阵模板生成一个 DBC 编辑窗口。不带窗口改文件见 [命令行改 DBC](#命令行改-dbc)。
 
 ### 从源码构建
 ```bash
@@ -128,12 +155,16 @@ cargo run --release
 ## 📁 项目结构
 
 ```
+build.rs                 # 用 winresource 把 roxy-dbc.ico 嵌进 exe 的资源
+roxy-dbc.ico             # 程序图标，exe 与窗口共用这一份
 src/
 ├── main.rs              # 程序入口，事件循环与拖放处理
+├── cli.rs               # 无窗口命令行：读改 DBC（show / comment / message / signal / attribute / node / validate）
 ├── lib.rs               # 库入口（供集成测试使用）
 ├── app.rs               # 窗口和图形上下文管理
 ├── win_clipboard.rs     # Win32 系统剪贴板后端
 ├── file_encoding.rs     # UTF-8 / GBK 识别与按原编码写回
+├── icon.rs              # 解 roxy-dbc.ico 的 32 位条目，交给 winit 当窗口图标
 ├── editable_dbc.rs      # 数据模型、编辑操作、CAN FD、DBC 属性与 Undo/Redo
 ├── excel.rs             # Excel 通信矩阵模板的读取与写出
 ├── import/              # CAN 侧导入（arxml.rs / kcd.rs）

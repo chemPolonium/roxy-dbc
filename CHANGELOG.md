@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-10
+
+### Added
+- 命令行改 DBC（不开窗口，给脚本和 AI 代理用）
+  - 同一个 exe 多了一条路：`roxy-dbc.exe dbc <命令> <文件> [选项]`；`roxy-dbc.exe --help` 列命令，`roxy-dbc.exe dbc signal add --help` 列一条命令的选项
+  - `show` 打印节点、报文、信号、注释、属性、值表（`--json` 出机器读的形式）；`validate` 跑与 Tools > Validate 相同的检查
+  - `comment` 加 / 改 / 删报文与信号注释（`--message EngineData` / `--signal EngineData.EngSpeed` / `--clear`）
+  - `message add|set|delete`、`signal add|set|delete`、`attribute set`、`node add|rename|delete` 改数据库内容；目标写名字或 ID 都认，写错时报错并列出文件里有什么
+  - 写回沿用打开时的编码（UTF-8 / UTF-8 BOM / GBK），先写同目录临时文件再替换；`--out` 写副本不动原文件，`--backup` 先存 `.bak`
+  - 结果走 stdout、错误走 stderr，退出码 0 成功 / 1 validate 查出错误 / 2 命令没做成
+  - 文件里带本工具不建模的段（`CM_ BU_` 节点注释、`EV_` 环境变量、`SIG_GROUP_`、`VAL_TABLE_`）时，写回前在 stderr 说明这些行会丢
+- 程序图标
+  - exe 文件本身的图标：`build.rs` 用 winresource 把 `roxy-dbc.ico` 嵌进 PE 资源，资源管理器与快捷方式上显示它
+  - 运行时的窗口图标：`src/icon.rs` 从同一个 .ico 里取 32 位的那条图（自下而上的 BGRA 转 RGBA，alpha 全 0 时按 AND 掩码补形状），交给 winit；标题栏与任务栏用这个图标，读不出可用条目时保持系统默认图标
+
 ## [0.10.0] - 2026-10-08
 
 ### Added

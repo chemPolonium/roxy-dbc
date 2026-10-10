@@ -1,11 +1,13 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod app;
+mod cli;
 mod editable_dbc;
 mod excel;
 mod export;
 mod fibex;
 mod file_encoding;
+mod icon;
 mod import;
 mod ui;
 mod win_clipboard;
@@ -183,8 +185,22 @@ impl ApplicationHandler for App {
 fn main() {
     env_logger::init();
 
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+
+    // `dbc ...` / `--help` 走无窗口命令行，结果写标准输出后按退出码结束
+    if cli::is_cli_invocation(&argv) {
+        cli::attach_parent_console();
+        let outcome = cli::execute(&argv);
+        use std::io::Write as _;
+        print!("{}", outcome.out);
+        eprint!("{}", outcome.err);
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        std::process::exit(outcome.code);
+    }
+
     // 命令行参数：启动时打开的文件（可多个），如 roxy-dbc.exe path\to\file.dbc
-    let startup_files: Vec<PathBuf> = std::env::args().skip(1).map(PathBuf::from).collect();
+    let startup_files: Vec<PathBuf> = argv.into_iter().map(PathBuf::from).collect();
 
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Wait); // 等待模式，降低CPU占用
