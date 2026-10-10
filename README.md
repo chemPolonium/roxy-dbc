@@ -73,6 +73,9 @@
 - **Cancel** - 放弃修改并关闭
 - **Apply** - 保存但保持打开，支持持续编辑
 
+### 保存位置
+新建或导出的文件，对话框默认开在"文档"目录；已经打开过文件的窗口，另存为与导出默认开在这个文件自己所在的目录。都不会停在 exe 旁边。关掉没保存过的新窗口时会先问存哪儿，取消则窗口保持打开。
+
 ## 🔀 导入 / 导出
 
 - **导入**: ARXML（CAN-FRAME / I-SIGNAL-I-PDU）和 KCD 文件，File > Import as DBC...；Excel 通信矩阵模板，File > Import Excel Matrix...
@@ -166,6 +169,7 @@ src/
 ├── win_clipboard.rs     # Win32 系统剪贴板后端
 ├── file_encoding.rs     # UTF-8 / GBK 识别与按原编码写回
 ├── icon.rs              # 解 roxy-dbc.ico 的 32 位条目，交给 winit 当窗口图标
+├── paths.rs             # 保存/导出对话框的默认目录：文档，或当前文件所在目录
 ├── editable_dbc.rs      # 数据模型、编辑操作、CAN FD、DBC 属性与 Undo/Redo
 ├── excel.rs             # Excel 通信矩阵模板的读取与写出
 ├── import/              # CAN 侧导入（arxml.rs / kcd.rs）

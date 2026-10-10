@@ -644,6 +644,7 @@ impl DbcWindow {
             );
             let Some(path) = rfd::FileDialog::new()
                 .add_filter("ARXML files", &["arxml"])
+                .set_directory(crate::paths::save_dir_for(&self.file_path))
                 .set_file_name(&default_name)
                 .save_file()
             else {
@@ -672,6 +673,7 @@ impl DbcWindow {
             );
             let Some(path) = rfd::FileDialog::new()
                 .add_filter("Excel files", &["xlsx"])
+                .set_directory(crate::paths::save_dir_for(&self.file_path))
                 .set_file_name(&default_name)
                 .save_file()
             else {
@@ -1019,11 +1021,11 @@ fn messages_display_name(dbc: &EditableDbc, ids: &[u32]) -> String {
 
 fn render_confirm_delete_dialog(ui: &Ui, ui_state: &mut UiState) {
     if ui_state.confirm_delete_dialog.show {
-        ui.open_popup("Confirm Delete");
+        ui.open_popup("Confirm Delete##dbc");
         ui_state.confirm_delete_dialog.show = false;
     }
 
-    let popup = ui.begin_modal_popup("Confirm Delete");
+    let popup = ui.begin_modal_popup("Confirm Delete##dbc");
     let is_open_now = popup.is_some();
     if let Some(_popup) = popup {
         ui.text(format!(
@@ -1053,12 +1055,13 @@ fn render_confirm_delete_dialog(ui: &Ui, ui_state: &mut UiState) {
 }
 
 fn render_close_confirm_dialog(ui: &Ui, ui_state: &mut UiState) {
+    // 弹窗 ID 带 ##dbc：FlexRay 那边也有一个同名确认框，ID 撞了会一起渲染出来
     if ui_state.close_confirm_dialog.show {
-        ui.open_popup("Save Changes");
+        ui.open_popup("Save Changes##dbc");
         ui_state.close_confirm_dialog.show = false;
     }
 
-    if let Some(_popup) = ui.begin_modal_popup("Save Changes") {
+    if let Some(_popup) = ui.begin_modal_popup("Save Changes##dbc") {
         let idx = ui_state.close_confirm_dialog.dbc_window_index.unwrap_or(0);
         let file_name = ui_state
             .dbc_windows
@@ -1075,14 +1078,21 @@ fn render_close_confirm_dialog(ui: &Ui, ui_state: &mut UiState) {
         ui.text(format!("Save changes to '{}'?", file_name));
         ui.separator();
         if ui.button("Save") {
-            if let Some(idx) = ui_state.close_confirm_dialog.dbc_window_index {
-                save_dbc_window(ui_state, idx);
-                if let Some(win) = ui_state.dbc_windows.get_mut(idx) {
+            let pending = ui_state.close_confirm_dialog.dbc_window_index;
+            let saved = match pending {
+                Some(idx) => save_dbc_window(ui_state, idx),
+                None => false,
+            };
+            // 取消另存为就什么都不做：窗口和这个确认框都留着，改动不会凭空丢掉
+            if saved {
+                if let Some(idx) = pending
+                    && let Some(win) = ui_state.dbc_windows.get_mut(idx)
+                {
                     win.is_open = false;
                 }
+                ui_state.close_confirm_dialog.dbc_window_index = None;
+                ui.close_current_popup();
             }
-            ui_state.close_confirm_dialog.dbc_window_index = None;
-            ui.close_current_popup();
         }
         ui.same_line();
         if ui.button("Don't Save") {
@@ -1180,7 +1190,23 @@ fn render_validation_dialog(ui: &Ui, ui_state: &mut UiState) {
     }
 }
 
-pub fn save_dbc_window(ui_state: &mut UiState, idx: usize) {
+/// 把窗口写回文件。false 表示没写成：取消了另存为，或写盘失败
+pub fn save_dbc_window(ui_state: &mut UiState, idx: usize) -> bool {
+    // 从没落盘的窗口只有一个相对文件名（Untitled.dbc），直接写会落在进程当前目录
+    // ——装好后就是 exe 旁边，所以这种先让人选位置
+    if !std::path::Path::new(&ui_state.dbc_windows[idx].file_path).is_absolute() {
+        let default_name = ui_state.dbc_windows[idx].file_path.clone();
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("DBC files", &["dbc"])
+            .set_directory(crate::paths::documents_dir())
+            .set_file_name(default_name)
+            .save_file()
+        else {
+            return false;
+        };
+        ui_state.dbc_windows[idx].file_path = path.to_string_lossy().to_string();
+    }
+
     let win = &mut ui_state.dbc_windows[idx];
     let save_path = win.file_path.clone();
     let dbc_string = win.dbc.to_dbc_string();
@@ -1189,10 +1215,12 @@ pub fn save_dbc_window(ui_state: &mut UiState, idx: usize) {
     match std::fs::write(&save_path, &bytes) {
         Ok(_) => {
             win.is_dirty = false;
+            true
         }
         Err(e) => {
             ui_state.error_dialog.message = format!("Failed to save: {}", e);
             ui_state.error_dialog.show = true;
+            false
         }
     }
 }

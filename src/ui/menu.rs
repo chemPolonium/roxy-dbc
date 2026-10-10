@@ -465,6 +465,7 @@ fn handle_save_fibex(ui_state: &mut UiState, save_as: bool) {
         };
         let Some(path) = rfd::FileDialog::new()
             .add_filter("FIBEX/ARXML files", &["fibex", "fx", "arxml", "xml"])
+            .set_directory(crate::paths::save_dir_for(&file_path))
             .set_file_name(format!("output.{}", ext))
             .save_file()
         else {
@@ -535,6 +536,7 @@ fn handle_import_excel(ui_state: &mut UiState) {
 fn handle_export_excel_template(ui_state: &mut UiState) {
     let Some(path) = rfd::FileDialog::new()
         .add_filter("Excel files", &["xlsx"])
+        .set_directory(crate::paths::documents_dir())
         .set_file_name("CanMatrix.xlsx")
         .save_file()
     else {
@@ -625,6 +627,7 @@ fn handle_save_dbc(ui_state: &mut UiState, save_as: bool) {
             .to_string();
         let Some(path) = rfd::FileDialog::new()
             .add_filter("DBC files", &["dbc"])
+            .set_directory(crate::paths::save_dir_for(file_path))
             .set_file_name(default_name)
             .save_file()
         else {

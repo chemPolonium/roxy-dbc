@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-10-10
+
+### Fixed
+- 保存与导出对话框不再停在 exe 所在的文件夹：新建或导出时默认落在"文档"（走 Windows 已知文件夹接口，OneDrive 重定向过的也跟着走），已经打开过文件的窗口，另存为与各导出默认停在它自己所在的目录
+- 关掉没保存过的新窗口时改为弹另存为让人选位置；原来会把 `Untitled.dbc` 直接写进进程当前目录——双击或从开始菜单启动时那就是 exe 旁边。取消另存为则窗口和确认框都留着，改动不会凭空丢
+- 「Save Changes」与「Confirm Delete」两个确认框在 DBC 侧和 FlexRay 侧用了同一个弹窗 ID，所以关掉脏的 DBC 窗口时框子里会多出一段 FlexRay 的确认（文件名显示成空），点它会影响错的那个窗口；两边现在各自带 ID，只出该出的那一个
+
 ## [0.11.1] - 2026-10-10
 
 ### Added

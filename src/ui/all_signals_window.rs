@@ -394,6 +394,7 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
         );
         let Some(path) = rfd::FileDialog::new()
             .add_filter("CSV files", &["csv"])
+            .set_directory(crate::paths::save_dir_for(ctx.file_path))
             .set_file_name(&default_name)
             .save_file()
         else {

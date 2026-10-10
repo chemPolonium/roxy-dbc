@@ -1493,11 +1493,11 @@ fn frames_display_name(fibex: &EditableFibex, names: &[String]) -> String {
 
 fn render_confirm_delete_dialog(ui: &Ui, ui_state: &mut FibexUiState) {
     if ui_state.confirm_delete_dialog.show {
-        ui.open_popup("Confirm Delete");
+        ui.open_popup("Confirm Delete##fibex");
         ui_state.confirm_delete_dialog.show = false;
     }
 
-    let popup = ui.begin_modal_popup("Confirm Delete");
+    let popup = ui.begin_modal_popup("Confirm Delete##fibex");
     let is_open_now = popup.is_some();
     if let Some(_popup) = popup {
         ui.text(format!(
@@ -1584,12 +1584,13 @@ fn execute_delete(ui_state: &mut FibexUiState) {
 }
 
 fn render_close_confirm_dialog(ui: &Ui, ui_state: &mut FibexUiState) {
+    // 弹窗 ID 带 ##fibex：DBC 那边也有一个同名确认框，ID 撞了会一起渲染出来
     if ui_state.close_confirm_dialog.show {
-        ui.open_popup("Save Changes");
+        ui.open_popup("Save Changes##fibex");
         ui_state.close_confirm_dialog.show = false;
     }
 
-    if let Some(_popup) = ui.begin_modal_popup("Save Changes") {
+    if let Some(_popup) = ui.begin_modal_popup("Save Changes##fibex") {
         let idx = ui_state
             .close_confirm_dialog
             .fibex_window_index

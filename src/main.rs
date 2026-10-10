@@ -9,6 +9,7 @@ mod fibex;
 mod file_encoding;
 mod icon;
 mod import;
+mod paths;
 mod ui;
 mod win_clipboard;
 

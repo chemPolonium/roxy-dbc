@@ -185,6 +185,7 @@ pub fn render_export_button(ui: &Ui, fibex: &EditableFibex, file_path: &str) -> 
     );
     let path = rfd::FileDialog::new()
         .add_filter("CSV files", &["csv"])
+        .set_directory(crate::paths::save_dir_for(file_path))
         .set_file_name(&default_name)
         .save_file()?;
     match std::fs::write(&path, &bytes) {

@@ -8,6 +8,7 @@ pub mod fibex;
 pub mod file_encoding;
 pub mod icon;
 pub mod import;
+pub mod paths;
 pub mod ui;
 pub mod win_clipboard;
 
