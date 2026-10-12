@@ -99,23 +99,32 @@
 同一个 exe 不开窗口也能直接改文件，给脚本和 AI 代理用：
 
 ```bash
-roxy-dbc.exe --help                          # 命令清单与选项
-roxy-dbc.exe dbc show motor.dbc              # 节点、报文、信号、注释、属性、值表
-roxy-dbc.exe dbc show motor.dbc --json       # 同一份内容，机器读的形式
-roxy-dbc.exe dbc comment motor.dbc --message EngineData --text "发动机数据"
-roxy-dbc.exe dbc comment motor.dbc --signal EngineData.EngSpeed --text "发动机转速"
-roxy-dbc.exe dbc comment motor.dbc --message EngineData --clear
-roxy-dbc.exe dbc message add motor.dbc --name BrakeData --id 0x1A --size 2 --transmitter ABS --text "制动数据"
-roxy-dbc.exe dbc signal add motor.dbc --message BrakeData --name Pressure --start 0 --bits 12 --byte-order motorola --factor 0.5 --max 200 --unit bar --receivers ECU1 --values "0 idle 1 active"
-roxy-dbc.exe dbc message set motor.dbc --message BrakeData --cycle 20 --size 4
-roxy-dbc.exe dbc attribute set motor.dbc --signal BrakeData.Pressure --name GenSigStartValue --value 0
-roxy-dbc.exe dbc node add motor.dbc --name ECU3
+roxy-dbc.exe dbc shell motor.dbc             # 进去一行一条命令，不用再写文件名
+roxy-dbc.exe --help                          # 命令清单与退出码
+roxy-dbc.exe dbc list msg motor.dbc          # 一行一条报文：ID、长度、帧格式、发送节点、信号数、周期
+roxy-dbc.exe dbc list sig motor.dbc          # 一行一个信号：位置、缩放、单位、接收者
+roxy-dbc.exe dbc show motor.dbc              # 全部细节：注释、属性、值表
+roxy-dbc.exe dbc show motor.dbc msg EngineData         # 只看一条报文
+roxy-dbc.exe dbc show motor.dbc sig EngSpeed           # 只给信号名，全文件唯一就认
+roxy-dbc.exe dbc show EngineData.EngSpeed motor.dbc    # 文件放前放后都行
+roxy-dbc.exe dbc show motor.dbc --json        # 同一份内容，机器读的形式
+roxy-dbc.exe dbc comment motor.dbc msg EngineData --text "发动机数据"
+roxy-dbc.exe dbc comment motor.dbc sig EngineData.EngSpeed --text "发动机转速"
+roxy-dbc.exe dbc comment motor.dbc msg EngineData --clear
+roxy-dbc.exe dbc msg add motor.dbc BrakeData --id 0x1A --size 2 --transmitter ABS --text "制动数据"
+roxy-dbc.exe dbc sig add motor.dbc BrakeData.Pressure --start 0 --bits 12 --byte-order motorola --factor 0.5 --max 200 --unit bar --receivers ECU1 --values "0 idle 1 active"
+roxy-dbc.exe dbc msg set motor.dbc BrakeData --cycle 20 --size 4
+roxy-dbc.exe dbc attribute set motor.dbc sig BrakeData.Pressure --name GenSigStartValue --value 0
+roxy-dbc.exe dbc node add motor.dbc ECU3
+roxy-dbc.exe dbc node rename motor.dbc ECU3 ECU4
 roxy-dbc.exe dbc validate motor.dbc
 ```
 
-- 命令有 `show` `comment` `message add|set|delete` `signal add|set|delete` `attribute set` `node add|rename|delete` `validate`
+- 命令有 `shell` `list` `show` `comment` `message add|set|delete` `signal add|set|delete` `attribute set` `node add|rename|delete` `validate`；`list` 是一行一个对象的扫读视图，`show` 给细节
+- 目标用位置参数：`msg EngineData`、`sig EngineData.EngSpeed`，或者只给名字（带点当信号，不带点当报文）；`--message` / `--signal` 这些显式写法照样认，同一个目标写两遍且不一致会报错。`msg` / `sig` 也能缩写命令组：`msg add` 就是 `message add`
+- `dbc shell <文件>` 是同一批命令的交互模式：进去后文件名固定，改动先攒在内存里，`save` 才写回原文件，`open <文件>` 换文件，`help` 列这些，`quit` 退出（有未保存的改动时先拒绝，`quit --force` 才走）。带空格的文本用双引号包住：`comment msg EngineData --text "发动机 数据"`
 - 帮助有这几种写法，都退出码 0：`roxy-dbc.exe --help` / `-h` / `/?`（列命令与退出码）、`roxy-dbc.exe dbc signal add --help`（列一条命令的选项）、`roxy-dbc.exe dbc help comment`（同上的另一种写法）
-- 目标写名字或 ID 都认：`--message EngineData`、`--message 0x064`、`--signal EngineData.EngSpeed`；写错时会说明并列出文件里有什么
+- 目标写名字或 ID 都认：`msg EngineData`、`msg 0x064`、`sig EngineData.EngSpeed`；写错时会说明并列出文件里有什么
 - 写回按打开时的编码（UTF-8 / UTF-8 BOM / GBK），先写同目录临时文件再替换，不会留下半个文件；`--out <路径>` 写副本不动原文件，`--backup` 先把原文件存成 `.bak`
 - 值表按 `VAL_` 的写法给：`0 "Off" 1 "On"`，描述带不带引号都行；周期时间写到文件里已声明的那个属性上（`GenMsgCycleTime`，只有 `CycleTime` 时用它）
 - 结果走 stdout，错误走 stderr；退出码 0 成功、1 `validate` 查出错误、2 命令没做成（选项不对、目标不存在、文件读写失败）

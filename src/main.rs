@@ -1,4 +1,6 @@
-#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+//! 程序入口。exe 是 console 子系统：这样 `roxy-dbc dbc ...` 与 `dbc shell` 能被
+//! shell 正常等待、能读键盘。走图形界面时再把控制台摘掉（`cli::detach_console_for_gui`），
+//! 双击启动不会留下黑框。
 
 mod app;
 mod cli;
@@ -191,14 +193,16 @@ fn main() {
     // `dbc ...` / `--help` 走无窗口命令行，结果写标准输出后按退出码结束
     if cli::is_cli_invocation(&argv) {
         let outcome = cli::execute(&argv);
-        cli::write_stdout(&outcome.out);
-        cli::write_stderr(&outcome.err);
-        // GUI 子系统程序 shell 不会等，提示符要按一下回车才刷新
-        if cli::prompt_needs_redraw() {
-            cli::write_stdout("\npress Enter to redraw the prompt\n");
-        }
+        use std::io::Write as _;
+        print!("{}", outcome.out);
+        eprint!("{}", outcome.err);
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
         std::process::exit(outcome.code);
     }
+
+    // 图形界面不需要控制台：先藏掉窗口再断开，双击启动只看到窗口
+    cli::detach_console_for_gui();
 
     // 命令行参数：启动时打开的文件（可多个），如 roxy-dbc.exe path\to\file.dbc
     let startup_files: Vec<PathBuf> = argv.into_iter().map(PathBuf::from).collect();

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-10-12
+
+### Added
+- `roxy-dbc.exe dbc shell <文件>` 进交互模式，像 sqlite3 那样：进去之后文件名就固定了，一行一条命令，不用再重复路径与选项前缀
+  - 命令与一次性命令行同名同选项：`show` `comment` `message add|set|delete` `signal add|set|delete` `attribute set` `node add|rename|delete` `validate`，只是省掉文件参数
+  - 改动先进内存，报一句 `not written yet -- type save to write <文件>`；`save` 才写回原文件（保持打开时的编码），`open <文件>` 换文件（没保存时不让换），`help` 列这些，`quit` 退出（有未保存改动时先拒绝，`quit --force` 才走）
+  - 一行里带空格的文本用双引号包住：`comment --message EngineData --text "发动机 数据"`
+  - 交互里没有 `--out` / `--backup`：那是"当场写去别处"的意思，与"改了先攒着"矛盾，会直接说明并拒绝
+- 命令行的目标改成位置参数，并给对象种类加了短名
+  - `dbc list msg FILE` / `list sig` / `list node`：一行一个对象的扫读视图（报文给 ID、长度、帧格式、发送节点、信号数、周期；信号给位置、缩放、单位、接收者；节点给发/收数量），细节仍然看 `show`；`--json` 同样可出
+  - 目标直接跟在命令后面：`show FILE msg EngineData`、`comment FILE sig EngineData.EngSpeed --text "..."`、`msg set FILE BrakeData --cycle 20`、`node rename FILE ABS ABS2`；只给名字时也认（带点当信号，不带点当报文），`sig EngSpeed` 这种只给信号名的写法在全文件唯一时才认，不唯一会列出它出现在哪些报文里
+  - `msg` / `sig` 也能缩写命令组：`msg add`、`sig set` 与 `message add`、`signal set` 是同一条
+  - 原来的 `--message` / `--signal` / `--name` / `--to` 全部照旧可用；同一个目标用两种方式写出不同值时直接报错，不猜该听哪个
+  - 文件位置不再固定：放在目标前后都行，程序认带 `.dbc` 的或磁盘上确实存在的那个词
+  - 只写种类词不给名字（`show msg`）不再被当成"有个报文叫 msg"，而是提示 `show msg <名字>`，或直接 `list msg` 看全部
+
+### Changed
+- exe 改成 console 子系统程序：shell 会等它跑完，所以命令行的输出、退出码和 `dbc shell` 的键盘输入都正常，不再需要之前那套自己取句柄写 `CONOUT$`、跑完提示按回车的绕法。走图形界面时先隐藏再断开控制台，双击与从开始菜单打开不会留下黑框；代价是在终端里启动 GUI 时，提示符会一直被占用到程序关闭
+
 ## [0.11.3] - 2026-10-10
 
 ### Fixed

@@ -38,6 +38,24 @@ struct Command {
     writes: bool,
     /// 支持 --json 的只读命令
     json: bool,
+    /// 位置参数在这条命令里代表什么
+    target: Target,
+}
+
+/// 位置参数的含义。目标一律可以写成 `msg EngineData` / `sig EngineData.EngSpeed`，
+/// 也可以光给名字（带点就当信号）；`--message` / `--signal` 这些显式写法照样认。
+#[derive(Clone, Copy, PartialEq)]
+enum Target {
+    /// 不收位置参数
+    None,
+    /// 选一个已存在的对象
+    Select,
+    /// 新建或改名要用的对象名
+    Name,
+    /// 节点名：`node add Pump`、`node rename ABS ABS2`
+    Node,
+    /// 对象种类：`list msg` / `list sig` / `list node`
+    Kind,
 }
 
 const OPT_MESSAGE: Opt = Opt {
@@ -179,25 +197,45 @@ const OPT_JSON: Opt = Opt {
 
 const COMMANDS: &[Command] = &[
     Command {
+        path: "shell",
+        summary: "stay inside one file and type commands, like sqlite3 (see: help once inside)",
+        syntax: "dbc shell <file.dbc>",
+        options: &[],
+        writes: false,
+        json: false,
+        target: Target::None,
+    },
+    Command {
         path: "show",
         summary: "print the database: nodes, messages, signals, comments, attributes, value tables",
-        syntax: "dbc show FILE [--message <M>] [--json]",
+        syntax: "dbc show FILE [msg <M> | sig <M.S>] [--json]",
         options: &[OPT_MESSAGE, OPT_JSON],
         writes: false,
         json: true,
+        target: Target::Select,
+    },
+    Command {
+        path: "list",
+        summary: "one line per message, signal or node -- what fits on a screen; show gives the detail",
+        syntax: "dbc list FILE [msg | sig | node] [--json]",
+        options: &[OPT_JSON],
+        writes: false,
+        json: true,
+        target: Target::Kind,
     },
     Command {
         path: "comment",
         summary: "add, replace or remove a message or signal comment (CM_)",
-        syntax: "dbc comment FILE (--message <M> | --signal <M.S>) (--text <s> | --clear)",
+        syntax: "dbc comment FILE (msg <M> | sig <M.S>) (--text <s> | --clear)",
         options: &[OPT_MESSAGE, OPT_SIGNAL, OPT_TEXT, OPT_CLEAR],
         writes: true,
         json: false,
+        target: Target::Select,
     },
     Command {
         path: "message add",
         summary: "add a message",
-        syntax: "dbc message add FILE --name <N> [--id <id>] [--size <bytes>] [--transmitter <node>] [--frame <format>] [--cycle <ms>] [--text <s>]",
+        syntax: "dbc message add FILE <name> [--id <id>] [--size <bytes>] [--transmitter <node>] [--frame <format>] [--cycle <ms>] [--text <s>]",
         options: &[
             OPT_NAME,
             OPT_ID,
@@ -209,11 +247,12 @@ const COMMANDS: &[Command] = &[
         ],
         writes: true,
         json: false,
+        target: Target::Name,
     },
     Command {
         path: "message set",
         summary: "change message fields; only the options given change",
-        syntax: "dbc message set FILE --message <M> [--id <id>] [--name <n>] [--size <bytes>] [--transmitter <node>] [--frame <format>] [--cycle <ms>] [--text <s> | --clear]",
+        syntax: "dbc message set FILE <M> [--id <id>] [--name <n>] [--size <bytes>] [--transmitter <node>] [--frame <format>] [--cycle <ms>] [--text <s> | --clear]",
         options: &[
             OPT_MESSAGE,
             OPT_ID,
@@ -227,19 +266,21 @@ const COMMANDS: &[Command] = &[
         ],
         writes: true,
         json: false,
+        target: Target::Select,
     },
     Command {
         path: "message delete",
         summary: "delete a message with its signals",
-        syntax: "dbc message delete FILE --message <M>",
+        syntax: "dbc message delete FILE <M>",
         options: &[OPT_MESSAGE],
         writes: true,
         json: false,
+        target: Target::Select,
     },
     Command {
         path: "signal add",
-        summary: "add a signal to a message",
-        syntax: "dbc signal add FILE --message <M> --name <S> --start <bit> --bits <n> [--byte-order <order>] [--type <type>] [--factor <v>] [--offset <v>] [--min <v>] [--max <v>] [--unit <s>] [--receivers <a,b>] [--values <VAL_ text>] [--text <s>]",
+        summary: "add a signal to a message; the name may be written Message.Signal",
+        syntax: "dbc signal add FILE <M.S> --start <bit> --bits <n> [--byte-order <order>] [--type <type>] [--factor <v>] [--offset <v>] [--min <v>] [--max <v>] [--unit <s>] [--receivers <a,b>] [--values <VAL_ text>] [--text <s>]",
         options: &[
             OPT_MESSAGE,
             OPT_NAME,
@@ -258,11 +299,12 @@ const COMMANDS: &[Command] = &[
         ],
         writes: true,
         json: false,
+        target: Target::Name,
     },
     Command {
         path: "signal set",
         summary: "change signal fields; only the options given change. Renaming updates every reference",
-        syntax: "dbc signal set FILE --signal <M.S> [--name <n>] [--start <bit>] [--bits <n>] [--byte-order <order>] [--type <type>] [--factor <v>] [--offset <v>] [--min <v>] [--max <v>] [--unit <s>] [--receivers <a,b>] [--values <VAL_ text>] [--text <s> | --clear]",
+        syntax: "dbc signal set FILE <M.S> [--name <n>] [--start <bit>] [--bits <n>] [--byte-order <order>] [--type <type>] [--factor <v>] [--offset <v>] [--min <v>] [--max <v>] [--unit <s>] [--receivers <a,b>] [--values <VAL_ text>] [--text <s> | --clear]",
         options: &[
             OPT_SIGNAL,
             OPT_NAME,
@@ -282,46 +324,52 @@ const COMMANDS: &[Command] = &[
         ],
         writes: true,
         json: false,
+        target: Target::Select,
     },
     Command {
         path: "signal delete",
         summary: "delete a signal",
-        syntax: "dbc signal delete FILE --signal <M.S>",
+        syntax: "dbc signal delete FILE <M.S>",
         options: &[OPT_SIGNAL],
         writes: true,
         json: false,
+        target: Target::Select,
     },
     Command {
         path: "attribute set",
         summary: "set or remove a message / signal attribute (BA_); an undeclared name gets a declaration wide enough for the value",
-        syntax: "dbc attribute set FILE (--message <M> | --signal <M.S>) --name <Attribute> (--value <v> | --clear)",
+        syntax: "dbc attribute set FILE (msg <M> | sig <M.S>) --name <Attribute> (--value <v> | --clear)",
         options: &[OPT_MESSAGE, OPT_SIGNAL, OPT_ATTR, OPT_VALUE, OPT_CLEAR],
         writes: true,
         json: false,
+        target: Target::Select,
     },
     Command {
         path: "node add",
         summary: "add network nodes (BU_) by name",
-        syntax: "dbc node add FILE --name <N>",
+        syntax: "dbc node add FILE <name>",
         options: &[OPT_NAME],
         writes: true,
         json: false,
+        target: Target::Node,
     },
     Command {
         path: "node rename",
         summary: "rename a node and update every transmitter and receiver reference",
-        syntax: "dbc node rename FILE --name <N> --to <new>",
+        syntax: "dbc node rename FILE <name> <new name>",
         options: &[OPT_NAME, OPT_TO],
         writes: true,
         json: false,
+        target: Target::Node,
     },
     Command {
         path: "node delete",
         summary: "delete a node; references to it are left as they are and validate reports them",
-        syntax: "dbc node delete FILE --name <N>",
+        syntax: "dbc node delete FILE <name>",
         options: &[OPT_NAME],
         writes: true,
         json: false,
+        target: Target::Node,
     },
     Command {
         path: "validate",
@@ -330,10 +378,22 @@ const COMMANDS: &[Command] = &[
         options: &[OPT_JSON],
         writes: false,
         json: true,
+        target: Target::None,
     },
 ];
 
+/// 短写法：命令组的名字也能缩写，`msg add` 与 `message add` 是同一条
+const ALIASES: &[(&str, &str)] = &[
+    ("msg add", "message add"),
+    ("msg set", "message set"),
+    ("msg delete", "message delete"),
+    ("sig add", "signal add"),
+    ("sig set", "signal set"),
+    ("sig delete", "signal delete"),
+];
+
 /// 命令行给出的选项：取值选项进 values，开关进 switches
+#[derive(Default)]
 struct Args {
     values: BTreeMap<String, String>,
     switches: Vec<String>,
@@ -399,6 +459,11 @@ pub fn is_cli_invocation(argv: &[String]) -> bool {
 }
 
 fn find(path: &str) -> Option<&'static Command> {
+    let path = ALIASES
+        .iter()
+        .find(|(from, _)| *from == path)
+        .map(|(_, to)| *to)
+        .unwrap_or(path);
     COMMANDS.iter().find(|c| c.path == path)
 }
 
@@ -427,6 +492,7 @@ fn usage() -> String {
     let mut out = String::new();
     out.push_str("roxy-dbc dbc -- edit CAN description files without a window\n\n");
     out.push_str("  roxy-dbc dbc <command> <file.dbc> [options]\n");
+    out.push_str("  roxy-dbc dbc shell <file.dbc>    stay inside one file and type commands\n");
     out.push_str("  roxy-dbc dbc <command> --help    options of one command\n");
     out.push_str("  roxy-dbc dbc help <command>      the same, from the help command\n");
     out.push_str("  roxy-dbc [file ...]              open files in the window (a bare start)\n");
@@ -525,7 +591,8 @@ fn parse(argv: &[String]) -> Result<Invocation, ParseError> {
     let known = options_of(command);
     let mut values = BTreeMap::new();
     let mut switches = Vec::new();
-    let mut file: Option<PathBuf> = None;
+    // 不带 -- 的词：最后一个是 FILE，前面的按命令的含义当目标用（msg / sig / 名字）
+    let mut plain: Vec<String> = Vec::new();
     let mut i = consumed;
     while i < rest.len() {
         let token = &rest[i];
@@ -533,14 +600,9 @@ fn parse(argv: &[String]) -> Result<Invocation, ParseError> {
             return Err(ParseError::Help(command_usage(command)));
         }
         let Some(raw) = token.strip_prefix("--") else {
-            if file.is_none() {
-                file = Some(PathBuf::from(token));
-                i += 1;
-                continue;
-            }
-            return Err(ParseError::Error(format!(
-                "unexpected argument \"{token}\" -- FILE is the only plain argument"
-            )));
+            plain.push(token.clone());
+            i += 1;
+            continue;
         };
         let (name, inline) = match raw.split_once('=') {
             Some((n, v)) => (n, Some(v.to_string())),
@@ -578,17 +640,153 @@ fn parse(argv: &[String]) -> Result<Invocation, ParseError> {
         i += 1;
     }
 
-    let file = file.ok_or_else(|| {
-        format!(
-            "no file given. usage: roxy-dbc {}",
-            command.syntax.replace("FILE", "<file.dbc>")
-        )
-    })?;
+    // FILE 写在目标前面还是最后都行：认带 .dbc 的、或磁盘上确实存在的那个词，
+    // 剩下的才是目标（报文/信号/节点名里不会有 .dbc，也不会有路径分隔符）
+    let (file, words) = match plain.iter().position(|word| looks_like_file(word)) {
+        Some(index) => {
+            let mut rest = plain.clone();
+            let file = rest.remove(index);
+            (PathBuf::from(file), rest)
+        }
+        None if plain.is_empty() => {
+            return Err(ParseError::Error(format!(
+                "no file given. usage: roxy-dbc {}",
+                command.syntax.replace("FILE", "<file.dbc>")
+            )));
+        }
+        None => {
+            let (last, rest) = plain.split_last().expect("checked non-empty");
+            (PathBuf::from(last), rest.to_vec())
+        }
+    };
+    if let Err(message) = apply_positional(command, &words, &mut values) {
+        return Err(ParseError::Error(message));
+    }
     Ok(Invocation {
         command,
         file,
         args: Args { values, switches },
     })
+}
+
+fn looks_like_file(word: &str) -> bool {
+    word.rsplit('.')
+        .next()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("dbc"))
+        || Path::new(word).is_file()
+}
+
+/// 记一个位置参数换来的选项；同一个目标又写选项就报错，别让人猜哪个算
+fn set(values: &mut BTreeMap<String, String>, key: &str, value: &str) -> Result<(), String> {
+    if let Some(previous) = values.get(key) {
+        let previous = previous.clone();
+        if previous != value {
+            return Err(format!(
+                "{value} and --{key} {previous} name the same thing twice -- give it one way"
+            ));
+        }
+    }
+    values.insert(key.to_string(), value.to_string());
+    Ok(())
+}
+
+/// 把位置参数翻译成对应选项：`msg EngineData`、`sig EngineData.EngSpeed`、光一个
+/// 名字（带点当信号）；节点命令是 `node add Pump` / `node rename ABS ABS2` 那种
+fn apply_positional(
+    command: &Command,
+    words: &[String],
+    values: &mut BTreeMap<String, String>,
+) -> Result<(), String> {
+    if words.is_empty() {
+        return Ok(());
+    }
+    let usage = format!("roxy-dbc {}", command.syntax);
+    match command.target {
+        Target::None => Err(format!(
+            "\"dbc {}\" takes no target before the file. usage: {usage}",
+            command.path
+        )),
+        Target::Select => match words {
+            // 光写 `show msg` 是想看清单，不是有个报文叫 msg
+            [kind] if matches!(kind.as_str(), "msg" | "message" | "sig" | "signal") => {
+                let list = if kind.starts_with('s') { "sig" } else { "msg" };
+                Err(format!(
+                    "\"{kind}\" needs a name after it: {} {} <name> -- or list {} to see them all",
+                    command.path, kind, list
+                ))
+            }
+            [name] => {
+                let key = if name.contains('.') {
+                    "signal"
+                } else {
+                    "message"
+                };
+                set(values, key, name)
+            }
+            [kind, name] if matches!(kind.as_str(), "msg" | "message") => {
+                set(values, "message", name)
+            }
+            [kind, name] if matches!(kind.as_str(), "sig" | "signal") => {
+                set(values, "signal", name)
+            }
+            other => Err(format!(
+                "\"{}\" is not a target of \"dbc {}\". usage: {usage}",
+                other.join(" "),
+                command.path
+            )),
+        },
+        Target::Name => {
+            let [name] = words else {
+                return Err(format!(
+                    "\"dbc {}\" takes one name before the file. usage: {usage}",
+                    command.path
+                ));
+            };
+            // 信号可以写成 EngineData.OilPress，一条给全父报文和新名字
+            match name.split_once('.') {
+                Some((message, signal)) if command.path == "signal add" => {
+                    set(values, "message", message)?;
+                    set(values, "name", signal)
+                }
+                _ => set(values, "name", name),
+            }
+        }
+        Target::Node => match words {
+            [name] => set(values, "name", name),
+            [name, to] if command.path == "node rename" => {
+                set(values, "name", name)?;
+                set(values, "to", to)
+            }
+            other => Err(format!(
+                "\"dbc {}\" takes {} before the file, got \"{}\". usage: {usage}",
+                command.path,
+                if command.path == "node rename" {
+                    "old and new name"
+                } else {
+                    "one name"
+                },
+                other.join(" ")
+            )),
+        },
+        Target::Kind => {
+            let [kind] = words else {
+                return Err(format!(
+                    "\"dbc list\" takes one of msg, sig, node. usage: {usage}"
+                ));
+            };
+            let kind = match kind.as_str() {
+                "msg" | "message" | "messages" => "message",
+                "sig" | "signal" | "signals" => "signal",
+                "node" | "nodes" => "node",
+                other => {
+                    return Err(format!(
+                        "\"{other}\" is not a kind of thing to list -- use msg, sig or node"
+                    ));
+                }
+            };
+            set(values, "what", kind)
+        }
+    }
 }
 
 /// 已读入的 DBC 与它的编码，写回时按原编码输出
@@ -642,17 +840,21 @@ fn dropped_sections(text: &str) -> Vec<String> {
 }
 
 /// 写出：默认原地替换，--out 写别处（新文件一律 UTF-8）。同目录临时文件 + rename，
-/// 中途失败不会留下半个 DBC。
-fn save(
+/// 写盘的结果：给人看的报告，以及会丢掉的段（一次性命令行把它们送到 stderr）
+struct Written {
+    report: String,
+    warnings: Vec<String>,
+}
+
+/// 把数据库写到文件：默认原地替换，`--out` 写别处（新文件一律 UTF-8）。
+/// 同目录临时文件 + rename，中途失败不会留下半个 DBC。
+fn write_file(
     loaded: &Loaded,
     dbc: &EditableDbc,
-    args: &Args,
-    changes: &[String],
-) -> Result<Outcome, String> {
-    let target = match args.value("out") {
-        Some(path) => PathBuf::from(path),
-        None => loaded.path.clone(),
-    };
+    out: Option<&Path>,
+    backup: bool,
+) -> Result<Written, String> {
+    let target = out.unwrap_or(&loaded.path);
     let (encoding, bom) = if target == loaded.path {
         (loaded.encoding, loaded.had_bom)
     } else {
@@ -661,22 +863,14 @@ fn save(
     };
 
     let mut report = String::new();
-    for change in changes {
-        report.push_str(change);
-        report.push('\n');
-    }
-    if changes.is_empty() {
-        report.push_str("nothing to change\n");
-    }
-
     let bytes = encode_to_bytes(&dbc.to_dbc_string(), encoding, bom);
-    if args.flag("backup") && target == loaded.path {
-        let backup = backup_path(&loaded.path);
-        std::fs::copy(&loaded.path, &backup)
-            .map_err(|e| format!("cannot write {}: {e}", backup.display()))?;
-        report.push_str(&format!("backup: {}\n", backup.display()));
+    if backup && target == loaded.path {
+        let copy = backup_path(&loaded.path);
+        std::fs::copy(&loaded.path, &copy)
+            .map_err(|e| format!("cannot write {}: {e}", copy.display()))?;
+        report.push_str(&format!("backup: {}\n", copy.display()));
     }
-    atomic_write(&target, &bytes)?;
+    atomic_write(target, &bytes)?;
     report.push_str(&format!(
         "wrote {} ({}{}, {} messages, {} signals)\n",
         target.display(),
@@ -688,7 +882,43 @@ fn save(
             .map(|m| m.signals().len())
             .sum::<usize>(),
     ));
-    Ok(warn_dropped(loaded, report))
+    Ok(Written {
+        report,
+        warnings: loaded.dropped.clone(),
+    })
+}
+
+/// 一次性命令行的落盘：改动说明 + 写文件 + 丢弃提示走 stderr
+fn save(
+    loaded: &Loaded,
+    dbc: &EditableDbc,
+    args: &Args,
+    changes: &[String],
+) -> Result<Outcome, String> {
+    let mut report = String::new();
+    for change in changes {
+        report.push_str(change);
+        report.push('\n');
+    }
+    if changes.is_empty() {
+        report.push_str("nothing to change\n");
+    }
+    let written = write_file(
+        loaded,
+        dbc,
+        args.value("out").map(Path::new),
+        args.flag("backup"),
+    )?;
+    report.push_str(&written.report);
+    let mut err = String::new();
+    for line in &written.warnings {
+        err.push_str(&format!("warning: {line}\n"));
+    }
+    Ok(Outcome {
+        out: report,
+        err,
+        code: 0,
+    })
 }
 
 fn backup_path(path: &Path) -> PathBuf {
@@ -714,19 +944,6 @@ fn atomic_write(target: &Path, bytes: &[u8]) -> Result<(), String> {
         let _ = std::fs::remove_file(&tmp);
         format!("cannot replace {}: {e}", target.display())
     })
-}
-
-/// 把源文件里会丢掉的段提示一句，不改变退出码
-fn warn_dropped(loaded: &Loaded, report: String) -> Outcome {
-    let mut err = String::new();
-    for line in &loaded.dropped {
-        err.push_str(&format!("warning: {line}\n"));
-    }
-    Outcome {
-        out: report,
-        err,
-        code: 0,
-    }
 }
 
 /// 把 `--cycle` 写到文件已经声明的那个周期属性上；两个都没声明时用 Vector 的名字
@@ -829,6 +1046,29 @@ enum Step {
     Write(Result<Vec<String>, String>),
 }
 
+/// 把一条命令作用到已读入的数据库上：只读命令给输出，写命令给改动说明
+fn dispatch(path: &str, loaded: &mut Loaded, args: &Args) -> Step {
+    match path {
+        "show" => Step::Read(show(loaded, args)),
+        "list" => Step::Read(list(loaded, args)),
+        "validate" => Step::Read(validate(loaded, args)),
+        "comment" => Step::Write(comment(loaded, args)),
+        "message add" => Step::Write(message_add(loaded, args)),
+        "message set" => Step::Write(message_set(loaded, args)),
+        "message delete" => Step::Write(message_delete(loaded, args)),
+        "signal add" => Step::Write(signal_add(loaded, args)),
+        "signal set" => Step::Write(signal_set(loaded, args)),
+        "signal delete" => Step::Write(signal_delete(loaded, args)),
+        "attribute set" => Step::Write(attribute_set(loaded, args)),
+        "node add" => Step::Write(node_add(loaded, args)),
+        "node rename" => Step::Write(node_rename(loaded, args)),
+        "node delete" => Step::Write(node_delete(loaded, args)),
+        other => Step::Read(Outcome::fail(format!(
+            "command \"{other}\" is declared but not implemented"
+        ))),
+    }
+}
+
 /// 执行 `dbc ...`；argv 是去掉程序名的参数
 pub fn execute(argv: &[String]) -> Outcome {
     let invocation = match parse(argv) {
@@ -836,33 +1076,16 @@ pub fn execute(argv: &[String]) -> Outcome {
         Err(ParseError::Help(text)) => return Outcome::ok(text),
         Err(ParseError::Error(message)) => return Outcome::fail(message),
     };
+    if invocation.command.path == "shell" {
+        return run_shell(&invocation.file);
+    }
     let args = &invocation.args;
     let mut loaded = match load(&invocation.file) {
         Ok(loaded) => loaded,
         Err(message) => return Outcome::fail(message),
     };
 
-    let step = match invocation.command.path {
-        "show" => Step::Read(show(&loaded, args)),
-        "validate" => Step::Read(validate(&loaded, args)),
-        "comment" => Step::Write(comment(&mut loaded, args)),
-        "message add" => Step::Write(message_add(&mut loaded, args)),
-        "message set" => Step::Write(message_set(&mut loaded, args)),
-        "message delete" => Step::Write(message_delete(&mut loaded, args)),
-        "signal add" => Step::Write(signal_add(&mut loaded, args)),
-        "signal set" => Step::Write(signal_set(&mut loaded, args)),
-        "signal delete" => Step::Write(signal_delete(&mut loaded, args)),
-        "attribute set" => Step::Write(attribute_set(&mut loaded, args)),
-        "node add" => Step::Write(node_add(&mut loaded, args)),
-        "node rename" => Step::Write(node_rename(&mut loaded, args)),
-        "node delete" => Step::Write(node_delete(&mut loaded, args)),
-        other => {
-            return Outcome::fail(format!(
-                "command \"{other}\" is declared but not implemented"
-            ));
-        }
-    };
-
+    let step = dispatch(invocation.command.path, &mut loaded, args);
     match step {
         Step::Read(outcome) => outcome,
         Step::Write(Ok(changes)) => match save(&loaded, &loaded.dbc, args, &changes) {
@@ -888,29 +1111,52 @@ fn message_id(dbc: &EditableDbc, spec: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("no message named \"{spec}\" here. {}", message_list(dbc)))
 }
 
-/// 名字里带点才当 `Message.Signal` 用；报文名本身不含点，所以按最后一个点切
+/// 名字里带点才当 `Message.Signal` 用；只给信号名时，在全文件里找它，唯一才认
 fn signal_target(dbc: &EditableDbc, spec: &str) -> Result<(u32, String), String> {
-    let (message, signal) = spec
-        .rsplit_once('.')
-        .ok_or_else(|| format!("--signal wants Message.Signal, got \"{spec}\""))?;
+    let (message, signal) = match spec.rsplit_once('.') {
+        Some((message, signal)) => (message.to_string(), signal.to_string()),
+        None => {
+            let found: Vec<&EditableMessage> = dbc
+                .messages()
+                .iter()
+                .filter(|m| m.signals().iter().any(|s| s.name() == spec))
+                .collect();
+            return match found.as_slice() {
+                [] => Err(format!(
+                    "no signal named \"{spec}\" in this file. {}",
+                    message_list(dbc)
+                )),
+                [only] if found.len() == 1 => Ok((only.message_id(), spec.to_string())),
+                many => Err(format!(
+                    "\"{spec}\" is a signal of {} messages -- write it as Message.Signal: {}",
+                    many.len(),
+                    many.iter()
+                        .map(|m| format!("{}.{}", m.message_name(), spec))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
+            };
+        }
+    };
+    let message = message.as_str();
+    let signal = signal.as_str();
     let id = message_id(dbc, message)?;
     let found = dbc
         .get_message(id)
         .and_then(|m| m.signals().iter().find(|s| s.name() == signal).map(|_| ()));
     found.ok_or_else(|| {
-        let known = dbc
+        let names: Vec<&str> = dbc
             .get_message(id)
-            .map(|m| {
-                let names: Vec<&str> = m.signals().iter().map(|s| s.name()).collect();
-                let shown = if names.len() > 12 {
-                    format!("{:?} ... ({} signals)", &names[..12], names.len())
-                } else {
-                    format!("{names:?}")
-                };
-                format!("signals of {message}: {shown}")
-            })
+            .map(|m| m.signals().iter().map(|s| s.name()).collect())
             .unwrap_or_default();
-        format!("no signal \"{signal}\" in message \"{message}\" here. {known}")
+        let shown = if names.len() > 12 {
+            format!("{:?} ... ({} signals)", &names[..12], names.len())
+        } else {
+            format!("{names:?}")
+        };
+        format!(
+            "no signal \"{signal}\" in message \"{message}\" here. signals of {message}: {shown}"
+        )
     })?;
     Ok((id, signal.to_string()))
 }
@@ -1685,6 +1931,194 @@ fn show(loaded: &Loaded, args: &Args) -> Outcome {
     }
 }
 
+/// 一列至少占这么宽，短的用空格补齐，长的原样输出
+fn column(text: &str, width: usize) -> String {
+    if text.chars().count() >= width {
+        format!("{text} ")
+    } else {
+        format!("{text:<width$} ", width = width)
+    }
+}
+
+/// `dbc list FILE [msg|sig|node]`：一行一个对象，用来扫；要看细节用 show
+fn list(loaded: &Loaded, args: &Args) -> Outcome {
+    let dbc = &loaded.dbc;
+    let what = args.value("what").unwrap_or("message");
+    let json = args.flag("json");
+    let mut out = String::new();
+
+    match what {
+        "signal" => {
+            let mut rows = 0;
+            if !json {
+                out.push_str(&format!(
+                    "{}{}{}{}{}\n",
+                    column("Signal", 34),
+                    column("Position", 14),
+                    column("Scale", 18),
+                    column("Unit", 8),
+                    "Receivers"
+                ));
+            }
+            for message in dbc.messages() {
+                for signal in message.signals() {
+                    rows += 1;
+                    if json {
+                        if rows > 1 {
+                            out.push(',');
+                        }
+                        out.push_str(&format!(
+                            "{{\"message\":{},\"name\":{},\"start\":{},\"bits\":{},\"byteOrder\":\"{}\",\"valueType\":\"{}\",\"factor\":{},\"offset\":{},\"unit\":{},\"receivers\":[{}]}}",
+                            json_str(message.message_name()),
+                            json_str(signal.name()),
+                            signal.start_bit(),
+                            signal.signal_size(),
+                            byte_order_label(signal.byte_order()),
+                            value_type_label(signal.value_type()),
+                            signal.factor(),
+                            signal.offset(),
+                            json_str(signal.unit()),
+                            json_array(signal.receivers().iter().map(|n| n.as_str()))
+                        ));
+                    } else {
+                        let receivers = if signal.receivers().is_empty() {
+                            "-".to_string()
+                        } else {
+                            signal.receivers().join(",")
+                        };
+                        out.push_str(&format!(
+                            "{}{}{}{}{}\n",
+                            column(&format!("{}.{}", message.message_name(), signal.name()), 34),
+                            column(
+                                &format!(
+                                    "{}+{} {}",
+                                    signal.start_bit(),
+                                    signal.signal_size(),
+                                    byte_order_label(signal.byte_order())
+                                ),
+                                14
+                            ),
+                            column(
+                                &format!(
+                                    "f={} o={} {}",
+                                    signal.factor(),
+                                    signal.offset(),
+                                    value_type_label(signal.value_type())
+                                ),
+                                18
+                            ),
+                            column(signal.unit(), 8),
+                            receivers
+                        ));
+                    }
+                }
+            }
+            if json {
+                return Outcome::ok(format!("{{\"signals\":[{out}]}}\n"));
+            }
+            out.push_str(&format!("{rows} signals\n"));
+        }
+        "node" => {
+            let mut rows = 0;
+            if !json {
+                out.push_str(&format!("{}{}\n", column("Node", 24), "Sends / Receives"));
+            }
+            for node in dbc.nodes() {
+                rows += 1;
+                let tx = dbc
+                    .messages()
+                    .iter()
+                    .filter(|m| m.transmitter() == node)
+                    .count();
+                let rx = dbc
+                    .messages()
+                    .iter()
+                    .flat_map(|m| m.signals())
+                    .filter(|s| s.receivers().iter().any(|r| r == node))
+                    .count();
+                if json {
+                    if rows > 1 {
+                        out.push(',');
+                    }
+                    out.push_str(&format!(
+                        "{{\"name\":{},\"sends\":{tx},\"receives\":{rx}}}",
+                        json_str(node)
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "{}{tx} messages / {rx} signals\n",
+                        column(node, 24)
+                    ));
+                }
+            }
+            if json {
+                return Outcome::ok(format!("{{\"nodes\":[{out}]}}\n"));
+            }
+            out.push_str(&format!("{rows} nodes\n"));
+        }
+        _ => {
+            let mut rows = 0;
+            if !json {
+                out.push_str(&format!(
+                    "{}{}{}{}{}{}{}\n",
+                    column("ID", 11),
+                    column("Message", 24),
+                    column("Size", 5),
+                    column("Frame", 12),
+                    column("Transmitter", 16),
+                    column("Sigs", 5),
+                    "Cycle / Comment"
+                ));
+            }
+            for message in dbc.messages() {
+                rows += 1;
+                let cycle = dbc
+                    .message_cycle_time(message.message_id())
+                    .map(|value| format!("{} ms", value.display()))
+                    .unwrap_or_else(|| "-".to_string());
+                if json {
+                    if rows > 1 {
+                        out.push(',');
+                    }
+                    out.push_str(&format!(
+                        "{{\"id\":{},\"idHex\":\"{}\",\"name\":{},\"size\":{},\"frameFormat\":\"{}\",\"transmitter\":{},\"signals\":{},\"cycle\":{},\"comment\":{}}}",
+                        message.message_id(),
+                        format_id(message).trim_start_matches("0x"),
+                        json_str(message.message_name()),
+                        message.message_size(),
+                        frame_label(message.frame_format()),
+                        json_str(message.transmitter()),
+                        message.signals_count(),
+                        json_str(&cycle),
+                        json_str(message.comment())
+                    ));
+                } else {
+                    let comment = if message.comment().is_empty() {
+                        String::new()
+                    } else {
+                        format!("  {}", message.comment())
+                    };
+                    out.push_str(&format!(
+                        "{}{}{}{}{}{}{}{comment}\n",
+                        column(&format_id(message), 11),
+                        column(message.message_name(), 24),
+                        column(&format!("{}B", message.message_size()), 5),
+                        column(frame_label(message.frame_format()), 12),
+                        column(message.transmitter(), 16),
+                        column(&message.signals_count().to_string(), 5),
+                        cycle
+                    ));
+                }
+            }
+            if json {
+                return Outcome::ok(format!("{{\"messages\":[{out}]}}\n"));
+            }
+            out.push_str(&format!("{rows} messages\n"));
+        }
+    }
+    Outcome::ok(out)
+}
+
 fn validate(loaded: &Loaded, args: &Args) -> Outcome {
     let issues = loaded.dbc.validate();
     let errors = issues
@@ -1940,156 +2374,249 @@ fn json_str(text: &str) -> String {
     out
 }
 
-/// release 版是 `windows_subsystem = "windows"`：进程启动时没有控制台，Rust 缓存的
-/// 标准输出句柄是空的，`println!` 会静默丢掉。所以命令行输出一律自己取句柄写——
-/// 继承来的句柄可用就用（`> file`、管道），否则接上父控制台再开 `CONOUT$`（在终端里
-/// 直接跑）。双击启动没有父控制台，写不出去也不报错。
-#[cfg(windows)]
-pub fn write_stdout(text: &str) {
-    console::write(console::STD_OUT, text);
+// ---------------------------------------------------------------- 交互模式
+
+const SHELL_HELP: &str = "commands
+  list [msg|sig|node]                 one line per row: what is in this file
+  show, comment, msg add|set|delete, sig add|set|delete, attribute set,
+  node add|rename|delete, validate    as on the command line, without the file
+  help                                this text
+  save                write the changes back to the open file
+  open <file.dbc>     switch to another file (save this one first)
+  quit                leave; quit --force to leave without saving
+
+targets are positional: `show msg EngineData`, `comment sig EngSpeed --text ...`,
+`msg set BrakeData --cycle 20`; a bare name works too (a dot makes it a signal).
+put quotes around text with spaces: comment msg EngineData --text \"engine data\"
+";
+
+/// 一行交互命令的落点
+enum ShellLine {
+    Print(String),
+    Quit(String),
 }
 
-#[cfg(windows)]
-pub fn write_stderr(text: &str) {
-    console::write(console::STD_ERR, text);
+/// 一次交互会话：打开的文件、以及内存里有没有还没写回的改动
+struct Session {
+    loaded: Loaded,
+    dirty: bool,
 }
 
-#[cfg(not(windows))]
-pub fn write_stdout(text: &str) {
-    use std::io::Write as _;
-    let _ = std::io::stdout().write_all(text.as_bytes());
+fn error_line(message: &str) -> String {
+    format!("error: {message}\n")
 }
 
-#[cfg(not(windows))]
-pub fn write_stderr(text: &str) {
-    use std::io::Write as _;
-    let _ = std::io::stderr().write_all(text.as_bytes());
-}
-
-/// 输出是自己接上父控制台写掉的（而不是管道或文件）时为真：shell 不等这种 GUI
-/// 程序，跑完提示符不会自己刷新，所以 main 里补一句让人按回车。重定向时不提，
-/// 免得混进脚本和 AI 读到的输出里。
-pub fn prompt_needs_redraw() -> bool {
-    #[cfg(windows)]
-    {
-        console::used_conout()
+impl Session {
+    fn open(path: &Path) -> Result<Self, String> {
+        Ok(Self {
+            loaded: load(path)?,
+            dirty: false,
+        })
     }
-    #[cfg(not(windows))]
-    {
-        false
+
+    fn name(&self) -> String {
+        self.loaded
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.loaded.path.display().to_string())
+    }
+
+    fn step(&mut self, line: &str) -> ShellLine {
+        let tokens = match tokenize(line) {
+            Ok(tokens) => tokens,
+            Err(message) => return ShellLine::Print(error_line(&message)),
+        };
+        let Some(verb) = tokens.first().map(String::as_str) else {
+            return ShellLine::Print(String::new());
+        };
+        match verb {
+            "help" => ShellLine::Print(SHELL_HELP.to_string()),
+            "quit" | "exit" => self.quit(tokens.iter().any(|token| token == "--force")),
+            "save" => self.save_line(),
+            "open" => self.open_file(&tokens),
+            _ => self.command(&tokens),
+        }
+    }
+
+    fn quit(&self, forced: bool) -> ShellLine {
+        if self.dirty && !forced {
+            return ShellLine::Print(error_line(&format!(
+                "{} has unsaved changes -- type save to write them, or quit --force to leave without them",
+                self.name()
+            )));
+        }
+        ShellLine::Quit(format!("bye {}\n", self.name()))
+    }
+
+    fn save_line(&mut self) -> ShellLine {
+        match write_file(&self.loaded, &self.loaded.dbc, None, false) {
+            Ok(written) => {
+                self.dirty = false;
+                let mut text = written.report;
+                for line in written.warnings {
+                    text.push_str(&format!("warning: {line}\n"));
+                }
+                ShellLine::Print(text)
+            }
+            Err(message) => ShellLine::Print(error_line(&message)),
+        }
+    }
+
+    fn open_file(&mut self, tokens: &[String]) -> ShellLine {
+        let Some(target) = tokens.get(1) else {
+            return ShellLine::Print(error_line("open wants a file: open <file.dbc>"));
+        };
+        if self.dirty {
+            return ShellLine::Print(error_line(&format!(
+                "{} has unsaved changes -- type save first",
+                self.name()
+            )));
+        }
+        match Session::open(Path::new(target)) {
+            Ok(session) => {
+                let name = session.name();
+                *self = session;
+                ShellLine::Print(format!("now editing {name}\n"))
+            }
+            Err(message) => ShellLine::Print(error_line(&message)),
+        }
+    }
+
+    /// 把一行当成一次性命令跑：文件固定用当前打开的这个，改动只进内存
+    fn command(&mut self, tokens: &[String]) -> ShellLine {
+        let mut argv = vec!["dbc".to_string()];
+        argv.extend_from_slice(tokens);
+        argv.push(self.loaded.path.to_string_lossy().into_owned());
+        let invocation = match parse(&argv) {
+            Ok(invocation) => invocation,
+            Err(ParseError::Help(text)) => return ShellLine::Print(text),
+            Err(ParseError::Error(message)) => return ShellLine::Print(error_line(&message)),
+        };
+        if invocation.args.value("out").is_some() || invocation.args.flag("backup") {
+            return ShellLine::Print(error_line(
+                "--out and --backup do not apply here -- edit in memory, then type save",
+            ));
+        }
+        let args = &invocation.args;
+        match dispatch(invocation.command.path, &mut self.loaded, args) {
+            Step::Read(outcome) => ShellLine::Print(format!("{}{}", outcome.out, outcome.err)),
+            Step::Write(Ok(changes)) => {
+                self.dirty = true;
+                let mut text = String::new();
+                for change in &changes {
+                    text.push_str(change);
+                    text.push('\n');
+                }
+                text.push_str(&format!(
+                    "not written yet -- type save to write {}\n",
+                    self.name()
+                ));
+                ShellLine::Print(text)
+            }
+            Step::Write(Err(message)) => ShellLine::Print(error_line(&message)),
+        }
     }
 }
 
+/// 按空白切一行；双引号包住的部分算一个参数，`--text ""` 也能传空串
+fn tokenize(line: &str) -> Result<Vec<String>, String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    let mut started = false;
+    for c in line.chars() {
+        if c == '"' {
+            quoted = !quoted;
+            started = true;
+        } else if c.is_whitespace() && !quoted {
+            if started {
+                tokens.push(std::mem::take(&mut current));
+                started = false;
+            }
+        } else {
+            current.push(c);
+            started = true;
+        }
+    }
+    if quoted {
+        return Err("this line has an unclosed quote".to_string());
+    }
+    if started {
+        tokens.push(current);
+    }
+    Ok(tokens)
+}
+
+/// 读一行、执行、打印，直到 quit 或输入结束
+fn shell_loop(
+    input: &mut impl std::io::BufRead,
+    out: &mut impl std::io::Write,
+    session: &mut Session,
+) -> std::io::Result<()> {
+    loop {
+        write!(out, "{}> ", session.name())?;
+        out.flush()?;
+        let mut line = String::new();
+        if input.read_line(&mut line)? == 0 {
+            break;
+        }
+        match session.step(&line) {
+            ShellLine::Print(text) => out.write_all(text.as_bytes())?,
+            ShellLine::Quit(text) => {
+                out.write_all(text.as_bytes())?;
+                return Ok(());
+            }
+        }
+    }
+    if session.dirty {
+        writeln!(out, "{} still has unsaved changes", session.name())?;
+    }
+    Ok(())
+}
+
+fn run_shell(path: &Path) -> Outcome {
+    let mut session = match Session::open(path) {
+        Ok(session) => session,
+        Err(message) => return Outcome::fail(message),
+    };
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    let mut output = std::io::stdout();
+    match shell_loop(&mut input, &mut output, &mut session) {
+        Ok(()) => Outcome::ok(String::new()),
+        Err(error) => Outcome::fail(format!("cannot talk to the console: {error}")),
+    }
+}
+
+/// 图形界面不需要控制台。exe 是 console 子系统（这样命令行能被 shell 正常等待、
+/// `dbc shell` 才读得到键盘），所以双击或从开始菜单启动时会带出一个黑框：先藏掉
+/// 窗口再 FreeConsole，黑框消失，之后进程与终端再无关系。
 #[cfg(windows)]
-mod console {
+pub fn detach_console_for_gui() {
     use std::ffi::c_void;
-    use std::ptr;
-    use std::sync::Once;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
-    pub const STD_OUT: u32 = u32::MAX - 10; // (DWORD)-11
-    pub const STD_ERR: u32 = u32::MAX - 11; // (DWORD)-12
-    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
-    const GENERIC_WRITE: u32 = 0x4000_0000;
-    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
-    const OPEN_EXISTING: u32 = 3;
-    const FILE_TYPE_UNKNOWN: u32 = 0;
-    const INVALID: *mut c_void = -1isize as *mut c_void;
-
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetConsoleWindow() -> *mut c_void;
+        fn ShowWindow(window: *mut c_void, command: i32) -> i32;
+    }
     #[link(name = "kernel32")]
     unsafe extern "system" {
-        fn GetStdHandle(which: u32) -> *mut c_void;
-        fn GetFileType(handle: *mut c_void) -> u32;
-        fn WriteFile(
-            handle: *mut c_void,
-            buffer: *const u8,
-            count: u32,
-            written: *mut u32,
-            overlapped: *mut c_void,
-        ) -> i32;
-        fn CreateFileW(
-            name: *const u16,
-            access: u32,
-            share: u32,
-            security: *const c_void,
-            disposition: u32,
-            flags: u32,
-            template: *const c_void,
-        ) -> *mut c_void;
-        fn AttachConsole(process: u32) -> i32;
-        fn CloseHandle(handle: *mut c_void) -> i32;
+        fn FreeConsole() -> i32;
     }
-
-    static ATTACHED: Once = Once::new();
-    static USED_CONOUT: AtomicBool = AtomicBool::new(false);
-
-    /// 有没有走过 CONOUT$ 这条路（也就是真的在控制台里跑）
-    pub fn used_conout() -> bool {
-        USED_CONOUT.load(Ordering::Relaxed)
-    }
-
-    fn usable(handle: *mut c_void) -> bool {
-        !handle.is_null()
-            && handle != INVALID
-            && unsafe { GetFileType(handle) != FILE_TYPE_UNKNOWN }
-    }
-
-    pub fn write(which: u32, text: &str) {
-        if text.is_empty() {
-            return;
+    const SW_HIDE: i32 = 0;
+    unsafe {
+        let console = GetConsoleWindow();
+        if !console.is_null() {
+            ShowWindow(console, SW_HIDE);
         }
-        let inherited = unsafe { GetStdHandle(which) };
-        let (handle, owned) = if usable(inherited) {
-            (inherited, false)
-        } else {
-            ATTACHED.call_once(|| unsafe {
-                AttachConsole(ATTACH_PARENT_PROCESS);
-            });
-            let mut conout: Vec<u16> = "CONOUT$".encode_utf16().collect();
-            conout.push(0);
-            let opened = unsafe {
-                CreateFileW(
-                    conout.as_ptr(),
-                    GENERIC_WRITE,
-                    FILE_SHARE_WRITE,
-                    ptr::null(),
-                    OPEN_EXISTING,
-                    0,
-                    ptr::null(),
-                )
-            };
-            (opened, true)
-        };
-        if !usable(handle) {
-            return;
-        }
-        if owned {
-            USED_CONOUT.store(true, Ordering::Relaxed);
-        }
-        let bytes = text.as_bytes();
-        let mut offset = 0;
-        unsafe {
-            while offset < bytes.len() {
-                let mut written = 0u32;
-                let count = (bytes.len() - offset).min(u32::MAX as usize) as u32;
-                let ok = WriteFile(
-                    handle,
-                    bytes.as_ptr().add(offset),
-                    count,
-                    &mut written,
-                    ptr::null_mut(),
-                );
-                if ok == 0 || written == 0 {
-                    break;
-                }
-                offset += written as usize;
-            }
-            if owned {
-                CloseHandle(handle);
-            }
-        }
+        FreeConsole();
     }
 }
+
+#[cfg(not(windows))]
+pub fn detach_console_for_gui() {}
 
 #[cfg(test)]
 mod tests {
@@ -2606,5 +3133,238 @@ CM_ BU_ ECU1 \"node text\";
             text.contains("\"rpm\" ABS2"),
             "the receiver reference followed: {text}"
         );
+    }
+
+    #[test]
+    fn tokens_keep_quoted_text_together_and_allow_an_empty_value() {
+        let tokens = tokenize("comment --message EngineData --text \"发动机 数据\"").unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                "comment".to_string(),
+                "--message".to_string(),
+                "EngineData".to_string(),
+                "--text".to_string(),
+                "发动机 数据".to_string()
+            ]
+        );
+        assert_eq!(
+            tokenize("comment --text \"\"").unwrap(),
+            vec!["comment", "--text", ""]
+        );
+        assert!(tokenize("comment --text \"unclosed").is_err());
+        assert!(tokenize("   \n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_shell_edits_in_memory_and_writes_only_on_save() {
+        let path = dbc_file("shell", BASE);
+        let mut session = Session::open(&path).expect("open the fixture");
+        let script = "comment --message EngineData --text \"发动机 数据\"\nsave\nquit\n";
+        let mut input = std::io::Cursor::new(script.as_bytes().to_vec());
+        let mut out: Vec<u8> = Vec::new();
+        shell_loop(&mut input, &mut out, &mut session).expect("shell loop");
+        let transcript = String::from_utf8(out).expect("utf-8 transcript");
+
+        assert!(transcript.contains("not written yet"), "{transcript}");
+        assert!(transcript.contains("wrote "), "{transcript}");
+        assert!(transcript.contains("bye in.dbc"), "{transcript}");
+        // 只在 save 那一刻落盘，内容就是刚才在内存里改的
+        let text = read(&path);
+        assert!(text.contains("CM_ BO_ 100 \"发动机 数据\";"), "{text}");
+    }
+
+    #[test]
+    fn quitting_with_unsaved_changes_is_refused_and_nothing_is_written() {
+        let path = dbc_file("shell-quit", BASE);
+        let mut session = Session::open(&path).expect("open the fixture");
+        let script = "comment --message EngineData --text x\nquit\n";
+        let mut input = std::io::Cursor::new(script.as_bytes().to_vec());
+        let mut out: Vec<u8> = Vec::new();
+        shell_loop(&mut input, &mut out, &mut session).expect("shell loop");
+        let transcript = String::from_utf8(out).expect("utf-8 transcript");
+
+        assert!(transcript.contains("unsaved changes"), "{transcript}");
+        assert!(
+            transcript.contains("still has unsaved changes"),
+            "{transcript}"
+        );
+        assert!(read(&path).contains("old comment"), "file untouched");
+    }
+
+    #[test]
+    fn the_shell_rejects_options_that_would_write_early() {
+        let path = dbc_file("shell-out", BASE);
+        let mut session = Session::open(&path).expect("open the fixture");
+        match session.step("comment --message EngineData --text x --out other.dbc") {
+            ShellLine::Print(text) => assert!(text.contains("--out and --backup"), "{text}"),
+            ShellLine::Quit(text) => panic!("expected a refusal, got quit: {text}"),
+        }
+        assert!(
+            !session.dirty,
+            "a rejected command must not change anything"
+        );
+    }
+
+    #[test]
+    fn a_target_can_be_positional_with_or_without_the_kind_word() {
+        let path = dbc_file("positional", BASE);
+        let file = path.to_str().unwrap();
+
+        // 光一个名字：带点当信号，不带点当报文
+        let outcome = run(&["show", file, "EngineData"]);
+        assert!(
+            outcome.out.contains("BO_ 0x064 EngineData"),
+            "{}",
+            outcome.out
+        );
+        let outcome = run(&["show", file, "EngineData.EngineSpeed"]);
+        assert!(outcome.out.contains("SG_ EngineSpeed"), "{}", outcome.out);
+        // 写明种类也一样
+        assert_eq!(
+            run(&["show", file, "msg", "EngineData"]).out,
+            run(&["show", file, "--message", "EngineData"]).out
+        );
+        // 位置参数和显式选项撞了就报错，不猜哪个算
+        let outcome = run(&["show", file, "EngineData", "--message", "WheelInfo"]);
+        assert_eq!(outcome.code, 2, "{}", outcome.out);
+        assert!(outcome.err.contains("same thing twice"), "{}", outcome.err);
+
+        // 光写种类词是想看清单，不是有个报文叫 msg
+        let outcome = run(&["show", file, "msg"]);
+        assert_eq!(outcome.code, 2, "{}", outcome.out);
+        assert!(
+            outcome.err.contains("needs a name after it")
+                && outcome.err.contains("list msg to see them all"),
+            "{}",
+            outcome.err
+        );
+    }
+
+    #[test]
+    fn msg_and_sig_shorten_the_command_group_too() {
+        let path = dbc_file("aliases", BASE);
+        let file = path.to_str().unwrap();
+        let outcome = run(&["msg", "add", file, "BrakeData", "--size", "4"]);
+        assert_eq!(outcome.code, 0, "{}", outcome.err);
+        assert!(outcome.out.contains("BrakeData"), "{}", outcome.out);
+        // 信号名写成 Message.Signal，一条给全父报文和新名字
+        let outcome = run(&[
+            "sig",
+            "add",
+            file,
+            "BrakeData.LinePressure",
+            "--start",
+            "0",
+            "--bits",
+            "12",
+        ]);
+        assert_eq!(outcome.code, 0, "{}", outcome.err);
+        let text = read(&path);
+        assert!(text.contains("SG_ LinePressure"), "{text}");
+        // 缩写和全写是同一条命令
+        let outcome = run(&["msg", "delete", file, "BrakeData"]);
+        assert_eq!(outcome.code, 0, "{}", outcome.err);
+        assert!(
+            !read(&path).contains("BrakeData"),
+            "deleted through the alias"
+        );
+    }
+
+    #[test]
+    fn nodes_take_plain_names() {
+        let path = dbc_file("node-positional", BASE);
+        let file = path.to_str().unwrap();
+        assert_eq!(run(&["node", "add", file, "Pump"]).code, 0);
+        assert!(
+            read(&path).contains("BU_: EngineControl ABS Pump") || read(&path).contains("Pump")
+        );
+        let outcome = run(&["node", "rename", file, "Pump", "Pump2"]);
+        assert_eq!(outcome.code, 0, "{}", outcome.err);
+        assert!(read(&path).contains("Pump2"));
+        // validate 不收目标
+        let outcome = run(&["validate", file, "Pump2"]);
+        assert_eq!(outcome.code, 2);
+        assert!(outcome.err.contains("takes no target"), "{}", outcome.err);
+    }
+
+    #[test]
+    fn list_prints_one_line_per_row_and_json_matches() {
+        let path = dbc_file("list", BASE);
+        let file = path.to_str().unwrap();
+
+        let outcome = run(&["list", file]);
+        assert!(outcome.out.contains("EngineData"), "{}", outcome.out);
+        assert!(!outcome.out.contains("SG_"), "{}", outcome.out);
+        assert!(outcome.out.ends_with("1 messages\n"), "{}", outcome.out);
+
+        let outcome = run(&["list", file, "sig"]);
+        assert!(
+            outcome.out.contains("EngineData.EngineSpeed"),
+            "{}",
+            outcome.out
+        );
+        assert!(outcome.out.ends_with("2 signals\n"), "{}", outcome.out);
+
+        let outcome = run(&["list", file, "node"]);
+        assert!(outcome.out.contains("ABS"), "{}", outcome.out);
+
+        let outcome = run(&["list", file, "msg", "--json"]);
+        assert!(
+            outcome.out.starts_with("{\"messages\":["),
+            "{}",
+            outcome.out
+        );
+        assert!(outcome.out.contains("\"signals\":2"), "{}", outcome.out);
+        assert!(outcome.out.contains("\"cycle\":\"-\""), "{}", outcome.out);
+
+        // 周期从文件声明的那个属性来
+        let with_cycle = dbc_file("list-cycle", CYCLE);
+        let outcome = run(&["list", with_cycle.to_str().unwrap(), "--json"]);
+        assert!(
+            outcome.out.contains("\"cycle\":\"200 ms\""),
+            "{}",
+            outcome.out
+        );
+
+        let outcome = run(&["list", file, "wat"]);
+        assert_eq!(outcome.code, 2);
+        assert!(
+            outcome.err.contains("use msg, sig or node"),
+            "{}",
+            outcome.err
+        );
+    }
+
+    #[test]
+    fn the_shell_takes_the_same_positional_forms() {
+        let path = dbc_file("shell-positional", BASE);
+        let mut session = Session::open(&path).expect("open the fixture");
+        match session.step("list sig") {
+            ShellLine::Print(text) => assert!(text.contains("EngineData.EngineSpeed"), "{text}"),
+            ShellLine::Quit(text) => panic!("list must not quit: {text}"),
+        }
+        match session.step("comment msg EngineData --text \"发动机 数据\"") {
+            ShellLine::Print(text) => assert!(text.contains("not written yet"), "{text}"),
+            ShellLine::Quit(text) => panic!("comment must not quit: {text}"),
+        }
+        assert!(session.dirty);
+    }
+
+    #[test]
+    fn the_shell_shows_help_and_switches_files_with_open() {
+        let path = dbc_file("shell-open", BASE);
+        let other = path.parent().unwrap().join("second.dbc");
+        std::fs::write(&other, BASE).expect("write second fixture");
+        let mut session = Session::open(&path).expect("open the fixture");
+
+        match session.step("help") {
+            ShellLine::Print(text) => assert!(text.contains("save "), "{text}"),
+            ShellLine::Quit(text) => panic!("help must not quit: {text}"),
+        }
+        let name = session.name();
+        assert_eq!(name, "in.dbc");
+        session.step(&format!("open {}", other.to_str().unwrap()));
+        assert_eq!(session.name(), "second.dbc");
     }
 }
