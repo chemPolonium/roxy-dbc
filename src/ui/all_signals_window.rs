@@ -341,6 +341,8 @@ pub struct MatrixContext<'a> {
     pub edit_windows: &'a mut Vec<MessageEditWindowState>,
     pub is_dirty: &'a mut bool,
     pub file_path: &'a str,
+    /// 所属 DBC 窗口的稳定 ID，用作弹窗的 ImGui ID 后缀
+    pub window_key: &'a str,
 }
 
 /// 生成默认的新信号（start 0、length 1、系数 1）
@@ -509,7 +511,7 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
                     &*ctx.dbc,
                     msg.message_id(),
                     sig,
-                    ctx.file_path,
+                    ctx.window_key,
                 );
             }
 
@@ -528,7 +530,7 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
                         &*ctx.dbc,
                         msg.message_id(),
                         sig,
-                        ctx.file_path,
+                        ctx.window_key,
                     );
                 }
                 if ui.menu_item("Edit Values...") {
@@ -542,7 +544,7 @@ pub fn render(window: &mut AllSignalsWindow, ctx: MatrixContext, ui: &Ui) -> All
                     ctx.edit_windows.push(MessageEditWindowState::open(
                         &*ctx.dbc,
                         msg,
-                        ctx.file_path,
+                        &format!("{}_{}", ctx.window_key, row.msg_id),
                         nodes,
                     ));
                 }

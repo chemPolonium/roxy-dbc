@@ -217,7 +217,7 @@ impl MessageEditWindowState {
         let mut event = MessageEditEvent::None;
 
         let title = format!(
-            "Edit Message - 0x{:03X}##{}",
+            "Edit Message - 0x{:03X}###msgedit_{}",
             self.current_id, self.window_key
         );
         let mut is_open = true;

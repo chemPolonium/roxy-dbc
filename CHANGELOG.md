@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-10-13
+
+### Fixed
+- 第一次编辑信号、保存 DBC 之后，窗口不再被重置：DBC 窗口、Message 窗口、Edit Signal / Edit Message 对话框摆好的位置和大小，在改报文名、改信号名、加未保存的 `*` 标记、另存为换路径时都保持不动（之前这些操作会让窗口跳回默认位置与默认尺寸）
+
 ## [0.11.4] - 2026-10-12
 
 ### Added

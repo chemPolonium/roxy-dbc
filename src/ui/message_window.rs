@@ -50,12 +50,14 @@ impl MessageWindow {
             return event;
         };
 
-        // 标题 ID 用窗口 key（文件路径）收尾：不同 DBC 的同名消息窗口不冲突
+        // ID 用 ### 后的「所属 DBC 窗口号 + 报文 ID」：改名、换路径都不重建窗口，
+        // 不同 DBC 的同名消息窗口也不互相覆盖
         let title = format!(
-            "{} (0x{:03X})##msg_{}",
+            "{} (0x{:03X})###msg_{}_{}",
             message.message_name(),
             message.message_id(),
-            window_key
+            window_key,
+            self.message_id
         );
         let mut is_open = self.is_open;
 

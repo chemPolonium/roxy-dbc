@@ -382,7 +382,10 @@ impl SignalEditDialog {
     pub fn render(&mut self, ui: &Ui, dbc: &EditableDbc) -> SignalEditEvent {
         let mut event = SignalEditEvent::None;
 
-        let title = format!("Edit Signal - {}##{}", self.original_name, self.window_key);
+        let title = format!(
+            "Edit Signal - {}###sigedit_{}",
+            self.original_name, self.window_key
+        );
         let mut is_open = true;
 
         let mut window = ui

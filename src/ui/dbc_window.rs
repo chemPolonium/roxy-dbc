@@ -1,6 +1,17 @@
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// DBC 窗口的自增标识。窗口 ID 必须与文件路径解绑：保存会改写路径
+/// （新建的 Untitled.dbc 换成真实路径、另存为、规范化），路径进了 ID 就会让
+/// ImGui 当成新窗口重建，位置尺寸全部回到默认——就是"保存时窗口被重置"。
+/// 标题本身仍显示路径，靠 `###` 把它排除在 ID 之外（见 `render_dbc_windows`）。
+static NEXT_DBC_WINDOW_ID: AtomicU32 = AtomicU32::new(1);
+
+fn next_dbc_window_id() -> u32 {
+    NEXT_DBC_WINDOW_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 use crate::editable_dbc::{EditableDbc, EditableMessage, FrameFormat};
 use crate::file_encoding::{decode_file_bytes, encode_to_bytes};
@@ -71,6 +82,8 @@ pub enum SignalWindowEvent {
 pub struct DbcWindow {
     pub is_open: bool,
     pub file_path: String,
+    /// 窗口标识：自增号，保存改路径、脏标记改标题都不影响它，ImGui 才不会重建窗口
+    pub dbc_id: u32,
     pub dbc: EditableDbc,
     pub is_dirty: bool,
     /// 文本编码：打开时检测（UTF-8 / GBK），保存时按原编码写出
@@ -102,6 +115,7 @@ impl Default for DbcWindow {
         Self {
             is_open: false,
             file_path: String::new(),
+            dbc_id: next_dbc_window_id(),
             dbc: EditableDbc::default(),
             is_dirty: false,
             text_encoding: encoding_rs::UTF_8,
@@ -128,6 +142,7 @@ impl DbcWindow {
             is_open: true,
             // 统一为规范化绝对路径，供"已打开则聚焦"与最近文件去重比较
             file_path: crate::ui::state::normalize_path(file_path),
+            dbc_id: next_dbc_window_id(),
             dbc,
             is_dirty: false,
             text_encoding: encoding_rs::UTF_8,
@@ -145,6 +160,11 @@ impl DbcWindow {
             node_list: NodeListState::default(),
             export_status: None,
         }
+    }
+
+    /// 派生窗口用的稳定键：只有窗口自己知道，保存/改名都不影响
+    fn window_key(&self) -> String {
+        self.dbc_id.to_string()
     }
 
     pub fn selected_message_ids(&self) -> Vec<u32> {
@@ -481,9 +501,11 @@ impl DbcWindow {
         has_clipboard: bool,
     ) -> Vec<SignalWindowEvent> {
         let mut signal_events = Vec::new();
+        // 派生窗口的 ID 用窗口号，不用文件路径：保存换路径不该让已开的窗口重置
+        let window_key = self.window_key();
 
         for msg_win in &mut self.message_windows {
-            let win_event = msg_win.render(ui, &self.dbc, has_clipboard, &self.file_path);
+            let win_event = msg_win.render(ui, &self.dbc, has_clipboard, &window_key);
             match win_event {
                 MessageWindowEvent::EditSignal(sig_name) => {
                     if let Some(msg) = self.dbc.get_message(msg_win.message_id)
@@ -493,7 +515,7 @@ impl DbcWindow {
                             &self.dbc,
                             msg.message_id(),
                             sig,
-                            &self.file_path,
+                            &window_key,
                         );
                     }
                 }
@@ -571,6 +593,8 @@ impl DbcWindow {
     /// 渲染标签页内容（CANdb++ 风格：Messages & Signals / All Signals / Node List / Communication Matrix）
     fn render_tabs(&mut self, ui: &Ui, has_clipboard: bool) -> DbcWindowEvent {
         let mut event = DbcWindowEvent::None;
+        // 弹窗 ID 后缀用窗口号：保存换了文件路径不该让已打开的编辑窗重置
+        let window_key = self.window_key();
 
         if let Some(_bar) = ui.tab_bar("##dbc_tabs") {
             let pending = self.pending_tab.take();
@@ -602,6 +626,7 @@ impl DbcWindow {
                     edit_windows: &mut self.edit_windows,
                     is_dirty: &mut self.is_dirty,
                     file_path: &self.file_path,
+                    window_key: &window_key,
                 };
                 match all_signals_window::render(&mut self.all_signals_window, ctx, ui) {
                     AllSignalsEvent::None => {}
@@ -788,12 +813,12 @@ pub fn render_dbc_windows(ui: &Ui, ui_state: &mut UiState) {
     for window_idx in 0..ui_state.dbc_windows.len() {
         let dbc_window = &ui_state.dbc_windows[window_idx];
 
-        // 标题显示完整路径（含所在文件夹）；ID 取 ## 后的稳定路径，
-        // 脏标记变化不重置布局，同名文件（不同路径）也不互相覆盖
+        // 标题显示完整路径（含所在文件夹）。ID 用 ### 后的窗口号：ImGui 只把 ###
+        // 之后的文本喂给哈希，所以脏标记和保存后改路径都不会换 ID，窗口不会被重建
         let dirty_marker = if dbc_window.is_dirty { "* " } else { "" };
         let title = format!(
-            "DBC - {}{}##dbc_{}",
-            dirty_marker, dbc_window.file_path, dbc_window.file_path
+            "DBC - {}{}###dbc_{}",
+            dirty_marker, dbc_window.file_path, dbc_window.dbc_id
         );
 
         if let Some(request_focus_idx) = ui_state.dbc_window_focus_request
@@ -897,7 +922,8 @@ fn handle_message_table_event(ui_state: &mut UiState, window_idx: usize, event: 
                 && let Some(msg) = win.dbc.get_message(msg_id)
             {
                 let nodes = win.dbc.nodes().clone();
-                let edit_win = MessageEditWindowState::open(&win.dbc, msg, &win.file_path, nodes);
+                let window_key = format!("{}_{}", win.dbc_id, msg_id);
+                let edit_win = MessageEditWindowState::open(&win.dbc, msg, &window_key, nodes);
                 win.edit_windows.push(edit_win);
             }
         }
