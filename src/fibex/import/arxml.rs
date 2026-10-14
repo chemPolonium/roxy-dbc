@@ -68,6 +68,26 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
     // 两者都没有信号映射、只有长度，却会被帧引用；早先只认 I-SIGNAL-I-PDU
     // 会让这些引用悬空（帧里列着 PDU，PDU 列表却找不到它）。
     // ------------------------------------------------------------------
+    // 混合文件里 CAN 与 FlexRay 的 PDU 用同一个标签（I-SIGNAL-I-PDU）。先记下被
+    // CAN 帧引用的 PDU 名，下面把它们挡在 FlexRay 模型之外；只排除"确定属于 CAN"
+    // 的，没被任何帧引用的 PDU 仍然保留（纯 CAN 文件以外的矩阵会有孤儿 PDU）。
+    let mut can_pdu_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    {
+        let mut can_frames = Vec::new();
+        collect_elements_by_tag(&root, "CAN-FRAME", &mut can_frames);
+        for frame in &can_frames {
+            let mut mappings = Vec::new();
+            for tag in ["PDU-TO-FRAME-MAPPING", "FRAME-PDU-MAPPING"] {
+                collect_elements_by_tag(frame, tag, &mut mappings);
+            }
+            for m in &mappings {
+                if let Some(r) = find_text_candidates(m, &["PDU-REF"]) {
+                    can_pdu_names.insert(ref_short_name(&r).to_string());
+                }
+            }
+        }
+    }
+
     let mut pdu_nodes: Vec<(&'static str, roxmltree::Node)> = Vec::new();
     for tag in [
         "I-SIGNAL-I-PDU",
@@ -163,6 +183,12 @@ pub fn parse_arxml_doc(doc: &roxmltree::Document) -> Result<EditableFibex, Strin
                 mappings,
             },
         ));
+    }
+
+    // 排除属于 CAN 集群的 PDU：不过滤的话 CAN 集群的报文会凭空出现在 FlexRay 的
+    // PDU 列表里
+    if !can_pdu_names.is_empty() {
+        pdu_raws.retain(|(name, _)| !can_pdu_names.contains(name));
     }
 
     // ------------------------------------------------------------------

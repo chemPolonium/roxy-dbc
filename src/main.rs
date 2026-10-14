@@ -12,6 +12,7 @@ mod file_encoding;
 mod icon;
 mod import;
 mod paths;
+mod system;
 mod ui;
 mod win_clipboard;
 

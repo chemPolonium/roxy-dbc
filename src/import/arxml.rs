@@ -1,15 +1,20 @@
 //! 读 AUTOSAR 4.x 风格的 CAN 通信快照（ARXML）为可编辑的 DBC 模型
 //!
 //! 按引用解析：CAN-FRAME-TRIGGERING 的 FRAME-REF 找到帧、IDENTIFIER 与寻址方式给出
-//! ID 与标准/扩展、CAN-FRAME-*-BEHAVIOR 给出是否 CAN FD；帧里的
+//! ID 与标准/扩展、CAN-FRAME-TX-BEHAVIOR 给出是否 CAN FD；帧里的
 //! PDU-TO-FRAME-MAPPING 的 PDU-REF 找到 I-SIGNAL-I-PDU，PDU 的
-//! I-SIGNAL-TO-PDU-MAPPING 给出信号位置与字节序，I-SIGNAL-REF 找到 I-SIGNAL，
-//! 再由其 COMPU-METHOD-REF 找到因子/偏移/上下限/单位/值表；收发关系来自端口名
-//! 后缀 `_Tx` / `_Rx`（帧级 FRAME-PORT，信号级 I-SIGNAL-PORT）。
+//! I-SIGNAL-TO-I-PDU-MAPPING（旧写法 I-SIGNAL-TO-PDU-MAPPING 也认）给出信号位置与
+//! 字节序，I-SIGNAL-REF 找到 I-SIGNAL：长度取 I-SIGNAL/LENGTH，符号取
+//! NETWORK-REPRESENTATION-PROPS 里的 SW-BASE-TYPE（旧写法 SIGN-CONVENTION 也认），
+//! 换算经 SYSTEM-SIGNAL→COMPU-METHOD（旧写法直接挂在 I-SIGNAL 上也认）；
+//! 单位取 COMPU-METHOD 的 UNIT-REF 指向的 UNIT/DISPLAY-NAME；
+//! COMPU-SCALE 的上下限是原始值，按因子/偏移换成物理值；收发关系来自端口名
+//! 后缀 `_Tx` / `_Rx`（帧级 FRAME-PORT / I-PDU-PORT，信号级 I-SIGNAL-PORT）。
 //! 文件里缺这些引用时回退到旧的命名约定（`{帧名}_PDU` / `{帧名}_Trigger`）。
 
 use crate::editable_dbc::{EditableDbc, EditableMessage, EditableSignal, FrameFormat};
 use can_dbc::{ByteOrder, ValueType};
+use std::collections::HashMap;
 
 /// COMPU-METHOD 里能拿到的物理换算信息
 struct CompuMethod {
@@ -60,21 +65,84 @@ pub fn parse_arxml(content: &str) -> Result<EditableDbc, String> {
     let root = doc.root_element();
 
     // ------------------------------------------------------------------
+    // 先收集可被引用的类型表：UNIT、SW-BASE-TYPE、SYSTEM-SIGNAL
+    // ------------------------------------------------------------------
+    let mut unit_display: HashMap<String, String> = HashMap::new();
+    for u in collect(&root, "UNIT") {
+        let name = short_name(&u);
+        if name == "Unnamed" {
+            continue;
+        }
+        unit_display
+            .entry(name)
+            .or_insert_with(|| text_in(&u, &["DISPLAY-NAME"]).unwrap_or_default());
+    }
+    let mut base_signed: HashMap<String, bool> = HashMap::new();
+    for b in collect(&root, "SW-BASE-TYPE") {
+        let name = short_name(&b);
+        if name == "Unnamed" {
+            continue;
+        }
+        let encoding = text_in(&b, &["BASE-TYPE-ENCODING"]).unwrap_or_default();
+        base_signed
+            .entry(name)
+            .or_insert(matches!(encoding.as_str(), "2C" | "1C" | "SIGNED"));
+    }
+    let mut system_compu: HashMap<String, String> = HashMap::new();
+    for s in collect(&root, "SYSTEM-SIGNAL") {
+        let name = short_name(&s);
+        if name == "Unnamed" {
+            continue;
+        }
+        if let Some(r) = text_in(&s, &["COMPU-METHOD-REF"]) {
+            system_compu.insert(name, ref_name(&r));
+        }
+    }
+    // 端口方向：ECU 连接器里的端口定义优先，名字后缀 _Tx/_Rx 只作回退
+    let mut port_dirs: HashMap<String, (String, bool)> = HashMap::new();
+    for ecu_node in collect(&root, "ECU-INSTANCE") {
+        let ecu = short_name(&ecu_node);
+        if ecu == "Unnamed" {
+            continue;
+        }
+        for p in ecu_node.descendants().filter(|n| {
+            n.is_element()
+                && matches!(
+                    n.tag_name().name(),
+                    "FRAME-PORT" | "I-PDU-PORT" | "I-SIGNAL-PORT"
+                )
+        }) {
+            let name = short_name(&p);
+            if name == "Unnamed" {
+                continue;
+            }
+            let out = text_in(&p, &["COMMUNICATION-DIRECTION"])
+                .is_some_and(|d| d.eq_ignore_ascii_case("OUT"));
+            port_dirs.insert(format!("{ecu}/{name}"), (ecu.clone(), out));
+        }
+    }
+
+    // ------------------------------------------------------------------
     // COMPU-METHOD
     // ------------------------------------------------------------------
-    let mut compu_methods: std::collections::HashMap<String, CompuMethod> =
-        std::collections::HashMap::new();
+    let mut compu_methods: HashMap<String, CompuMethod> = HashMap::new();
     for cm in collect(&root, "COMPU-METHOD") {
         let name = short_name(&cm);
         if name == "Unnamed" || compu_methods.contains_key(&name) {
             continue;
         }
+        let unit = match text_in(&cm, &["UNIT-REF"]).as_deref().map(ref_name) {
+            Some(r) => unit_display.get(&r).cloned().unwrap_or_default(),
+            None => {
+                text_in(&cm, &["UNIT", "DISPLAY-NAME", "UNIT-DISPLAY-NAME"]).unwrap_or_default()
+            }
+        };
         let mut method = CompuMethod {
             factor: 1.0,
             offset: 0.0,
             min: None,
             max: None,
-            unit: text_in(&cm, &["UNIT", "DISPLAY-NAME", "UNIT-DISPLAY-NAME"]).unwrap_or_default(),
+            unit,
             value_descriptions: Vec::new(),
         };
         for scale in collect(&cm, "COMPU-SCALE") {
@@ -102,8 +170,13 @@ pub fn parse_arxml(content: &str) -> Result<EditableDbc, String> {
                 }
             }
             if method.min.is_none() {
-                method.min = text_in(&scale, &["LOWER-LIMIT"]).and_then(|s| parse_f64(&s));
-                method.max = text_in(&scale, &["UPPER-LIMIT"]).and_then(|s| parse_f64(&s));
+                // 刻度里的上下限是原始值，物理值 = 偏移 + 系数 × 原始值
+                method.min = text_in(&scale, &["LOWER-LIMIT"])
+                    .and_then(|s| parse_f64(&s))
+                    .map(|raw| method.offset + method.factor * raw);
+                method.max = text_in(&scale, &["UPPER-LIMIT"])
+                    .and_then(|s| parse_f64(&s))
+                    .map(|raw| method.offset + method.factor * raw);
             }
         }
         compu_methods.insert(name, method);
@@ -112,35 +185,63 @@ pub fn parse_arxml(content: &str) -> Result<EditableDbc, String> {
     // ------------------------------------------------------------------
     // I-SIGNAL
     // ------------------------------------------------------------------
-    let mut signal_defs: std::collections::HashMap<String, SignalDef> =
-        std::collections::HashMap::new();
+    let mut signal_defs: HashMap<String, SignalDef> = HashMap::new();
     for sig in collect(&root, "I-SIGNAL") {
         let name = short_name(&sig);
         if name == "Unnamed" || signal_defs.contains_key(&name) {
             continue;
         }
+        let signed = match text_in(&sig, &["SIGN-CONVENTION"]) {
+            Some(t) => t.contains("COMPLEMENT") || t == "SIGNED",
+            None => text_in(&sig, &["BASE-TYPE-REF"])
+                .map(|r| base_signed.get(&ref_name(&r)).copied().unwrap_or(false))
+                .unwrap_or(false),
+        };
+        let compu = text_in(&sig, &["COMPU-METHOD-REF"])
+            .map(|r| ref_name(&r))
+            .or_else(|| {
+                text_in(&sig, &["SYSTEM-SIGNAL-REF"])
+                    .map(|r| ref_name(&r))
+                    .and_then(|s| system_compu.get(&s).cloned())
+            });
         signal_defs.insert(
             name,
             SignalDef {
                 length_bits: text_in(&sig, &["LENGTH"])
                     .and_then(|s| parse_u64(&s))
                     .unwrap_or(0),
-                signed: text_in(&sig, &["SIGN-CONVENTION"])
-                    .is_some_and(|t| t.contains("COMPLEMENT") || t == "SIGNED"),
+                signed,
                 comment: desc_text(&sig),
-                compu: text_in(&sig, &["COMPU-METHOD-REF"]).map(|r| ref_name(&r)),
+                compu,
             },
         );
     }
 
     // ------------------------------------------------------------------
     // I-SIGNAL-I-PDU
+    // 混合文件里 FlexRay 的 PDU 与 CAN 的用同一个标签：被 FLEXRAY-FRAME 引用的那些
+    // 不属于 CAN 模型，否则它们会变成"没被任何帧引用的 PDU"凭空多出几条无 ID 报文
+    let mut flexray_pdu_names: HashMap<String, ()> = HashMap::new();
+    for frame in collect(&root, "FLEXRAY-FRAME") {
+        for m in collect(&frame, "FRAME-PDU-MAPPING")
+            .into_iter()
+            .chain(collect(&frame, "PDU-TO-FRAME-MAPPING"))
+        {
+            if let Some(r) = text_in(&m, &["PDU-REF"]) {
+                flexray_pdu_names.insert(ref_name(&r), ());
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
-    let mut pdus: std::collections::HashMap<String, PduDef> = std::collections::HashMap::new();
+    let mut pdus: HashMap<String, PduDef> = HashMap::new();
     let mut pdu_order: Vec<String> = Vec::new();
     for pdu in collect(&root, "I-SIGNAL-I-PDU") {
         let name = short_name(&pdu);
-        if name == "Unnamed" || pdu_name_taken(&pdus, &name) {
+        if name == "Unnamed"
+            || pdu_name_taken(&pdus, &name)
+            || flexray_pdu_names.contains_key(&name)
+        {
             continue;
         }
         let mut mappings = Vec::new();
@@ -204,7 +305,7 @@ pub fn parse_arxml(content: &str) -> Result<EditableDbc, String> {
             .into_iter()
             .filter_map(|n| n.text().map(|t| t.trim().to_string()))
         {
-            let Some((ecu, is_tx)) = port_direction(&port) else {
+            let Some((ecu, is_tx)) = port_side(&port, &port_dirs) else {
                 continue;
             };
             let list = if is_tx {
@@ -242,7 +343,7 @@ pub fn parse_arxml(content: &str) -> Result<EditableDbc, String> {
             .into_iter()
             .filter_map(|n| n.text().map(|s| s.trim().to_string()))
         {
-            let Some((ecu, is_tx)) = port_direction(&port) else {
+            let Some((ecu, is_tx)) = port_side(&port, &port_dirs) else {
                 continue;
             };
             if is_tx {
@@ -298,6 +399,13 @@ pub fn parse_arxml(content: &str) -> Result<EditableDbc, String> {
         if let Some(pdu) = pdu {
             for m in &pdu.mappings {
                 let def = m.signal_ref.as_ref().and_then(|r| signal_defs.get(r));
+                // 信号名优先取 I-SIGNAL 名：映射的 SHORT-NAME 在别的工具里可能是
+                // 生成占位名。去掉导出时加的帧名前缀就还原成 DBC 里的信号名
+                let signal_name = m
+                    .signal_ref
+                    .as_ref()
+                    .map(|r| r.strip_prefix(&format!("{name}_")).unwrap_or(r).to_string())
+                    .unwrap_or_else(|| m.signal_name.clone());
                 let length_bits = if m.length > 0 {
                     m.length
                 } else {
@@ -325,7 +433,7 @@ pub fn parse_arxml(content: &str) -> Result<EditableDbc, String> {
                     .unwrap_or_default();
                 values.sort_by_key(|(v, _)| *v);
                 signals.push(EditableSignal::build(
-                    m.signal_name.clone(),
+                    signal_name,
                     m.start_bit,
                     length_bits,
                     m.byte_order.unwrap_or(ByteOrder::LittleEndian),
@@ -510,6 +618,19 @@ fn ref_name(reference: &str) -> String {
         .unwrap_or(reference)
         .trim()
         .to_string()
+}
+
+/// 端口路径形如 /CanDb/ECU_INSTANCES/ECU1/Connector_ECU1/FP_Foo：
+/// 先按 ECU 连接器里的端口定义查方向，查不到再回退到末段 `_Tx` / `_Rx` 后缀
+fn port_side(port_ref: &str, dirs: &HashMap<String, (String, bool)>) -> Option<(String, bool)> {
+    let segments: Vec<&str> = port_ref.split('/').filter(|s| !s.is_empty()).collect();
+    let last = *segments.last()?;
+    if let Some(ecu) = segments.iter().rev().nth(2)
+        && let Some(found) = dirs.get(&format!("{ecu}/{last}"))
+    {
+        return Some(found.clone());
+    }
+    port_direction(port_ref)
 }
 
 /// 端口路径形如 /CanDb/ECU1/CN_Cluster/FP_Foo_Tx：末段后缀给方向，倒数第 3 段是 ECU

@@ -3,12 +3,13 @@
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-blue.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
-一个现代化的 CAN / FlexRay 数据库编辑器，使用 Rust 和 dear-imgui 构建。支持 DBC 编辑（含 `BA_` 属性）、FIBEX XML / AUTOSAR ARXML (FlexRay) 查看与编辑、KCD 与 Excel 通信矩阵导入、信号位布局可视化。
+一个现代化的 CAN / FlexRay 数据库编辑器，使用 Rust 和 dear-imgui 构建。支持 DBC 编辑（含 `BA_` 属性）、AUTOSAR ARXML（CAN 与 FlexRay）查看与编辑、FIBEX XML 编辑、KCD 与 Excel 通信矩阵导入、信号位布局可视化。
 
 ## ✨ 特性
 
 - 🚗 **DBC 完整支持** - 打开、编辑、保存 CAN 数据库文件
 - 🚋 **FIBEX / ARXML (FlexRay)** - 打开、查看、编辑 FIBEX 3.0 与 AUTOSAR R4.x 数据库：帧（每通道各一个时隙/周期/preamble）、PDU（含信号映射、收发节点、TP 与网络管理 PDU）、信号（含 COMPU-METHOD 因子/偏移/值表/上下限/单位）、ECU（含关键时隙号与用途）、集群参数（周期、宏节拍时长、一个周期的宏节拍数）；七个标签页含静态段**调度表**（周期 × 时隙矩阵，可点格子改排程，冲突时隙标红）、**通信矩阵**（帧 × ECU 的 TX/RX）与信号清单 CSV 导出；保存回 FIBEX / ARXML 保持内容不丢
+- 🧭 **ARXML (CAN) 系统窗口** - 打开含 CAN 集群的 `.arxml` 进系统窗口：左边 `SYSTEM > 集群 > ECU` 树，中间 Frames / PDUs / Signals / Comm Matrix / Signal Groups 页签（PDU 带种类列与种类过滤），右边属性面板可改帧、PDU、信号的各字段，双击树里的 ECU / 集群改名字、注释与波特率；增删帧、PDU、信号，撤销重做。**保存只写改过的那一段**：NM/TP 配置、ADMIN-DATA、LONG-NAME、INIT-VALUE 等不建模的内容原样留在文件里，没改直接保存则与原件逐字节相同；CAN 与 FlexRay 集群混合的文件两边都看得见
 - 🇨🇳 **中文支持** - 中文注释 / 值表显示与编辑，自动识别 UTF-8 / GBK 编码并按原编码保存
 - ⚡ **CAN FD** - 标准/扩展、经典/CAN FD 四种帧格式，DLC 最大 64 字节，`VFrameFormat` 属性读写
 - 📋 **All Signals / 通信矩阵** - 全信号展平视图（DBC messages 窗口入口），任意列排序过滤，值表行内编辑，导出 CSV
@@ -79,6 +80,7 @@
 ## 🔀 导入 / 导出
 
 - **导入**: ARXML（CAN-FRAME / I-SIGNAL-I-PDU）和 KCD 文件，File > Import as DBC...；Excel 通信矩阵模板，File > Import Excel Matrix...
+- **打开 `.arxml`**: 含 CAN 集群的进系统窗口直接编辑；只有 FlexRay 集群的进 FIBEX 窗口
 - **导出**: AUTOSAR 4.x 风格 CAN ARXML 与通信矩阵 Excel（DBC 窗口的 Export 标签页）。CAN ARXML 含 CAN-CLUSTER（通道与帧触发：标识符、标准/扩展寻址、CAN FD 收发行为）、CAN-FRAME、I-SIGNAL-I-PDU、I-SIGNAL 与 COMPU-METHOD（因子/偏移、上下限、单位、值表、符号）、ECU-INSTANCE 与收发端口、帧与信号注释；导出的文件可直接用 Ctrl+O 再打开（按内容识别为 CAN 快照）
 - DBC 属性（`BA_DEF_` / `BA_` / `BA_DEF_DEF_`）随文件一起读入、写回，见上文「属性（BA_）」一节；导出的 ARXML 不表达这些属性（ARXML 里没有对应位置）
 
@@ -183,6 +185,7 @@ src/
 ├── excel.rs             # Excel 通信矩阵模板的读取与写出
 ├── import/              # CAN 侧导入（arxml.rs / kcd.rs）
 ├── export/              # CAN 侧导出（arxml.rs：CAN 通信快照）
+├── system/              # .arxml 统一模型：can_read 直接读 CAN 部分，source 记字节区间供外科手术式保存，edit 是编辑操作，window 是系统窗口
 ├── fibex/               # FlexRay 侧：模型、两种方言的导入导出、标签页界面
 │   ├── editable_fibex.rs    # 帧 / PDU / 信号 / 集群参数模型与 Undo/Redo
 │   ├── import/  export/     # FIBEX 3.0 与 AUTOSAR R4.x 读写

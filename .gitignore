@@ -1,2 +1,5 @@
 /target
 "*.txt"  
+
+# 客户内部文件，不入库也不上传
+can-arxml-sample/

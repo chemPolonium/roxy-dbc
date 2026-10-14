@@ -34,6 +34,7 @@ pub fn render_ui(ui: &Ui, ui_state: &mut UiState) {
 
     menu::render_main_menu_bar(ui, ui_state);
     dbc_window::render_dbc_windows(ui, ui_state);
+    crate::system::window::render_system_windows(ui, ui_state);
     crate::fibex::ui::fibex_window::render_fibex_windows(ui, &mut ui_state.fibex);
     // FIBEX 窗口在 DBC 之后渲染，故本帧的焦点声明覆盖 DBC 的设置
     if ui_state.fibex.focus_claimed {

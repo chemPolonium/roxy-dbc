@@ -52,13 +52,13 @@ fn convert_attr_value(v: &can_dbc::AttributeValue) -> AttrValue {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Severity {
     Error,
     Warning,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ValidationIssue {
     pub severity: Severity,
     pub message: String,

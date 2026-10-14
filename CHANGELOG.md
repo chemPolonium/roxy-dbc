@@ -5,7 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.0] - 2026-10-14
+
+### Added
+- 系统窗口（打开 `.arxml` 进这里）能改了：工具条 Apply / Delete / Add Frame / Add Signal / Undo / Redo；右边属性面板按选中的帧、PDU、信号给出可改的字段——帧的名字、注释、长度、标识符、寻址方式、收发行为；PDU 的名字、注释、长度、周期；信号的名字、注释、起始位、位长、字节序、因子/偏移/上下限、单位、值表。双击树里的 ECU 或集群，还能改它们的名字、注释与集群波特率，ECU 的框里同时列出它控制器的要求（每比特时间量子数范围、采样点范围）
+- 帧的属性里多一节 Signals：列出这帧各 PDU 的信号与起始位、位长、单位，点一条就跳到 Signals 页编辑它
+- 撤销重做走 Ctrl+Z / Ctrl+Y，保存走 Ctrl+S；标题栏带 `*` 表示有未保存改动，关窗口时先问保存还是放弃
+- 系统窗口多两个页签：**Comm Matrix**（发送 ECU × 接收 ECU，格子里是帧数，悬停列出帧名）与 **Signal Groups**（I-SIGNAL-I-PDU-GROUP：所属 ECU、RX/TX 方向、成员 PDU）；PDUs 页加 **PDU Type 过滤**下拉；Frames 页表格下方多一栏明细，列选中帧的各 PDU 与信号的起始位、位长、字节序、收发，点信号行选中它去 Signals 页编辑
+- Tools ▸ Validate 在焦点位于系统窗口时校验这份 ARXML 数据库：重名的集群/帧/PDU/信号/ECU、同一集群里重复的标识符、PDU 超出帧长、信号超出 PDU 位宽、信号下限大于上限、没有发送方的帧、空的 I-Signal-I-PDU、信号组引用不存在的 PDU；结果列在 Validation Results 窗口
+- PDUs 表的 Kind 列只对 FlexRay 集群显示（静态/动态段是 FlexRay 的概念），CAN 集群显示 `-`
+
+### Changed
+- `.arxml` 的保存改成只写改过的地方：没碰过的内容（NM / TP 配置、I-PDU 组、ADMIN-DATA、LONG-NAME、INIT-VALUE 等本工具不建模的部分）一个字节都不动，改一个字段只替换它在文件里的那一段；没改直接保存，写出的文件与原件逐字节相同
+- 读 `.arxml` 按文件里写的来：集群名、通道名、波特率、PDU 名与 PDU 种类（I-Signal-I-PDU / User-Defined-PDU / NM-PDU）、帧与 PDU 的起始字节、I-PDU-TIMING 的周期、各层触发点名字都进模型并显示在界面上；不再把集群一律叫 CAN_Cluster、把 PDU 一律叫 帧名_PDU，也不再给没有 PDU 映射的帧编一个空 PDU
+- 打开分流：只有 FlexRay 集群的 `.arxml` 仍进 FIBEX 窗口（排程与集群参数在那里编辑）；含 CAN 集群的（纯 CAN 或 CAN+FlexRay 混合）进系统窗口，混合文件两边都看得见
+
+### Fixed
+- 导出 ARXML 改成真正的 AUTOSAR 4.3 CAN 集群结构，AUTOSAR Explorer 这类外部工具才认：
+  - 根节点补上 `xsi:schemaLocation`，内容按类别分进子 package（ECU_INSTANCES / FRAME / PDUS / I_SIGNALS / BASE_TYPES / COMPUMETHODS / UNIT / SYSTEM_SIGNALS），不再是全挤在一个 package 里
+  - 换成规范元素名：`I-SIGNAL-TO-I-PDU-MAPPING`、`CAN-COMMUNICATION-CONNECTOR`、`ECU-COMM-PORT-INSTANCES`；`CAN-FRAME-TX-BEHAVIOR` 的取值改成 `CAN-20`（原来写的 `CAN` 不是合法取值）
+  - 信号换算改挂到 SYSTEM-SIGNAL→COMPU-METHOD（原来直接把 `COMPU-METHOD-REF` 塞在 I-SIGNAL 里，AUTOSAR 没这个位置）；符号与位宽改由 SW-BASE-TYPE 表达，单位改成 `UNIT-REF` 指向独立的 UNIT 元素；COMPU-SCALE 的上下限按规范写原始值
+  - 补上报文周期（I-PDU-TIMING 的 CYCLIC-TIMING，秒）、帧注释与信号注释（DESC 用 FOR-ALL）、ECU 的 CAN 控制器与连接器端口（带 COMMUNICATION-DIRECTION）、三层 triggering（帧→PDU→信号）
+  - 一条信号只写一条 I-SIGNAL-TRIGGERING，发送端口与全部接收端口都放在 I-SIGNAL-PORT-REFS 里；原来按收发拆成多条时，多个接收方会让同一父元素下出现重名元素，外部工具里一条信号被列成好几行
+- 导入 ARXML 跟着认这些规范写法：信号长度取 I-SIGNAL、符号取 SW-BASE-TYPE、换算经 SYSTEM-SIGNAL、单位取 UNIT/DISPLAY-NAME、上下限按因子/偏移换成物理值、端口方向取 COMMUNICATION-DIRECTION；原来的 `SIGN-CONVENTION`、`I-SIGNAL-TO-PDU-MAPPING`、`_Tx`/`_Rx` 名字后缀等旧写法仍然能读
 
 ## [0.11.5] - 2026-10-13
 

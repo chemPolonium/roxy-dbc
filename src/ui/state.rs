@@ -61,6 +61,7 @@ pub enum FocusTarget {
     None,
     Dbc,
     Fibex,
+    System,
 }
 
 #[allow(dead_code)]
@@ -81,6 +82,10 @@ pub struct UiState {
     pub file_hovering: bool,
     /// FIBEX / ARXML (FlexRay) 查看与编辑窗口（从 roxy-fibex 整合）
     pub fibex: crate::fibex::state::FibexUiState,
+    /// 一份文件里同时含 CAN 与 FlexRay 集群时用的系统窗口
+    pub sys_windows: Vec<crate::system::window::SystemWindow>,
+    /// 最近聚焦的系统窗口下标
+    pub last_focused_sys_index: Option<usize>,
     /// 当前聚焦的窗口类型
     pub focus: FocusTarget,
 }
@@ -102,6 +107,8 @@ impl Default for UiState {
             recent_files: Vec::new(),
             file_hovering: false,
             fibex: crate::fibex::state::FibexUiState::default(),
+            sys_windows: Vec::new(),
+            last_focused_sys_index: None,
             focus: FocusTarget::None,
         }
     }
@@ -173,9 +180,11 @@ impl UiState {
                 }
             },
             "xlsx" => self.open_excel_matrix(norm_path, &path_str),
-            // FIBEX XML / AUTOSAR ARXML：按文件内容分流——CAN 快照进 DBC 编辑窗口，
+            // .arxml 一律进系统窗口：一个文件里 CAN 与 FlexRay 集群并存时两边都看得见
+            "arxml" => self.open_system_window(norm_path, &path_str),
+            // FIBEX XML / 通用 XML：按文件内容分流——CAN 快照进 DBC 编辑窗口，
             // FlexRay（FIBEX 3.0 / AUTOSAR R4.x）进 FIBEX 查看窗口
-            "arxml" | "xml" | "fibex" | "fx" => {
+            "xml" | "fibex" | "fx" => {
                 if is_can_snapshot(norm_path) {
                     match crate::import::import_file(norm_path) {
                         Ok(editable_dbc) => {
@@ -203,6 +212,53 @@ impl UiState {
                     "Unsupported file type: {} (expected .dbc / .arxml / .xml / .kcd / .xlsx)",
                     path_str
                 );
+                self.error_dialog.show = true;
+            }
+        }
+    }
+
+    /// 打开 .arxml：读成统一系统模型后进系统窗口。同一文件已打开时只把它重新显示，
+    /// 不再堆第二个窗口。只有 FlexRay 集群的文件仍进 FIBEX 窗口——那边的排程与
+    /// 集群参数编辑是完整的，系统窗口里这两页目前只读。
+    fn open_system_window(&mut self, path: &std::path::Path, path_str: &str) {
+        if let Some(i) = self
+            .sys_windows
+            .iter()
+            .position(|w| normalize_path(&w.file_path) == path_str)
+        {
+            self.sys_windows[i].is_open = true;
+            self.add_recent_file(path_str);
+            return;
+        }
+        // 与 DBC 一致地嗅探编码：UTF-8 之外按 GBK 处理（国内工具导出的 XML 可能是 ANSI）
+        let content = match std::fs::read(path) {
+            Ok(bytes) => crate::file_encoding::decode_file_bytes(&bytes).text,
+            Err(e) => {
+                self.error_dialog.message =
+                    format!("Failed to open file {}: {}", path.display(), e);
+                self.error_dialog.show = true;
+                return;
+            }
+        };
+        match crate::system::SystemDoc::from_arxml_with_source(&content) {
+            Ok((doc, source)) => {
+                if doc.clusters_of(crate::system::BusKind::Can).is_empty() {
+                    self.fibex.open_file_path(path);
+                    if !self.fibex.error_dialog.show {
+                        self.add_recent_file(path_str);
+                        self.last_focused_dbc_index = None;
+                    }
+                    return;
+                }
+                self.sys_windows
+                    .push(crate::system::window::SystemWindow::new(
+                        doc, path_str, source,
+                    ));
+                self.add_recent_file(path_str);
+                self.last_focused_dbc_index = None;
+            }
+            Err(e) => {
+                self.error_dialog.message = format!("Import failed: {e}");
                 self.error_dialog.show = true;
             }
         }

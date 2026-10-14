@@ -89,7 +89,11 @@ fn render_file_menu(ui: &Ui, ui_state: &mut UiState) {
 
     // 文本输入框激活时跳过全局快捷键
     if ctrl && !ui.io().want_capture_keyboard() {
-        if !ui_state.dbc_windows.is_empty() {
+        if ui_state.focus == crate::ui::state::FocusTarget::System {
+            if ui.is_key_pressed_with_repeat(Key::S, false) {
+                handle_save_system(ui_state);
+            }
+        } else if !ui_state.dbc_windows.is_empty() {
             if shift && ui.is_key_pressed_with_repeat(Key::S, false) {
                 handle_save_dbc(ui_state, true);
             } else if ui.is_key_pressed_with_repeat(Key::S, false) {
@@ -119,6 +123,8 @@ fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
     ui.menu("Edit", || {
         if ui_state.focus == crate::ui::state::FocusTarget::Fibex {
             render_fibex_edit_items(ui, ui_state);
+        } else if ui_state.focus == crate::ui::state::FocusTarget::System {
+            render_system_edit_items(ui, ui_state);
         } else {
             render_dbc_edit_items(ui, ui_state);
         }
@@ -152,6 +158,22 @@ fn render_edit_menu(ui: &Ui, ui_state: &mut UiState) {
             }
             if ui.is_key_pressed_with_repeat(Key::V, false) {
                 edit_paste_message(ui_state, idx);
+            }
+        }
+        // 系统窗口的撤销/重做
+        if ui_state.focus == crate::ui::state::FocusTarget::System
+            && let Some(idx) = ui_state.last_focused_sys_index
+            && ui_state.sys_windows.get(idx).is_some()
+        {
+            if ui.is_key_pressed_with_repeat(Key::Z, false)
+                && let Some(w) = ui_state.sys_windows.get_mut(idx)
+            {
+                w.undo();
+            }
+            if ui.is_key_pressed_with_repeat(Key::Y, false)
+                && let Some(w) = ui_state.sys_windows.get_mut(idx)
+            {
+                w.redo();
             }
         }
         // FIBEX 的撤销/重做：与 DBC 一样按焦点分发
@@ -234,6 +256,24 @@ fn render_dbc_edit_items(ui: &Ui, ui_state: &mut UiState) {
         }
     } else {
         ui.text_disabled("No active DBC window");
+    }
+}
+
+/// 系统窗口（.arxml）的编辑菜单项：撤销 / 重做
+fn render_system_edit_items(ui: &Ui, ui_state: &mut UiState) {
+    if let Some(idx) = ui_state.last_focused_sys_index {
+        if let Some(win) = ui_state.sys_windows.get_mut(idx) {
+            let can_undo = win.can_undo();
+            let can_redo = win.can_redo();
+            if ui.menu_item_enabled_selected_with_shortcut("Undo", "Ctrl+Z", false, can_undo) {
+                win.undo();
+            }
+            if ui.menu_item_enabled_selected_with_shortcut("Redo", "Ctrl+Y", false, can_redo) {
+                win.redo();
+            }
+        }
+    } else {
+        ui.text_disabled("No active system window");
     }
 }
 
@@ -381,7 +421,9 @@ fn render_view_menu(ui: &Ui, ui_state: &mut UiState) {
 
 /// 渲染工具菜单
 fn render_tools_menu(ui: &Ui, ui_state: &mut UiState) {
-    let has_windows = !ui_state.dbc_windows.is_empty() || !ui_state.fibex.fibex_windows.is_empty();
+    let has_windows = !ui_state.dbc_windows.is_empty()
+        || !ui_state.fibex.fibex_windows.is_empty()
+        || !ui_state.sys_windows.is_empty();
 
     ui.menu("Tools", || {
         if ui.menu_item_enabled_selected_no_shortcut("Validate", false, has_windows) {
@@ -392,6 +434,16 @@ fn render_tools_menu(ui: &Ui, ui_state: &mut UiState) {
 
 /// 校验焦点所在的数据库窗口，结果写入该窗口自己的校验对话框
 fn validate_focused_window(ui_state: &mut UiState) {
+    if ui_state.focus == crate::ui::state::FocusTarget::System {
+        if let Some(idx) = ui_state.last_focused_sys_index {
+            if let Some(win) = ui_state.sys_windows.get(idx) {
+                let issues = crate::system::validate::validate(&win.doc);
+                ui_state.validation_dialog.issues = issues;
+                ui_state.validation_dialog.show = true;
+            }
+        }
+        return;
+    }
     if ui_state.focus == crate::ui::state::FocusTarget::Fibex {
         if let Some(idx) = ui_state.fibex.last_focused_fibex_index
             && let Some(win) = ui_state.fibex.fibex_windows.get(idx)
@@ -654,6 +706,15 @@ fn handle_save_dbc(ui_state: &mut UiState, save_as: bool) {
         Err(e) => {
             ui_state.error_dialog.message = format!("Failed to save: {}", e);
             ui_state.error_dialog.show = true;
+        }
+    }
+}
+
+/// 系统窗口 Ctrl+S：写回 .arxml（只替换改过的那一段）
+fn handle_save_system(ui_state: &mut UiState) {
+    if let Some(idx) = ui_state.last_focused_sys_index {
+        if let Some(w) = ui_state.sys_windows.get_mut(idx) {
+            w.save_as();
         }
     }
 }
