@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-10-16
+
+### Added
+- 系统窗口工具条多一个 **Editable** 勾选框，默认不勾：不勾时这份文件只读，格子里是文本，Add / Delete 按钮也不出现，防止手滑改动客户文件
+- Signals 页多一列 **Values**：格子里写值表有几条，点开对话框改各条原始值与描述
+
+### Changed
+- 编辑挪进表格格子里：勾上 Editable 后，Frames / PDUs / Signals 三页的格子当场就是输入框与下拉框，改完回车或点到别处即提交，一步一撤销；Addressing、Tx/Rx Behaviour、Order 这些是下拉框，点一下选值
+- Apply 按钮与属性面板里的编辑控件撤掉，属性面板只放表格里装不下的信息：引用路径、PDU 映射、收发与三层触发点名字、换算方法、初值、值表
+- 选中一行改由名字格承担：没勾 Editable 点名字选中，勾了之后点名字格的输入框同样选中，下面的 PDU/信号明细与右侧面板跟着走
+- 表格列宽按内容给固定宽度（Addressing、Tx/Rx Behaviour、PDU Type、Order、Type、Values），勾上 Editable 后下拉框里的字不再被裁
+- 编辑态下把输入框与下拉框自己的上下内边距去掉：它们的行高与纯文本一致，表格不会因为能编辑就变矮（每行仍是同样的行距，一屏能看到的行数不变）
+- 数字格子改用 ImGui 自带的 InputInt / InputDouble（帧与 PDU 的长度、信号起始位与位长、周期、因子/偏移/上下限）：输入过滤与"回车或失焦才落值"由控件自己负责，不再手写字段暂存与解析，填非数字也不再报错而是根本敲不进去；只有帧的 Identifier 仍是文本格，因为要能写 `0x…` 十六进制
+- 值表 / ECU / 集群的编辑框与关窗口时的"存不存"询问，改用 ImGui 自带的模态弹窗：背景压暗、标题栏 X 就能关，开没开由 ImGui 记，我们只存"改谁、改成什么样"
+- PDU Type 过滤下拉框收成固定宽度，不再横跨整行
+
+### Fixed
+- 导出 CAN ARXML 的报文周期段落改成 `TIME-OFFSET` 在前、`TIME-PERIOD` 在后：之前反了，MATLAB 导入直接报 `element 'TIME-OFFSET' is not allowed for content model '(DESC?,CATEGORY?,INTRODUCTION?,ADMIN-DATA?,TIME-OFFSET?,TIME-PERIOD?)'`。改完用 MATLAB 自带的 `AUTOSAR_00052.xsd` 校验四个样本 DBC 的导出均无报错
+- 没人碰界面时不再空转：`about_to_wait` 原来无条件再请求一帧重绘，把 `ControlFlow::Wait` 抵消掉了，事件循环满速转圈（实测空闲时占单核 88%）。现在只有指针停在界面上、正在输入或正在拖动时才按 60fps 排帧，其余时候交给操作系统等事件（实测空闲 0%，指针停在界面上 13%）
+
 ## [0.12.0] - 2026-10-14
 
 ### Added

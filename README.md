@@ -9,7 +9,7 @@
 
 - 🚗 **DBC 完整支持** - 打开、编辑、保存 CAN 数据库文件
 - 🚋 **FIBEX / ARXML (FlexRay)** - 打开、查看、编辑 FIBEX 3.0 与 AUTOSAR R4.x 数据库：帧（每通道各一个时隙/周期/preamble）、PDU（含信号映射、收发节点、TP 与网络管理 PDU）、信号（含 COMPU-METHOD 因子/偏移/值表/上下限/单位）、ECU（含关键时隙号与用途）、集群参数（周期、宏节拍时长、一个周期的宏节拍数）；七个标签页含静态段**调度表**（周期 × 时隙矩阵，可点格子改排程，冲突时隙标红）、**通信矩阵**（帧 × ECU 的 TX/RX）与信号清单 CSV 导出；保存回 FIBEX / ARXML 保持内容不丢
-- 🧭 **ARXML (CAN) 系统窗口** - 打开含 CAN 集群的 `.arxml` 进系统窗口：左边 `SYSTEM > 集群 > ECU` 树，中间 Frames / PDUs / Signals / Comm Matrix / Signal Groups 页签（PDU 带种类列与种类过滤），右边属性面板可改帧、PDU、信号的各字段，双击树里的 ECU / 集群改名字、注释与波特率；增删帧、PDU、信号，撤销重做。**保存只写改过的那一段**：NM/TP 配置、ADMIN-DATA、LONG-NAME、INIT-VALUE 等不建模的内容原样留在文件里，没改直接保存则与原件逐字节相同；CAN 与 FlexRay 集群混合的文件两边都看得见
+- 🧭 **ARXML (CAN) 系统窗口** - 打开含 CAN 集群的 `.arxml` 进系统窗口：左边 `SYSTEM > 集群 > ECU` 树，中间 Frames / PDUs / Signals / Comm Matrix / Signal Groups 页签（PDU 带种类列与种类过滤）。**勾上工具条的 Editable 才放开这份文件**：格子里直接改——名字、长度、标识符、周期、注释是输入框，寻址方式与收发行为、字节序是下拉框，Signals 页的 Values 格点开值表对话框，回车或点到别处就提交，Ctrl+Z 撤销；不勾时全是只读文本，增删按钮也不出现。右边属性面板只放表格里装不下的信息（引用路径、PDU 映射、收发与三层触发点名字、换算方法、初值、值表），双击树里的 ECU / 集群改名字、注释与波特率；增删帧、PDU、信号。**保存只写改过的那一段**：NM/TP 配置、ADMIN-DATA、LONG-NAME、INIT-VALUE 等不建模的内容原样留在文件里，没改直接保存则与原件逐字节相同；CAN 与 FlexRay 集群混合的文件两边都看得见
 - 🇨🇳 **中文支持** - 中文注释 / 值表显示与编辑，自动识别 UTF-8 / GBK 编码并按原编码保存
 - ⚡ **CAN FD** - 标准/扩展、经典/CAN FD 四种帧格式，DLC 最大 64 字节，`VFrameFormat` 属性读写
 - 📋 **All Signals / 通信矩阵** - 全信号展平视图（DBC messages 窗口入口），任意列排序过滤，值表行内编辑，导出 CSV

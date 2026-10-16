@@ -620,12 +620,14 @@ fn write_pdus(w: &mut W, d: usize, dbc: &EditableDbc, plan: &Plan) {
                 w.open(d + 3, "TRANSMISSION-MODE-DECLARATION");
                 w.open(d + 4, "TRANSMISSION-MODE-TRUE-TIMING");
                 w.open(d + 5, "CYCLIC-TIMING");
-                w.open(d + 6, "TIME-PERIOD");
-                w.text(d + 7, "VALUE", &fmt_secs(ms));
-                w.close(d + 6, "TIME-PERIOD");
+                // 顺序按 AUTOSAR 的 CYCLIC-TIMING：TIME-REPETITION? TIME-OFFSET? TIME-PERIOD?
+                // 先写 TIME-PERIOD 会被 MATLAB 的 schema 校验直接拒掉
                 w.open(d + 6, "TIME-OFFSET");
                 w.text(d + 7, "VALUE", "0");
                 w.close(d + 6, "TIME-OFFSET");
+                w.open(d + 6, "TIME-PERIOD");
+                w.text(d + 7, "VALUE", &fmt_secs(ms));
+                w.close(d + 6, "TIME-PERIOD");
                 w.close(d + 5, "CYCLIC-TIMING");
                 w.close(d + 4, "TRANSMISSION-MODE-TRUE-TIMING");
                 w.close(d + 3, "TRANSMISSION-MODE-DECLARATION");
@@ -1019,5 +1021,18 @@ mod tests {
         assert_eq!(sorted(s.receivers()), vec!["ECU2".to_string()]);
         assert_eq!(s.value_descriptions().len(), 2);
         assert_eq!(s.unit(), "km/h");
+    }
+
+    /// CYCLIC-TIMING 的子元素必须按 schema 给的顺序写：先 TIME-OFFSET 再 TIME-PERIOD。
+    /// 反过来的话 MATLAB 直接报 "element 'TIME-OFFSET' is not allowed for content model"
+    #[test]
+    fn cyclic_timing_writes_offset_before_period() {
+        let xml = export_arxml(&load(MOTBUS));
+        let offset = xml.find("<TIME-OFFSET>").expect("导出应含 TIME-OFFSET");
+        let period = xml.find("<TIME-PERIOD>").expect("导出应含 TIME-PERIOD");
+        assert!(
+            offset < period,
+            "CYCLIC-TIMING 里 TIME-OFFSET 要在 TIME-PERIOD 之前"
+        );
     }
 }

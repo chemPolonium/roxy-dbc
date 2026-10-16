@@ -178,11 +178,35 @@ impl ApplicationHandler for App {
         {
             eprintln!("platform handle_window_event failed: {e}");
         }
+
+        // 除"该重画了"之外的事件都要补一帧：不重画的话界面会停在旧样子
+        if !matches!(event, WindowEvent::RedrawRequested) {
+            window.window.request_redraw();
+        }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        let window = self.window.as_mut().unwrap();
-        window.window.request_redraw();
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(window) = self.window.as_mut() else {
+            return;
+        };
+        let Some(imgui) = window.imgui.as_mut() else {
+            return;
+        };
+        // 指针在界面上、正在输入或正在拖动时才继续排下一帧；其余时候让操作系统等事件。
+        // 这里以前是无条件 request_redraw()，那会把 ControlFlow::Wait 抵消掉：
+        // 完全没人碰界面时也按 88% 单核在空转
+        let busy = {
+            let io = imgui.context.io();
+            io.want_capture_mouse() || io.want_capture_keyboard()
+        };
+        if busy {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + imgui.target_frame_time,
+            ));
+            window.window.request_redraw();
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
     }
 }
 
